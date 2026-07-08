@@ -1,9 +1,10 @@
-import { GameState } from './state';
+import { GameState, nextStage } from './state';
 import { InputState, emptyInput } from '../core/types';
 import { applyInput, TankState, EnemyKind, createPlayer, isPlayerTank } from './tank';
 import {
   spawnBullet,
-  hasLiveBullet,
+  liveBulletCount,
+  maxBulletsFor,
   advanceBullets,
   resolveBulletBullet,
   bulletCanHit,
@@ -11,12 +12,14 @@ import {
 } from './bullet';
 import { updateEnemies } from './enemy';
 import { updatePhase, resolveEagleHit, restartGame } from './phase';
+import { tryPickupPowerup, dropPowerup, restoreEagleRingBrick } from './powerup';
 import {
   EXPLOSION_BIG_TICKS,
   EXPLOSION_BIG_SIZE,
   TANK_SIZE,
   SPAWN_FLASH_TICKS,
   ENEMY_SCORE,
+  STAGE_START_TICKS,
 } from '../core/constants';
 
 // 每逻辑帧调用一次。纯函数式推进：只依赖 state 与 inputs，
@@ -26,19 +29,35 @@ import {
 export function update(state: GameState, inputs: InputState[]): void {
   state.tick++;
 
-  // start 键聚合 + 边沿检测：暂停切换与结算重开都只认“按下的那一帧”，避免按住连触发。
+  // start 键聚合 + 边沿检测：暂停切换与结算推进都只认“按下的那一帧”，避免按住连触发。
   const startDown = inputs.some((i) => i.start);
   const startEdge = startDown && !state.prevStart;
   state.prevStart = startDown;
 
-  // gameover / stageclear：冻结模拟（不推进坦克/子弹/AI），仅让爆炸播完；按 start 边沿重开。
+  // stagestart 开场幕布：冻结模拟（不推进坦克/子弹/AI），仅推进 phaseTicks；到时自动进入 playing。
+  // 期间忽略 start 键（不可暂停 / 不可跳过）。
+  if (state.phase === 'stagestart') {
+    state.phaseTicks++;
+    if (state.phaseTicks >= STAGE_START_TICKS) {
+      state.phase = 'playing';
+      state.phaseTicks = 0;
+    }
+    return;
+  }
+
+  // gameover / stageclear：冻结模拟（不推进坦克/子弹/AI），仅让爆炸播完；按 start 边沿推进。
+  // stageclear → 进入下一关（nextStage）；gameover → 整局重开到第 1 关（restartGame）。
   if (state.phase !== 'playing') {
     state.phaseTicks++;
     advanceExplosions(state);
     if (startEdge) {
-      restartGame(state);
-      // restartGame 已把 prevStart 重置为 false；这里立即置回 true，
-      // 使按住 Enter 不会在下一帧被再次识别为边沿而立刻重开。
+      if (state.phase === 'stageclear') {
+        nextStage(state);
+      } else {
+        restartGame(state);
+      }
+      // restartGame 会把 prevStart 重置为 false；无论哪条分支，这里立即置回 true，
+      // 使按住 Enter 不会在下一帧被再次识别为边沿而立刻重复触发。
       state.prevStart = true;
     }
     return;
@@ -55,8 +74,18 @@ export function update(state: GameState, inputs: InputState[]): void {
   state.phaseTicks++;
   const level = state.level;
 
+  // 道具计时递减。timer：敌军冻结逐帧递减。shovel：钢化护墙逐帧递减，归零那帧恢复砖墙。
+  if (state.enemyFreezeTicks > 0) state.enemyFreezeTicks--;
+  if (state.shovelTicks > 0) {
+    state.shovelTicks--;
+    if (state.shovelTicks === 0) restoreEagleRingBrick(state);
+  }
+
   // 玩家坦克由输入驱动：inputs[i] 对应 playerIndex===i 的坦克（按序号映射，非数组顺序）。
   updatePlayers(state, inputs);
+
+  // 玩家移动后做道具拾取检测（AABB 重叠即拾取、生效、清除浮标）。
+  tryPickupPowerup(state);
 
   // 敌方：出生闪光推进（含玩家复活）、AI 行进/开火、生成新敌人。
   updateEnemies(state, level);
@@ -95,10 +124,10 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
 
     applyInput(tank, input, level, state.tanks);
 
-    // 边沿触发开火：本帧按下且上帧未按下；每坦克同时仅一发在场。
+    // 边沿触发开火：本帧按下且上帧未按下；在场子弹数需低于该坦克上限（star 等级 ≥2 可双弹）。
     const firePressed = input.fire && !tank.prevFire;
     tank.prevFire = input.fire;
-    if (firePressed && !hasLiveBullet(state.bullets, tank.id)) {
+    if (firePressed && liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)) {
       state.bullets.push(spawnBullet(tank));
       state.events.push('playerFire'); // 仅玩家开火发声（敌弹静音，从简）
     }
@@ -123,11 +152,14 @@ function resolveBulletTanks(state: GameState): void {
           state.events.push('playerDeath');
           onPlayerKilled(state, t);
         } else {
-          // 敌方坦克被击毁：计分 + 计数（此处所有敌军死亡皆由玩家造成）。
+          // 敌方坦克被击毁：计分 + 计数（此处所有敌军死亡皆由玩家子弹造成）。
           const kind = t.kind as EnemyKind; // 非玩家分支：kind 必为敌方种类
           state.score += ENEMY_SCORE[kind];
           state.killsByKind[kind]++;
           state.events.push('explosionBig');
+          // 携带者被击毁：用一枚新随机道具替换场上现有道具（随机落点）。
+          // 仅子弹击杀触发掉落；grenade 群灭不掉落（在 powerup.ts 内直接置死，不经此分支）。
+          if (t.carriesPowerup) dropPowerup(state);
         }
       }
       // 装甲坦克 hp>0 时仅扣血（渲染层据 hp<ARMOR_HP 闪烁），子弹已消亡。

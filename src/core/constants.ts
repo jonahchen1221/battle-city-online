@@ -1,3 +1,5 @@
+import type { EnemyKind } from '../game/tank';
+
 // NES 原生分辨率与布局（所有游戏逻辑均以此坐标系为准，渲染时整体放大）
 // 为 1–4 人合作放大战场：原生宽 = FIELD_X(16) + 320 + 32(HUD) = 368；高 = 8 + 240 + 8 = 256。
 export const NATIVE_WIDTH = 368;
@@ -109,8 +111,46 @@ export const AI_DECISION_MIN_TICKS = 30;
 export const AI_DECISION_RANGE_TICKS = 31; // 30 + rng.int(31) → 30..60
 // AI 开火概率：每帧约 1/60（且当前无在场子弹时）。
 export const AI_FIRE_DENOM = 60;
-// 关卡敌军总数（单一可调常量；暂不随人数变化）。
+// 关卡敌军总数（单一可调常量；暂不随人数变化）。各关 STAGE_ENEMY_MIX 之和均等于此值。
 export const STAGE_ENEMY_TOTAL = 20;
+// 关卡总数（levels.ts STAGES 的长度）；通关第 5 关后回卷到第 1 关。
+export const STAGE_COUNT = 5;
+// 每关敌军编成（每关总数均为 STAGE_ENEMY_TOTAL，逐关升级）。
+// 出生队列按各种类剩余数轮转交错（round-robin）构建，确定性、无需 rng（见 state.ts）。
+export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; count: number }>> = [
+  // 第 1 关：基础 18 + 快速 2
+  [
+    { kind: 'basic', count: 18 },
+    { kind: 'fast', count: 2 },
+  ],
+  // 第 2 关：基础 12 + 快速 6 + 威力 2
+  [
+    { kind: 'basic', count: 12 },
+    { kind: 'fast', count: 6 },
+    { kind: 'power', count: 2 },
+  ],
+  // 第 3 关：基础 10 + 快速 6 + 威力 2 + 装甲 2
+  [
+    { kind: 'basic', count: 10 },
+    { kind: 'fast', count: 6 },
+    { kind: 'power', count: 2 },
+    { kind: 'armor', count: 2 },
+  ],
+  // 第 4 关：基础 8 + 快速 6 + 威力 3 + 装甲 3
+  [
+    { kind: 'basic', count: 8 },
+    { kind: 'fast', count: 6 },
+    { kind: 'power', count: 3 },
+    { kind: 'armor', count: 3 },
+  ],
+  // 第 5 关：基础 6 + 快速 6 + 威力 4 + 装甲 4
+  [
+    { kind: 'basic', count: 6 },
+    { kind: 'fast', count: 6 },
+    { kind: 'power', count: 4 },
+    { kind: 'armor', count: 4 },
+  ],
+];
 // 同屏敌军上限的基数与每多一名玩家的增量。
 export const MAX_ENEMIES_BASE = 4;
 export const MAX_ENEMIES_PER_EXTRA_PLAYER = 2;
@@ -130,6 +170,10 @@ export const EXPLOSION_BIG_FRAMES = 2;
 export const EXPLOSION_BIG_SIZE = 32; // 大爆炸精灵 32×32（居中于 16×16 坦克）
 
 // ── 关卡阶段 / 生命 ──
+// 关卡开场“幕布”（STAGE N）冻结帧数：经典过场，期间模拟冻结，随后自动进入 playing。
+export const STAGE_START_TICKS = 120;
+// 冰面滑行：玩家/敌人在冰面上松开方向键后，沿原方向继续滑行的最大帧数（经典手感）。
+export const ICE_SLIDE_TICKS = 20;
 // 玩家初始生命数（含当前在场坦克）：3 条即共 3 台坦克。
 export const PLAYER_LIVES_START = 3;
 // 鹰巢被毁 / 玩家阵亡（无剩余生命）后仍继续模拟的帧数，随后进入 gameover。
@@ -160,3 +204,29 @@ export const ENEMY_SCORE: Record<'basic' | 'fast' | 'power' | 'armor', number> =
 // ── 暂停 ──
 // "PAUSE" 文本闪烁周期（帧）：一半亮、一半灭。
 export const PAUSE_BLINK_TICKS = 32;
+
+// ── 道具系统（经典六种）──
+// 携带道具的敌军在出生队列中的序号（1 起）：第 4 / 11 / 18 台出队者为“携带者”。
+// 按“出队计数”标记，不再回看队列下标（队列在出队后会塌缩）。
+export const CARRIER_QUEUE_POSITIONS: ReadonlyArray<number> = [4, 11, 18];
+// 携带道具敌军红色闪烁周期（帧）：每约 8 帧在常态 / 红色变体间切换。
+export const CARRIER_FLASH_TICKS = 8;
+// 拾取任一道具的全局加分。
+export const POWERUP_SCORE = 500;
+// timer 道具：敌军冻结帧数（期间敌人既不移动也不开火，履带动画亦冻结）。
+export const ENEMY_FREEZE_TICKS = 600;
+// shovel 道具：鹰巢护墙钢化持续帧数；到期恢复为完整砖墙。
+export const SHOVEL_TICKS = 1200;
+// helmet 道具：无敌帧数（复用出生护盾机制 / 渲染）。
+export const HELMET_INVULN_TICKS = 600;
+// star 道具：玩家等级上限；等级 ≥1 提升弹速、≥2 可双弹在场、=3 可击穿钢块。
+export const PLAYER_MAX_LEVEL = 3;
+// star 等级 ≥1 时的玩家弹速（px/tick，原为 BULLET_SPEED=2）。
+export const STAR_BULLET_SPEED = 3;
+// star 等级 ≥2 时同屏可存在的玩家子弹数（原为 1）。
+export const PLAYER_MAX_BULLETS_UPGRADED = 2;
+// 道具浮标闪烁：一个周期 32 帧内前 24 帧可见、后 8 帧隐藏。
+export const POWERUP_BLINK_CYCLE_TICKS = 32;
+export const POWERUP_BLINK_VISIBLE_TICKS = 24;
+// 道具浮标包围盒尺寸（= 一个大格 16×16）。
+export const POWERUP_SIZE = TILE;

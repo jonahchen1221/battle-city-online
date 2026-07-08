@@ -6,6 +6,7 @@
 // 坐标，内部乘以 ART_SCALE 后落到 512×448 画布。silhouette / 色系与 NES 原版一致，仅细化。
 
 import { ART_SCALE, QUARTER } from '../core/constants';
+import { POWERUP_KINDS, type PowerupKind } from '../game/powerup';
 
 // 共享调色板（近似 NES 取色 + 若干“中间过渡色”以获得更细腻的分色带）。'.' 为透明。
 const PALETTE: Record<string, string> = {
@@ -60,6 +61,12 @@ const PALETTE: Record<string, string> = {
   W: '#e840b0', // 主体品红
   X: '#a82888', // 暗品红过渡
   F: '#701858', // 阴影品红
+  // 携带道具敌军红闪：红色车体家族（履带仍用钢制 c/a）。用数字键，避免与既有色 / 记号冲突。
+  '1': '#f87858', // 高光红
+  '2': '#f85838', // 亮红过渡
+  '3': '#d82800', // 主体红
+  '4': '#a81800', // 暗红过渡
+  '5': '#701000', // 阴影红
 };
 
 // 校验一张精灵网格的尺寸（模块加载即执行，越早暴露排版错误越好）。
@@ -363,6 +370,8 @@ const MAP_POWER: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 'j', Z: 'v', L:
 const MAP_ARMOR: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', R: 'c' };
 // 装甲型（白闪）：受损时交替使用的高亮白色变体（履带 w/c、分隔灰，车体近全白）。
 const MAP_ARMOR_FLASH: ColorMap = { T: 'w', t: 'c', E: 'b', H: 'w', S: 'w', Z: 'c', L: 'w', D: 'c', O: 'e', R: 'w' };
+// 携带道具敌军红闪变体：红色车体家族（高光 1 / 亮过渡 2 / 主体 3 / 暗过渡 4 / 阴影 5），履带 c/a，炮管亮红。
+const MAP_ENEMY_RED: ColorMap = { T: 'c', t: 'a', E: 'e', H: '3', S: '2', Z: '4', L: '1', D: '5', O: 'e', R: '1' };
 
 // 按映射重着色一张记号图（未列出字符透传）。
 function recolor(rows: string[], map: ColorMap): string[] {
@@ -578,6 +587,157 @@ function shieldFrame(f: number): string[] {
 }
 const SHIELD_FRAMES_ART: string[][] = [shieldFrame(0), shieldFrame(1)];
 
+// ── 道具图标（16×16 逻辑 = 32×32 美术）──
+// 经典观感：立体“卡片”（左上浅灰高光斜角、右下深灰阴影、黑色面板）+ 各具标志性的符号。
+// 用简易像素绘图原语在 32×32 字符网格上作画（'.' 透明），再叠加到卡片上。
+type CharGrid = string[][];
+function blankGrid(size: number): CharGrid {
+  return Array.from({ length: size }, () => new Array<string>(size).fill('.'));
+}
+function gridToRows(g: CharGrid): string[] {
+  return g.map((r) => r.join(''));
+}
+function fillRectG(g: CharGrid, x0: number, y0: number, x1: number, y1: number, ch: string): void {
+  for (let y = Math.max(0, y0); y <= Math.min(g.length - 1, y1); y++) {
+    for (let x = Math.max(0, x0); x <= Math.min(g[0].length - 1, x1); x++) g[y][x] = ch;
+  }
+}
+function fillCircleG(g: CharGrid, cx: number, cy: number, r: number, ch: string): void {
+  for (let y = 0; y < g.length; y++) {
+    for (let x = 0; x < g[0].length; x++) {
+      if (Math.hypot(x - cx, y - cy) <= r) g[y][x] = ch;
+    }
+  }
+}
+function ringG(g: CharGrid, cx: number, cy: number, rOut: number, rIn: number, ch: string): void {
+  for (let y = 0; y < g.length; y++) {
+    for (let x = 0; x < g[0].length; x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      if (d <= rOut && d >= rIn) g[y][x] = ch;
+    }
+  }
+}
+// 点是否在多边形内（射线法）。
+function pointInPoly(pts: Array<[number, number]>, x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+// 叠加：top 中非透明像素覆盖 base。
+function overlayG(base: CharGrid, top: CharGrid): CharGrid {
+  return base.map((row, y) => row.map((ch, x) => (top[y][x] === '.' ? ch : top[y][x])));
+}
+// 卡片底：2px 外黑边 + 左上 2px 浅灰高光斜角 + 右下 2px 深灰阴影斜角 + 黑色面板。
+function powerupCard(): CharGrid {
+  const g = blankGrid(32);
+  for (let y = 0; y < 32; y++) {
+    for (let x = 0; x < 32; x++) {
+      let ch = 'e';
+      if (x < 2 || y < 2 || x >= 30 || y >= 30) ch = 'e';
+      else if (x < 4 || y < 4) ch = 'c';
+      else if (x >= 28 || y >= 28) ch = 'a';
+      g[y][x] = ch;
+    }
+  }
+  return g;
+}
+// star：5 角黄星（多边形填充，顶点朝上）。
+function starSym(): CharGrid {
+  const g = blankGrid(32);
+  const cx = 15.5;
+  const cy = 16.5;
+  const rOut = 12;
+  const rIn = 5;
+  const pts: Array<[number, number]> = [];
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? rOut : rIn;
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  for (let y = 0; y < 32; y++) {
+    for (let x = 0; x < 32; x++) if (pointInPoly(pts, x + 0.5, y + 0.5)) g[y][x] = 'Y';
+  }
+  return g;
+}
+// grenade：深绿菠萝手雷剪影 + 灰顶盖 / 拉环。
+function grenadeSym(): CharGrid {
+  const g = blankGrid(32);
+  fillCircleG(g, 16, 20, 8, 'g'); // 弹体
+  fillCircleG(g, 13, 17, 3, 'G'); // 高光
+  fillRectG(g, 13, 8, 19, 12, 'a'); // 顶盖
+  fillRectG(g, 18, 6, 24, 8, 'c'); // 拉环杆
+  ringG(g, 25, 7, 3, 1.5, 'c'); // 拉环
+  return g;
+}
+// tank：黄色迷你坦克（履带 + 车体 + 炮塔 + 炮管，朝上）。
+function tankSym(): CharGrid {
+  const g = blankGrid(32);
+  fillRectG(g, 6, 12, 10, 26, 'y'); // 左履带
+  fillRectG(g, 22, 12, 26, 26, 'y'); // 右履带
+  fillRectG(g, 10, 15, 22, 26, 'Y'); // 车体
+  fillRectG(g, 13, 10, 19, 17, 'Y'); // 炮塔
+  fillRectG(g, 15, 4, 17, 12, 'y'); // 炮管
+  return g;
+}
+// timer：钟面（白盘灰边）+ 时 / 分指针 + 轴心 + 顶部按钮。
+function timerSym(): CharGrid {
+  const g = blankGrid(32);
+  fillCircleG(g, 16, 17, 11, 'w'); // 表盘
+  ringG(g, 16, 17, 11, 9, 'c'); // 灰边圈
+  fillRectG(g, 15, 10, 16, 17, 'e'); // 时针（上）
+  fillRectG(g, 16, 16, 22, 17, 'e'); // 分针（右）
+  fillCircleG(g, 16, 17, 1.6, 'a'); // 轴心
+  fillRectG(g, 14, 2, 18, 5, 'c'); // 顶部按钮
+  return g;
+}
+// shovel：木柄 + T 型握把 + 金属梯形铲头。
+function shovelSym(): CharGrid {
+  const g = blankGrid(32);
+  fillRectG(g, 14, 5, 18, 18, 'z'); // 手柄
+  fillRectG(g, 10, 4, 22, 7, 'z'); // T 型握把
+  for (let y = 18; y <= 27; y++) {
+    const inset = Math.floor((y - 18) * 0.7);
+    fillRectG(g, 9 + inset, y, 23 - inset, y, 'c'); // 梯形铲头（逐行收窄）
+  }
+  return g;
+}
+// helmet：圆顶头盔（上半圆）+ 帽檐 + 高光。
+function helmetSym(): CharGrid {
+  const g = blankGrid(32);
+  for (let y = 0; y < 32; y++) {
+    for (let x = 0; x < 32; x++) {
+      if (Math.hypot(x - 16, y - 19) <= 11 && y <= 19) g[y][x] = 'c';
+    }
+  }
+  fillRectG(g, 4, 19, 28, 22, 'b'); // 帽檐
+  fillCircleG(g, 13, 14, 3, 'w'); // 高光
+  return g;
+}
+const POWERUP_SYMBOLS: Record<PowerupKind, CharGrid> = {
+  star: starSym(),
+  grenade: grenadeSym(),
+  tank: tankSym(),
+  timer: timerSym(),
+  shovel: shovelSym(),
+  helmet: helmetSym(),
+};
+const POWERUP_ICON_ROWS: Record<PowerupKind, string[]> = POWERUP_KINDS.reduce(
+  (acc, kind) => {
+    acc[kind] = assertGrid(
+      gridToRows(overlayG(powerupCard(), POWERUP_SYMBOLS[kind])),
+      32,
+      32,
+      `powerup-${kind}`,
+    );
+    return acc;
+  },
+  {} as Record<PowerupKind, string[]>,
+);
+
 // 把方形字符网格顺时针旋转 90°（用于从朝上帧生成其余朝向；尺寸无关）。
 function rotateCW(rows: string[]): string[] {
   const n = rows.length;
@@ -626,6 +786,13 @@ export interface SpriteAtlas {
     armor: TankFrames; // 常态银色
     armorFlash: TankFrames; // 受损白闪变体
   };
+  enemyTankRed: {
+    basic: TankFrames;
+    fast: TankFrames;
+    power: TankFrames;
+    armor: TankFrames;
+  }; // 携带道具敌军红闪变体（各种类）
+  powerup: Record<PowerupKind, Sprite>; // 六种道具图标（16×16）
   bullet: Sprite;
   spawnStar: [Sprite, Sprite, Sprite, Sprite]; // 出生闪光 4 帧（32×32）
   shield: [Sprite, Sprite]; // 出生护盾 2 帧（32×32）
@@ -667,6 +834,13 @@ const Y_PLAYER3 = 368;
 const Y_PLAYER4 = 400;
 // 各 playerIndex 对应的图集行 y 偏移。
 const PLAYER_ROW_Y = [Y_PLAYER, Y_PLAYER2, Y_PLAYER3, Y_PLAYER4];
+// 携带道具敌军红闪变体行（basic/fast/power/armor，各 32 高，附在图集底部）。
+const Y_RED_BASIC = 432;
+const Y_RED_FAST = 464;
+const Y_RED_POWER = 496;
+const Y_RED_ARMOR = 528;
+// 道具图标行（6 个 32×32，x=0/32/…/160）。
+const Y_POWERUP = 560;
 
 // 把一台坦克的朝上两帧铺到某一行：旋转生成其余朝向，
 // 按 up0,up1,down0,down1,left0,left1,right0,right1 排布于 x=0,32,…,224。
@@ -701,7 +875,7 @@ function tankFramesAt(canvas: HTMLCanvasElement, y: number): TankFrames {
 // 启动时调用一次，构建离屏图集并返回带取样矩形的 API。
 export function createSpriteAtlas(): SpriteAtlas {
   const width = 256;
-  const height = 432; // 追加 3 行玩家坦克（P2/P3/P4，各 32 高）后的总高
+  const height = 592; // + 4 行红闪敌军坦克（各 32）+ 1 行道具图标（32）
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -748,6 +922,15 @@ export function createSpriteAtlas(): SpriteAtlas {
     Y_ARMOR_FLASH,
   );
 
+  // 携带道具敌军红闪变体：各种类沿用其模板（basic/power=STD，fast=FAST，armor=ARMOR），统一红色映射。
+  paintTankRow(ctx, recolor(TANK_STD, MAP_ENEMY_RED), recolor(swapTreads(TANK_STD), MAP_ENEMY_RED), Y_RED_BASIC);
+  paintTankRow(ctx, recolor(TANK_FAST, MAP_ENEMY_RED), recolor(swapTreads(TANK_FAST), MAP_ENEMY_RED), Y_RED_FAST);
+  paintTankRow(ctx, recolor(TANK_STD, MAP_ENEMY_RED), recolor(swapTreads(TANK_STD), MAP_ENEMY_RED), Y_RED_POWER);
+  paintTankRow(ctx, recolor(TANK_ARMOR, MAP_ENEMY_RED), recolor(swapTreads(TANK_ARMOR), MAP_ENEMY_RED), Y_RED_ARMOR);
+
+  // 道具图标行：按 POWERUP_KINDS 顺序铺于 x=0,32,…。
+  POWERUP_KINDS.forEach((kind, i) => paint(ctx, POWERUP_ICON_ROWS[kind], i * 32, Y_POWERUP));
+
   // 特效行：出生星 4 帧（32）+ 小爆炸 3 帧（32）
   paint(ctx, SPAWN_STAR_FRAMES_ART[0], 0, Y_FX);
   paint(ctx, SPAWN_STAR_FRAMES_ART[1], 32, Y_FX);
@@ -779,6 +962,19 @@ export function createSpriteAtlas(): SpriteAtlas {
       armor: tankFramesAt(canvas, Y_ARMOR),
       armorFlash: tankFramesAt(canvas, Y_ARMOR_FLASH),
     },
+    enemyTankRed: {
+      basic: tankFramesAt(canvas, Y_RED_BASIC),
+      fast: tankFramesAt(canvas, Y_RED_FAST),
+      power: tankFramesAt(canvas, Y_RED_POWER),
+      armor: tankFramesAt(canvas, Y_RED_ARMOR),
+    },
+    powerup: POWERUP_KINDS.reduce(
+      (acc, kind, i) => {
+        acc[kind] = s(i * 32, Y_POWERUP, 32, 32);
+        return acc;
+      },
+      {} as Record<PowerupKind, Sprite>,
+    ),
     bullet: s(96, Y_EAGLE, 8, 8),
     spawnStar: [
       s(0, Y_FX, 32, 32),

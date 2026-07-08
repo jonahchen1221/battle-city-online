@@ -86,6 +86,31 @@ export function removeBrickQuarters(
   return true;
 }
 
+// 就地设置某格类型（保持 cells / brickMask 不变量：砖块置满象限，其余清 0）。
+// 供 shovel 道具钢化 / 恢复鹰巢护墙使用。越界忽略。
+export function setCell(level: LevelState, col: number, row: number, cell: CellType): void {
+  if (col < 0 || row < 0 || col >= level.cols || row >= level.rows) {
+    return;
+  }
+  const idx = cellIndex(level, col, row);
+  level.cells[idx] = cell;
+  level.brickMask[idx] = cell === Cell.BRICK ? BRICK_FULL : 0;
+}
+
+// 清除一个钢块子格（整格，不做象限）：仅当该格确为 STEEL 时置空。返回是否有钢块被清除。
+// 供 star 满级（3 级）玩家子弹击穿钢块使用。越界（含边界）返回 false，故不破坏战场边界。
+export function removeSteel(level: LevelState, col: number, row: number): boolean {
+  if (col < 0 || row < 0 || col >= level.cols || row >= level.rows) {
+    return false;
+  }
+  const idx = cellIndex(level, col, row);
+  if (level.cells[idx] !== Cell.STEEL) {
+    return false;
+  }
+  level.cells[idx] = Cell.EMPTY;
+  return true;
+}
+
 // 深拷贝，避免关卡实例共享同一份 STAGE 常量数据（破坏砖块会就地修改）。
 export function cloneLevel(level: LevelState): LevelState {
   return {

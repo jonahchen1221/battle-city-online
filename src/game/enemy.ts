@@ -8,6 +8,7 @@ import {
   maxEnemiesOnField,
   ENEMY_SPAWN_INTERVAL_TICKS,
   ENEMY_SPAWN_POINTS,
+  CARRIER_QUEUE_POSITIONS,
 } from '../core/constants';
 import { LevelState } from './level';
 import { TankState, createEnemy, applyInput, turnTank, isPlayerTank } from './tank';
@@ -61,6 +62,11 @@ function updateSpawner(state: GameState): void {
   const spawnIndex = state.enemySpawnPoint;
   state.enemySpawnPoint = (state.enemySpawnPoint + 1) % ENEMY_SPAWN_POINTS.length;
   const tank = createEnemy(kind, state.nextEnemyId++, spawnIndex);
+  // 出队计数（1 起）：第 4/11/18 台为“携带道具”者（红闪，死亡掉落）。按计数标记，不回看队列下标。
+  state.enemiesDequeued++;
+  if (CARRIER_QUEUE_POSITIONS.includes(state.enemiesDequeued)) {
+    tank.carriesPowerup = true;
+  }
   state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
   state.enemySpawnTimer = ENEMY_SPAWN_INTERVAL_TICKS;
 }
@@ -108,12 +114,16 @@ function updateOneEnemy(tank: TankState, state: GameState, level: LevelState): v
 }
 
 // 敌方总编排：先推进出生闪光（实体化），再驱动全部在场敌人，最后尝试出生新敌人。
+// timer 道具冻结期间（enemyFreezeTicks>0）跳过全部在场敌人的 AI（不动、不开火、履带冻结），
+// 但出生闪光与出生器照常推进（经典表现）。飞行中的子弹由 update 的 advanceBullets 继续推进。
 export function updateEnemies(state: GameState, level: LevelState): void {
   updateSpawning(state);
 
-  for (const tank of state.tanks) {
-    if (!tank.alive || isPlayerTank(tank)) continue;
-    updateOneEnemy(tank, state, level);
+  if (state.enemyFreezeTicks <= 0) {
+    for (const tank of state.tanks) {
+      if (!tank.alive || isPlayerTank(tank)) continue;
+      updateOneEnemy(tank, state, level);
+    }
   }
 
   updateSpawner(state);

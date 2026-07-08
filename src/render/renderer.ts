@@ -34,6 +34,9 @@ import {
   SHIELD_ANIM_TICKS,
   PAUSE_BLINK_TICKS,
   ENEMY_SCORE,
+  CARRIER_FLASH_TICKS,
+  POWERUP_BLINK_VISIBLE_TICKS,
+  POWERUP_BLINK_CYCLE_TICKS,
 } from '../core/constants';
 import { GameState } from '../game/state';
 import { Cell, LevelState, cellIndex, getCell } from '../game/level';
@@ -104,6 +107,8 @@ export class Renderer {
 
     // 第二遍：树林（覆盖在实体之上，坦克可藏于其下）
     this.drawTrees(state.level);
+    // 道具浮标：绘于树林之上（经典 —— 浮于一切之上），仍在战场裁剪区内。
+    this.drawPowerup(state);
     ctx.restore();
 
     // 右侧 HUD 栏（剩余敌军 / 生命 / 关卡旗）
@@ -114,6 +119,26 @@ export class Renderer {
 
     // 暂停覆盖层（黄色 "PAUSE" 闪烁），凌驾于一切之上
     this.drawPause(state);
+
+    // 关卡开场幕布（STAGE N）：铺满战场的灰色幕布 + 黑字，凌驾于战场内一切之上。
+    this.drawStageStart(state);
+  }
+
+  // 关卡开场幕布：用灰色（frame gray）铺满战场矩形，居中黑字 "STAGE N"（经典过场观感）。
+  private drawStageStart(state: GameState): void {
+    if (state.phase !== 'stagestart') return;
+    const { ctx, atlas } = this;
+    ctx.fillStyle = COLOR_FRAME;
+    ctx.fillRect(
+      FIELD_X * ART_SCALE,
+      FIELD_Y * ART_SCALE,
+      FIELD_WIDTH * ART_SCALE,
+      FIELD_HEIGHT * ART_SCALE,
+    );
+    const text = `STAGE ${state.stage}`;
+    const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
+    const cy = FIELD_Y + FIELD_HEIGHT / 2 - 4;
+    drawText(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), cy, COLOR_HUD_ICON);
   }
 
   // 右侧 32px 灰栏 HUD（x 224..256）：黑色图标/文字，经典 NES 布局。
@@ -140,10 +165,10 @@ export class Renderer {
       drawText(ctx, atlas, String(stock), hudX + 20, rowY + 13, COLOR_HUD_ICON);
     }
 
-    // 关卡旗 + 关号（当前恒为第 1 关）：置于生命块下方。
+    // 关卡旗 + 当前关号：置于生命块下方。
     const flagY = livesTop + state.playerCount * rowH + 2;
     drawTile(ctx, atlas.hudFlag, hudX + 7, flagY);
-    drawText(ctx, atlas, '1', hudX + 12, flagY + 20, COLOR_HUD_ICON);
+    drawText(ctx, atlas, String(state.stage), hudX + 12, flagY + 20, COLOR_HUD_ICON);
   }
 
   // 结果覆盖层。GAME OVER：经典红，phaseTicks 前 GAMEOVER_SLIDE_TICKS 帧由底部滑到中央后停住。
@@ -184,8 +209,8 @@ export class Renderer {
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const white = COLOR_STAGE_CLEAR;
 
-    // 标题："STAGE 1 CLEAR"（当前恒为第 1 关），居中于战场顶部三分之一处。
-    const title = 'STAGE 1 CLEAR';
+    // 标题："STAGE N CLEAR"，居中于战场顶部三分之一处。
+    const title = `STAGE ${state.stage} CLEAR`;
     drawText(ctx, atlas, title, cx - Math.round(textWidth(title) / 2), FIELD_Y + 40, white);
 
     // 战果表：每行 = 种类名 + "X"计数 + 右对齐得分。四列坐标固定，整体居中于战场。
@@ -244,11 +269,14 @@ export class Renderer {
   // 履带动画：移动时每 TRACK_ANIM_TICKS 帧切换两帧，静止时冻结在第 0 帧。
   private drawTanks(state: GameState): void {
     const { ctx, atlas } = this;
+    const enemiesFrozen = state.enemyFreezeTicks > 0;
     for (const tank of state.tanks) {
       if (!tank.alive) continue;
       const px = snapArt(FIELD_X + tank.x);
       const py = snapArt(FIELD_Y + tank.y);
-      const frame = tank.moving ? Math.floor(state.tick / TRACK_ANIM_TICKS) % 2 : 0;
+      // 冻结中的敌军履带定格第 0 帧（timer 道具）；其余按移动状态播放两帧。
+      const frozen = enemiesFrozen && tank.kind !== 'player';
+      const frame = tank.moving && !frozen ? Math.floor(state.tick / TRACK_ANIM_TICKS) % 2 : 0;
       const frames = this.tankFrames(tank, state.tick);
       const sprite = frames[tank.dir][frame];
       drawTile(ctx, sprite, px, py);
@@ -275,25 +303,37 @@ export class Renderer {
     }
   }
 
-  // 根据坦克种类（及装甲受损闪烁）取对应精灵组。
+  // 根据坦克种类（及装甲受损闪烁 / 携带者红闪）取对应精灵组。
   private tankFrames(tank: TankState, tick: number): TankFrames {
     const { atlas } = this;
+    if (tank.kind === 'player') return atlas.playerTank[tank.playerIndex];
+
+    // 携带道具敌军：每 CARRIER_FLASH_TICKS 帧在常态 / 红色变体间交替（红色相优先于装甲受损闪烁）。
+    const flashRed = tank.carriesPowerup && Math.floor(tick / CARRIER_FLASH_TICKS) % 2 === 1;
     switch (tank.kind) {
-      case 'player':
-        return atlas.playerTank[tank.playerIndex];
       case 'fast':
-        return atlas.enemyTank.fast;
+        return flashRed ? atlas.enemyTankRed.fast : atlas.enemyTank.fast;
       case 'power':
-        return atlas.enemyTank.power;
+        return flashRed ? atlas.enemyTankRed.power : atlas.enemyTank.power;
       case 'armor': {
+        if (flashRed) return atlas.enemyTankRed.armor;
         // 受损（hp 未满）时每 ARMOR_FLASH_TICKS 帧在银/白间闪烁。
         const damaged = tank.hp < ARMOR_HP;
         const flash = damaged && Math.floor(tick / ARMOR_FLASH_TICKS) % 2 === 1;
         return flash ? atlas.enemyTank.armorFlash : atlas.enemyTank.armor;
       }
       default:
-        return atlas.enemyTank.basic;
+        return flashRed ? atlas.enemyTankRed.basic : atlas.enemyTank.basic;
     }
+  }
+
+  // 道具浮标：按 32 帧周期闪烁（前 24 帧可见、后 8 帧隐藏），画于战场裁剪区内、树林之上。
+  private drawPowerup(state: GameState): void {
+    const p = state.powerup;
+    if (!p) return;
+    if (state.tick % POWERUP_BLINK_CYCLE_TICKS >= POWERUP_BLINK_VISIBLE_TICKS) return; // 隐藏相
+    const { ctx, atlas } = this;
+    drawTile(ctx, atlas.powerup[p.kind], snapArt(FIELD_X + p.x), snapArt(FIELD_Y + p.y));
   }
 
   private drawBullets(state: GameState): void {

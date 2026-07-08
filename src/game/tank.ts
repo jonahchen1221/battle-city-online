@@ -18,8 +18,9 @@ import {
   ENEMY_SPAWN_POINTS,
   AI_DECISION_MIN_TICKS,
   PLAYER_INVULN_TICKS,
+  ICE_SLIDE_TICKS,
 } from '../core/constants';
-import { LevelState, getCell, isSolidForTank } from './level';
+import { Cell, LevelState, getCell, isSolidForTank } from './level';
 
 // 敌方坦克种类（用于计分/计数等以种类为键的表）。
 export type EnemyKind = 'basic' | 'fast' | 'power' | 'armor';
@@ -45,6 +46,9 @@ export interface TankState {
   hp: number; // 剩余血量：常规 1，装甲 4；≤0 即毁
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
   invulnTicks: number; // 出生护盾剩余帧：>0 时敌弹穿过、不受伤（敌人恒为 0）
+  level: number; // 玩家 star 等级 0..3（敌人恒为 0）：影响弹速 / 双弹 / 破钢；死亡 / 复活归 0
+  carriesPowerup: boolean; // 是否为“携带道具”的敌军（第 4/11/18 台出队者）：红色闪烁，死亡掉落道具
+  slideTicks: number; // 冰面滑行剩余帧：在冰面上移动时装填为 ICE_SLIDE_TICKS，松开方向键后据此继续滑行
 }
 
 // 判断一台坦克是否为玩家坦克。
@@ -71,6 +75,9 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     aiTicks: 0,
     // 实体化即获无敌：开局直接入场、复活经出生闪光后入场，两条路径都从此值起算。
     invulnTicks: PLAYER_INVULN_TICKS,
+    level: 0, // 复活即用 createPlayer 重建 → star 等级自然归 0
+    carriesPowerup: false,
+    slideTicks: 0,
   };
 }
 
@@ -116,6 +123,9 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     hp: enemyHp(kind),
     aiTicks: AI_DECISION_MIN_TICKS,
     invulnTicks: 0, // 敌方无出生护盾
+    level: 0, // 敌人不使用 star 等级
+    carriesPowerup: false, // 由出生器按出队计数标记（见 enemy.ts updateSpawner）
+    slideTicks: 0,
   };
 }
 
@@ -243,6 +253,13 @@ export function turnTank(tank: TankState, desired: Direction): void {
   tank.dir = desired;
 }
 
+// 坦克中心所在子格是否为冰面（16×16 盒中心 = 左上角 + 8）。
+function centerOnIce(tank: TankState, level: LevelState): boolean {
+  const col = Math.floor((tank.x + TANK_SIZE / 2) / SUBTILE);
+  const row = Math.floor((tank.y + TANK_SIZE / 2) / SUBTILE);
+  return getCell(level, col, row) === Cell.ICE;
+}
+
 // 应用一帧输入：转向（含轴吸附）+ 移动（含坦克互相实心）。不处理开火（由 update 编排）。
 // tanks 为场上全部坦克，用于坦克对坦克碰撞夹紧。
 export function applyInput(
@@ -253,12 +270,26 @@ export function applyInput(
 ): void {
   const desired = desiredDir(input);
   if (desired === null) {
-    // 无方向输入：原地不动，保持朝向。
-    tank.moving = false;
+    // 无方向输入：若正处于冰面滑行中（slideTicks>0 且中心仍在冰面），沿当前朝向继续滑行一步；
+    // 否则原地停住。撞墙 / 被夹紧（位置未变）或离开冰面则立即停止滑行。
+    if (tank.slideTicks > 0 && centerOnIce(tank, level)) {
+      const px = tank.x;
+      const py = tank.y;
+      moveTank(tank, level, tanks); // 沿当前朝向按自身速度滑行一步（含地形/坦克碰撞夹紧）
+      const blocked = tank.x === px && tank.y === py;
+      tank.slideTicks--;
+      if (blocked) tank.slideTicks = 0;
+      tank.moving = !blocked; // 滑行中视为移动（驱动履带动画）
+    } else {
+      tank.slideTicks = 0;
+      tank.moving = false;
+    }
     return;
   }
 
   turnTank(tank, desired);
   tank.moving = true;
   moveTank(tank, level, tanks);
+  // 移动后：中心若在冰面则装填滑行计时（松键后可继续滑行），离开冰面则清零。
+  tank.slideTicks = centerOnIce(tank, level) ? ICE_SLIDE_TICKS : 0;
 }

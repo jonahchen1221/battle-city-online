@@ -41,6 +41,9 @@ export class Sfx {
       case 'eagleDeath':
         this.noise(0.6, { from: 2800, to: 90, vol: 0.34 }); // 最长最重
         break;
+      case 'stageStart':
+        this.jingle([392, 523, 659, 784], 0.14, 'square', 0.14); // G4-C5-E5-G5 开场小调（约 0.56s）
+        break;
       case 'stageClear':
         this.jingle([523, 659, 784], 0.12, 'square', 0.14); // C5-E5-G5 上行
         break;
@@ -49,6 +52,15 @@ export class Sfx {
         break;
       case 'pause':
         this.jingle([988, 659], 0.07, 'square', 0.12); // 经典双音提示
+        break;
+      case 'powerupSpawn':
+        this.jingle([740, 1109], 0.05, 'square', 0.12); // 短促双音（道具出现）
+        break;
+      case 'powerupPickup':
+        this.jingle([784, 988, 1319], 0.06, 'square', 0.14); // 上行清脆铃音（约 0.18s）
+        break;
+      case 'lifeUp':
+        this.jingle([659, 880, 1047, 1319], 0.09, 'square', 0.16); // 经典 1UP 欢快上行
         break;
     }
   }

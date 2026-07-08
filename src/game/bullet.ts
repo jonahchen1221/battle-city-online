@@ -11,8 +11,17 @@ import {
   BRICK_BL,
   BRICK_BR,
   EXPLOSION_SMALL_TICKS,
+  STAR_BULLET_SPEED,
+  PLAYER_MAX_BULLETS_UPGRADED,
 } from '../core/constants';
-import { Cell, LevelState, getCell, isSolidForBullet, removeBrickQuarters } from './level';
+import {
+  Cell,
+  LevelState,
+  getCell,
+  isSolidForBullet,
+  removeBrickQuarters,
+  removeSteel,
+} from './level';
 import { TankState, isPlayerTank } from './tank';
 import type { ExplosionState, GameEvent } from './state';
 
@@ -25,6 +34,7 @@ export interface BulletState {
   ownerId: number;
   fromEnemy: boolean; // 阵营：true=敌弹（只打玩家），false=玩家弹（只打敌人）
   alive: boolean;
+  steelPiercing: boolean; // star 满级（3 级）玩家弹：可击穿钢块（击中钢块时整格清除）
 }
 
 const EPS = 1e-6;
@@ -36,14 +46,17 @@ export function makeSmallExplosion(cx: number, cy: number): ExplosionState {
 }
 
 // 从坦克炮口生成一发子弹（4×4，居中于坦克宽度、紧贴坦克盒外侧）。
-// 速度取自该坦克（威力坦克更快）；阵营由是否玩家坦克决定。
+// 速度取自该坦克（威力坦克更快；玩家 star 等级 ≥1 提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
 export function spawnBullet(tank: TankState): BulletState {
+  const isPlayer = isPlayerTank(tank);
+  const speed = isPlayer && tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
   const base = {
     dir: tank.dir,
-    speed: tank.bulletSpeed,
+    speed,
     ownerId: tank.id,
-    fromEnemy: !isPlayerTank(tank),
+    fromEnemy: !isPlayer,
     alive: true,
+    steelPiercing: isPlayer && tank.level >= 3,
   };
   switch (tank.dir) {
     case 'up':
@@ -57,9 +70,21 @@ export function spawnBullet(tank: TankState): BulletState {
   }
 }
 
-// 该坦克是否已有一发在场子弹（经典规则：每坦克同时仅一发）。
+// 该坦克是否已有一发在场子弹（经典规则：每坦克同时仅一发）。敌方开火沿用此上限。
 export function hasLiveBullet(bullets: BulletState[], ownerId: number): boolean {
   return bullets.some((b) => b.alive && b.ownerId === ownerId);
+}
+
+// 该坦克当前在场子弹数（玩家 star 等级 ≥2 时可双弹，故需计数而非布尔）。
+export function liveBulletCount(bullets: BulletState[], ownerId: number): number {
+  let n = 0;
+  for (const b of bullets) if (b.alive && b.ownerId === ownerId) n++;
+  return n;
+}
+
+// 该坦克同屏可存在的子弹上限：玩家 star 等级 ≥2 为 PLAYER_MAX_BULLETS_UPGRADED，否则 1。
+export function maxBulletsFor(tank: TankState): number {
+  return isPlayerTank(tank) && tank.level >= 2 ? PLAYER_MAX_BULLETS_UPGRADED : 1;
 }
 
 // 沿朝向推进一格步长。
@@ -120,51 +145,55 @@ function clearQuartersInRect(
   }
 }
 
-// 砖块击穿：以子弹中心为中心、垂直行进方向宽 BRICK_CARVE_WIDTH(16)、
-// 沿行进方向纵深 BRICK_CARVE_DEPTH(8) 的矩形，清除其覆盖的象限。
-function carveStrip(b: BulletState, level: LevelState): void {
+// 计算击穿破坏条矩形：以子弹中心为中心、垂直行进方向宽 BRICK_CARVE_WIDTH(16)、
+// 沿行进方向纵深 BRICK_CARVE_DEPTH(8)，前沿贴齐子弹撞入的子格边界。砖块 / 钢块击穿共用同一几何。
+function stripRect(b: BulletState): { sx0: number; sy0: number; sx1: number; sy1: number } {
   const cx = b.x + BULLET_SIZE / 2; // 子弹中心
   const cy = b.y + BULLET_SIZE / 2;
   const halfW = BRICK_CARVE_WIDTH / 2; // 8
-  let sx0: number;
-  let sy0: number;
-  let sx1: number;
-  let sy1: number;
   switch (b.dir) {
     case 'up': {
       const row = Math.floor(b.y / SUBTILE); // 前沿（顶边）所在子格行
-      sy0 = row * SUBTILE;
-      sy1 = sy0 + BRICK_CARVE_DEPTH;
-      sx0 = cx - halfW;
-      sx1 = cx + halfW;
-      break;
+      const sy0 = row * SUBTILE;
+      return { sx0: cx - halfW, sy0, sx1: cx + halfW, sy1: sy0 + BRICK_CARVE_DEPTH };
     }
     case 'down': {
       const row = Math.floor((b.y + BULLET_SIZE - EPS) / SUBTILE); // 前沿（底边）所在行
-      sy0 = row * SUBTILE;
-      sy1 = sy0 + BRICK_CARVE_DEPTH;
-      sx0 = cx - halfW;
-      sx1 = cx + halfW;
-      break;
+      const sy0 = row * SUBTILE;
+      return { sx0: cx - halfW, sy0, sx1: cx + halfW, sy1: sy0 + BRICK_CARVE_DEPTH };
     }
     case 'left': {
       const col = Math.floor(b.x / SUBTILE); // 前沿（左边）所在列
-      sx0 = col * SUBTILE;
-      sx1 = sx0 + BRICK_CARVE_DEPTH;
-      sy0 = cy - halfW;
-      sy1 = cy + halfW;
-      break;
+      const sx0 = col * SUBTILE;
+      return { sx0, sy0: cy - halfW, sx1: sx0 + BRICK_CARVE_DEPTH, sy1: cy + halfW };
     }
     case 'right': {
       const col = Math.floor((b.x + BULLET_SIZE - EPS) / SUBTILE); // 前沿（右边）所在列
-      sx0 = col * SUBTILE;
-      sx1 = sx0 + BRICK_CARVE_DEPTH;
-      sy0 = cy - halfW;
-      sy1 = cy + halfW;
-      break;
+      const sx0 = col * SUBTILE;
+      return { sx0, sy0: cy - halfW, sx1: sx0 + BRICK_CARVE_DEPTH, sy1: cy + halfW };
     }
   }
+}
+
+// 砖块击穿：清除破坏条覆盖的象限（4×4 单位）。
+function carveStrip(b: BulletState, level: LevelState): void {
+  const { sx0, sy0, sx1, sy1 } = stripRect(b);
   clearQuartersInRect(level, sx0, sy0, sx1, sy1);
+}
+
+// 钢块击穿（star 满级弹）：清除破坏条覆盖的整个钢块子格（不做象限，整格清空）。
+// 只清除战场内确为 STEEL 的格（removeSteel 内部做边界 / 类型校验），故不破坏战场边界。
+function carveSteelStrip(b: BulletState, level: LevelState): void {
+  const { sx0, sy0, sx1, sy1 } = stripRect(b);
+  const c0 = Math.floor(sx0 / SUBTILE);
+  const c1 = Math.floor((sx1 - EPS) / SUBTILE);
+  const r0 = Math.floor(sy0 / SUBTILE);
+  const r1 = Math.floor((sy1 - EPS) / SUBTILE);
+  for (let row = r0; row <= r1; row++) {
+    for (let col = c0; col <= c1; col++) {
+      removeSteel(level, col, row);
+    }
+  }
 }
 
 // 判定子弹前沿覆盖的子格并结算地形碰撞。
@@ -173,14 +202,23 @@ function carveStrip(b: BulletState, level: LevelState): void {
 // - 水 / 树林 / 冰 / 空地：飞越。
 function resolveBulletTerrain(b: BulletState, level: LevelState, events: GameEvent[]): void {
   let hitBrick = false;
-  let hitSolidOther = false; // 钢块 / 鹰巢 / 边界
+  let hitSteel = false; // 战场内的钢块（可被 star 满级弹击穿）
+  let hitHard = false; // 鹰巢 / 战场边界（永不被地形击穿逻辑破坏）
 
   // 前沿一线覆盖的子格（垂直行进方向取子弹 4px 宽度）。
   const scan = (col: number, row: number): void => {
     const type = getCell(level, col, row);
     if (!isSolidForBullet(type)) return;
-    if (type === Cell.BRICK) hitBrick = true;
-    else hitSolidOther = true;
+    if (type === Cell.BRICK) {
+      hitBrick = true;
+    } else if (type === Cell.STEEL) {
+      // getCell 对越界返回 STEEL；区分“战场内真实钢块”与“边界”。
+      const inField = col >= 0 && row >= 0 && col < level.cols && row < level.rows;
+      if (inField) hitSteel = true;
+      else hitHard = true;
+    } else {
+      hitHard = true; // 鹰巢
+    }
   };
 
   switch (b.dir) {
@@ -214,15 +252,20 @@ function resolveBulletTerrain(b: BulletState, level: LevelState, events: GameEve
     }
   }
 
-  if (!hitBrick && !hitSolidOther) return; // 未命中实心地形，继续飞行
+  if (!hitBrick && !hitSteel && !hitHard) return; // 未命中实心地形，继续飞行
 
   b.alive = false;
-  // 钢块/鹰巢/边界阻挡时不破坏砖块；仅纯砖块命中才挖破坏条。
-  if (hitBrick && !hitSolidOther) {
+  if (b.steelPiercing && hitSteel && !hitHard) {
+    // star 满级弹击穿钢块：整格清除钢块，同一破坏条内的砖块照常挖除。
+    carveSteelStrip(b, level);
+    if (hitBrick) carveStrip(b, level);
+    events.push('brickHit'); // 破坏音
+  } else if (hitBrick && !hitSteel && !hitHard) {
+    // 纯砖块命中：挖破坏条。
     carveStrip(b, level);
     events.push('brickHit');
   } else {
-    events.push('steelHit'); // 钢块 / 鹰巢 / 边界：金属脆响
+    events.push('steelHit'); // 钢块（未破钢）/ 鹰巢 / 边界：金属脆响
   }
 }
 
