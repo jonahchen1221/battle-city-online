@@ -33,14 +33,13 @@ import {
   GAMEOVER_SLIDE_TICKS,
   SHIELD_ANIM_TICKS,
   PAUSE_BLINK_TICKS,
-  ENEMY_SCORE,
   CARRIER_FLASH_TICKS,
   POWERUP_BLINK_VISIBLE_TICKS,
   POWERUP_BLINK_CYCLE_TICKS,
 } from '../core/constants';
 import { GameState } from '../game/state';
 import { Cell, LevelState, cellIndex, getCell } from '../game/level';
-import { TankState } from '../game/tank';
+import { TankState, EnemyKind } from '../game/tank';
 import {
   SpriteAtlas,
   TankFrames,
@@ -185,9 +184,20 @@ export class Renderer {
       const startY = FIELD_Y + FIELD_HEIGHT; // 屏幕底部
       const y = Math.round(startY + (cy - startY) * t);
       drawText(ctx, atlas, text, x, y, COLOR_GAMEOVER);
-      // 滑入完成后提示重开操作
+      // 滑入完成后：多人局在 GAME OVER 下方逐行列出各玩家最终得分（各自配色），再提示重开操作。
       if (state.phaseTicks > GAMEOVER_SLIDE_TICKS) {
-        this.drawRestartHint(state, cy + 24);
+        let hintY = cy + 24;
+        if (state.playerCount > 1) {
+          let ly = cy + 20;
+          for (let i = 0; i < state.playerCount; i++) {
+            const line = `${i + 1}P ${state.scoreByPlayer[i]}`;
+            const color = PLAYER_LABEL_COLORS[i] ?? COLOR_STAGE_CLEAR;
+            drawText(ctx, atlas, line, cx - Math.round(textWidth(line) / 2), ly, color);
+            ly += 12;
+          }
+          hintY = ly + 8;
+        }
+        this.drawRestartHint(state, hintY);
       }
     } else if (state.phase === 'stageclear') {
       this.drawStageClear(state);
@@ -203,42 +213,61 @@ export class Renderer {
     drawText(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), y, COLOR_STAGE_CLEAR);
   }
 
-  // 通关结算画面：标题 + 逐类击毁数/得分 + 总分，白字，经典战果统计版式。
+  // 通关结算画面：标题 + 每名玩家一列的战果表（逐类击毁数 + 累计总分），经典多人战果统计版式。
   private drawStageClear(state: GameState): void {
     const { ctx, atlas } = this;
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const white = COLOR_STAGE_CLEAR;
+    const pc = state.playerCount;
 
     // 标题："STAGE N CLEAR"，居中于战场顶部三分之一处。
     const title = `STAGE ${state.stage} CLEAR`;
     drawText(ctx, atlas, title, cx - Math.round(textWidth(title) / 2), FIELD_Y + 40, white);
 
-    // 战果表：每行 = 种类名 + "X"计数 + 右对齐得分。四列坐标固定，整体居中于战场。
-    const nameX = FIELD_X + 24; // 种类名左缘
-    const countX = FIELD_X + 96; // "X"+计数 左缘
-    const scoreRightX = FIELD_X + 184; // 得分右缘（右对齐）
-    const kinds: Array<['basic' | 'fast' | 'power' | 'armor', string]> = [
+    // 列几何：左侧行标签列（48px）+ 每名玩家一列（56px），整块水平居中于 320px 战场。
+    // 4 人时 48 + 4×56 = 272 ≤ 320；人数少时整块更窄、仍居中，观感干净。
+    const labelColW = 48;
+    const playerColW = 56;
+    const blockWidth = labelColW + pc * playerColW;
+    const blockLeft = FIELD_X + Math.round((FIELD_WIDTH - blockWidth) / 2);
+    const cellPadL = 4; // 表头 / 击毁数在列内的左内边距
+    const cellPadR = 8; // 总分右对齐时距列右缘的内边距
+    const colLeft = (i: number): number => blockLeft + labelColW + i * playerColW;
+
+    // 表头行：每列 "1P".."4P"，用各玩家 PLAYER_LABEL_COLORS 配色。
+    const headerY = FIELD_Y + 58;
+    for (let i = 0; i < pc; i++) {
+      const label = `${i + 1}P`;
+      const color = PLAYER_LABEL_COLORS[i] ?? white;
+      drawText(ctx, atlas, label, colLeft(i) + cellPadL, headerY, color);
+    }
+
+    // 四种敌军行：左侧种类名（白），随后每列该玩家 "X<击毁数>"（白）。
+    const kinds: Array<[EnemyKind, string]> = [
       ['basic', 'BASIC'],
       ['fast', 'FAST'],
       ['power', 'POWER'],
       ['armor', 'ARMOR'],
     ];
-    let y = FIELD_Y + 74;
+    let y = FIELD_Y + 76;
     for (const [kind, label] of kinds) {
-      const kills = state.killsByKind[kind];
-      const pts = kills * ENEMY_SCORE[kind];
-      drawText(ctx, atlas, label, nameX, y, white);
-      drawText(ctx, atlas, 'X' + kills, countX, y, white);
-      const ptsStr = String(pts);
-      drawText(ctx, atlas, ptsStr, scoreRightX - textWidth(ptsStr), y, white);
+      drawText(ctx, atlas, label, blockLeft, y, white);
+      for (let i = 0; i < pc; i++) {
+        const kills = state.killsByPlayer[i][kind];
+        drawText(ctx, atlas, 'X' + kills, colLeft(i) + cellPadL, y, white);
+      }
       y += 16;
     }
 
-    // 分隔与总分行。
+    // 分隔 + 总分行：每列显示该玩家累计总分（列内右对齐），用玩家配色。
     y += 8;
-    drawText(ctx, atlas, 'TOTAL', nameX, y, white);
-    const totalStr = String(state.score);
-    drawText(ctx, atlas, totalStr, scoreRightX - textWidth(totalStr), y, white);
+    drawText(ctx, atlas, 'TOTAL', blockLeft, y, white);
+    for (let i = 0; i < pc; i++) {
+      const scoreStr = String(state.scoreByPlayer[i]);
+      const color = PLAYER_LABEL_COLORS[i] ?? white;
+      const rx = colLeft(i) + playerColW - cellPadR - textWidth(scoreStr);
+      drawText(ctx, atlas, scoreStr, rx, y, color);
+    }
 
     // 重开提示。
     this.drawRestartHint(state, y + 24);

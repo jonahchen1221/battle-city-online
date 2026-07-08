@@ -7,7 +7,7 @@ import {
 } from '../core/constants';
 import { LevelState, cloneLevel } from './level';
 import { STAGES } from './levels';
-import { TankState, TankKind, createPlayer, isPlayerTank } from './tank';
+import { TankState, TankKind, EnemyKind, createPlayer, isPlayerTank } from './tank';
 import { BulletState } from './bullet';
 import type { PowerupState } from './powerup';
 
@@ -72,8 +72,8 @@ export interface GameState {
   // resultTimer 归零后 phase 切到 pendingResult。null 表示未武装。
   pendingResult: Exclude<Phase, 'playing'> | null;
   resultTimer: number; // 距切换到 pendingResult 的剩余帧数
-  score: number; // 本局累计得分
-  killsByKind: Record<'basic' | 'fast' | 'power' | 'armor', number>; // 各种敌军击毁数
+  scoreByPlayer: number[]; // 每名玩家的累计得分（跨关累积），按 playerIndex 索引
+  killsByPlayer: Array<Record<EnemyKind, number>>; // 每名玩家各种敌军击毁数（每关重置），按 playerIndex 索引
   paused: boolean; // 是否暂停（游玩中按 start 切换）
   prevStart: boolean; // 上一帧 start 键聚合状态（边沿检测：暂停切换 / 结算重开）
   // ── 道具系统 ──
@@ -87,6 +87,11 @@ export interface GameState {
 // 按某关编成（STAGE_ENEMY_MIX[stageIndex]）构建敌军出生队列（queue[0] 最先出生）。
 // 轮转交错（round-robin）：依次遍历各种类，剩余数 >0 则取一台，直至取空 —— 使种类分散、确定性、无需 rng。
 // 携带道具者仍由 enemy.ts 按第 4/11/18 台出队计数标记，与队列内容无关。
+// 每名玩家一份“全零”的击毁计数表（避免共享同一对象引用）。
+function emptyKillsByPlayer(playerCount: number): Array<Record<EnemyKind, number>> {
+  return Array.from({ length: playerCount }, () => ({ basic: 0, fast: 0, power: 0, armor: 0 }));
+}
+
 function createStageQueue(stageIndex: number): TankKind[] {
   const mix = STAGE_ENEMY_MIX[stageIndex % STAGE_ENEMY_MIX.length];
   const remaining = mix.map((m) => ({ kind: m.kind, count: m.count }));
@@ -133,8 +138,8 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     livesByPlayer: new Array<number>(playerCount).fill(PLAYER_LIVES_START),
     pendingResult: null,
     resultTimer: 0,
-    score: 0,
-    killsByKind: { basic: 0, fast: 0, power: 0, armor: 0 },
+    scoreByPlayer: new Array<number>(playerCount).fill(0),
+    killsByPlayer: emptyKillsByPlayer(playerCount),
     paused: false,
     prevStart: false,
     powerup: null,
@@ -147,8 +152,8 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
 
 // 通关后进入下一关（就地修改同一 state 对象）。
 // 关号 +1（通关第 STAGE_COUNT 关后回卷到第 1 关），载入新关卡地形与出生队列，进入 'stagestart' 幕布。
-// 保留（跨关累积）：score、livesByPlayer、每名玩家 star 等级 level、playerCount、rng（继续推进）。
-// 重置（每关独立）：killsByKind、道具/冻结/铲子计时、bullets/explosions/spawning、eagleDestroyed、
+// 保留（跨关累积）：scoreByPlayer、livesByPlayer、每名玩家 star 等级 level、playerCount、rng（继续推进）。
+// 重置（每关独立）：killsByPlayer、道具/冻结/铲子计时、bullets/explosions/spawning、eagleDestroyed、
 //                  出队计数 enemiesDequeued / 出生计时 / 出生点、paused / pendingResult。
 export function nextStage(state: GameState): void {
   const nextStageNum = (state.stage % STAGE_COUNT) + 1;
@@ -178,7 +183,8 @@ export function nextStage(state: GameState): void {
   state.eagleDestroyed = false;
   state.pendingResult = null;
   state.resultTimer = 0;
-  state.killsByKind = { basic: 0, fast: 0, power: 0, armor: 0 };
+  // scoreByPlayer 跨关累积、保持不动；killsByPlayer 每关独立、清零重建。
+  state.killsByPlayer = emptyKillsByPlayer(state.playerCount);
   state.powerup = null;
   state.enemyFreezeTicks = 0;
   state.shovelTicks = 0;

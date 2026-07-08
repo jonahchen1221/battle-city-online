@@ -107,7 +107,7 @@ export function tryPickupPowerup(state: GameState): void {
   for (const t of state.tanks) {
     if (!t.alive || !isPlayerTank(t)) continue;
     if (!pickupOverlap(t, p)) continue;
-    state.score += POWERUP_SCORE;
+    state.scoreByPlayer[t.playerIndex] += POWERUP_SCORE;
     applyPowerupEffect(state, t, p.kind);
     state.powerup = null;
     // tank 道具（加命）用独立的欢快 1UP 音效；其余用统一拾取提示音。
@@ -124,7 +124,7 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       collector.level = Math.min(PLAYER_MAX_LEVEL, collector.level + 1);
       break;
     case 'grenade':
-      grenadeKillAll(state);
+      grenadeKillAll(state, collector);
       break;
     case 'tank':
       // 加命：该玩家生命 +1。
@@ -145,17 +145,17 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
   }
 }
 
-// grenade：场上每台存活敌军立即以大爆炸死亡；正常计分 / 计入击毁数
+// grenade：场上每台存活敌军立即以大爆炸死亡；得分 / 击毁数一律归属拾取者 collector
 // （偏离原版“0 分”的小改动，为保持结算统计算术一致）。出生闪光中的敌人不受影响（仅遍历 state.tanks）。
-function grenadeKillAll(state: GameState): void {
+function grenadeKillAll(state: GameState, collector: TankState): void {
   const off = (EXPLOSION_BIG_SIZE - TANK_SIZE) / 2; // 8
   for (const t of state.tanks) {
     if (!t.alive || isPlayerTank(t)) continue;
     t.hp = 0;
     t.alive = false;
     const kind = t.kind as EnemyKind;
-    state.score += ENEMY_SCORE[kind];
-    state.killsByKind[kind]++;
+    state.scoreByPlayer[collector.playerIndex] += ENEMY_SCORE[kind];
+    state.killsByPlayer[collector.playerIndex][kind]++;
     state.explosions.push({
       x: t.x - off,
       y: t.y - off,

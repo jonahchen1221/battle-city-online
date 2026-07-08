@@ -152,10 +152,13 @@ function resolveBulletTanks(state: GameState): void {
           state.events.push('playerDeath');
           onPlayerKilled(state, t);
         } else {
-          // 敌方坦克被击毁：计分 + 计数（此处所有敌军死亡皆由玩家子弹造成）。
+          // 敌方坦克被击毁：把得分与击毁数归属给射手（敌弹不打敌人，故此处必为玩家弹，
+          // ownerPlayerIndex ≥ 0；仍做守卫以防万一）。
           const kind = t.kind as EnemyKind; // 非玩家分支：kind 必为敌方种类
-          state.score += ENEMY_SCORE[kind];
-          state.killsByKind[kind]++;
+          if (b.ownerPlayerIndex >= 0) {
+            state.scoreByPlayer[b.ownerPlayerIndex] += ENEMY_SCORE[kind];
+            state.killsByPlayer[b.ownerPlayerIndex][kind]++;
+          }
           state.events.push('explosionBig');
           // 携带者被击毁：用一枚新随机道具替换场上现有道具（随机落点）。
           // 仅子弹击杀触发掉落；grenade 群灭不掉落（在 powerup.ts 内直接置死，不经此分支）。

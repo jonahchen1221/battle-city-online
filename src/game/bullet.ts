@@ -32,6 +32,7 @@ export interface BulletState {
   dir: Direction;
   speed: number; // px/tick
   ownerId: number;
+  ownerPlayerIndex: number; // 射手的玩家序号（玩家弹为其 playerIndex，敌弹为 -1）：用于击杀记分归属
   fromEnemy: boolean; // 阵营：true=敌弹（只打玩家），false=玩家弹（只打敌人）
   alive: boolean;
   steelPiercing: boolean; // star 满级（3 级）玩家弹：可击穿钢块（击中钢块时整格清除）
@@ -54,6 +55,7 @@ export function spawnBullet(tank: TankState): BulletState {
     dir: tank.dir,
     speed,
     ownerId: tank.id,
+    ownerPlayerIndex: isPlayer ? tank.playerIndex : -1,
     fromEnemy: !isPlayer,
     alive: true,
     steelPiercing: isPlayer && tank.level >= 3,
