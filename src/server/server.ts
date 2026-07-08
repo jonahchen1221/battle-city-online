@@ -133,7 +133,12 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
   const distExists = existsSync(join(DIST_DIR, 'index.html'));
   const httpServer = createHttpServer((req, res) => handleStatic(req, res, distExists));
   // 关键：{ server } 而非 { port } —— WS 与 HTTP 复用同一端口（平台仅需暴露一个端口）。
-  const wss = new WebSocketServer({ server: httpServer });
+  // permessage-deflate：快照含全量地图数组、重复度极高，压缩后体积约为原来的 1/10，
+  // 是跨境等弱网线路可玩性的关键（阈值 512B：小消息不压，省 CPU）。
+  const wss = new WebSocketServer({
+    server: httpServer,
+    perMessageDeflate: { threshold: 512 },
+  });
   // 每个连接的归属（哪个房间、哪个座位）。连接关闭后移除。
   const contexts = new Map<WebSocket, ConnContext>();
 
@@ -148,7 +153,10 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
   }, PING_INTERVAL_MS);
   wss.on('close', () => clearInterval(pingTimer));
 
-  wss.on('connection', (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+    // 关闭 Nagle 算法：快照以 ~100ms 固定节奏发出的小帧，不应为等待合并而滞留在内核缓冲，
+    // 否则跨境高 RTT 线路上会额外叠加一段延迟。逐连接设置（底层 TCP socket）。
+    req.socket.setNoDelay(true);
     ws.on('message', (data: Buffer) => {
       let msg: ClientMessage;
       try {
@@ -218,7 +226,12 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
               sendError(ws, 'bad_message', 'input 形状非法');
               return;
             }
-            ctx.room.setInput(ctx.playerIndex, input);
+            // seq 必须为有限数值（客户端本地预测 tick）；缺失 / 非法一律拒绝。
+            if (typeof msg.seq !== 'number' || !Number.isFinite(msg.seq)) {
+              sendError(ws, 'bad_message', 'input 缺少合法 seq');
+              return;
+            }
+            ctx.room.setInput(ctx.playerIndex, input, msg.seq);
             break;
           }
 

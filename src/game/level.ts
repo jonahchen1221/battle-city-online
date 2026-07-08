@@ -16,11 +16,15 @@ export type CellType = (typeof Cell)[keyof typeof Cell];
 // 关卡的完整地形数据。纯数据（并列的数字数组），可直接做网络快照。
 // - cells[i]      子格类型（CellType）
 // - brickMask[i]  仅当该格为 BRICK 时有意义：存活的 4 个象限位（见 constants BRICK_*）
+// - rev           地形版本号：任一破坏 / 设置类操作都会自增（见下方各 mutator）。
+//                 服务器据此做“增量地形下发”——地形未变的快照不再重复携带整张地图；
+//                 rev 只是一个普通数字（数据，而非 I/O），不违反“纯模拟层”铁律。
 export interface LevelState {
   cols: number;
   rows: number;
   cells: CellType[];
   brickMask: number[];
+  rev: number;
 }
 
 // 行主序线性下标。
@@ -83,6 +87,7 @@ export function removeBrickQuarters(
   if (after === 0) {
     level.cells[idx] = Cell.EMPTY;
   }
+  level.rev++;
   return true;
 }
 
@@ -95,6 +100,7 @@ export function setCell(level: LevelState, col: number, row: number, cell: CellT
   const idx = cellIndex(level, col, row);
   level.cells[idx] = cell;
   level.brickMask[idx] = cell === Cell.BRICK ? BRICK_FULL : 0;
+  level.rev++;
 }
 
 // 清除一个钢块子格（整格，不做象限）：仅当该格确为 STEEL 时置空。返回是否有钢块被清除。
@@ -108,6 +114,7 @@ export function removeSteel(level: LevelState, col: number, row: number): boolea
     return false;
   }
   level.cells[idx] = Cell.EMPTY;
+  level.rev++;
   return true;
 }
 
@@ -118,6 +125,7 @@ export function cloneLevel(level: LevelState): LevelState {
     rows: level.rows,
     cells: level.cells.slice(),
     brickMask: level.brickMask.slice(),
+    rev: level.rev,
   };
 }
 
@@ -129,5 +137,6 @@ export function createEmptyLevel(cols = FIELD_COLS, rows = FIELD_ROWS): LevelSta
     rows,
     cells: new Array<CellType>(size).fill(Cell.EMPTY),
     brickMask: new Array<number>(size).fill(0),
+    rev: 0,
   };
 }

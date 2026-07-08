@@ -7,6 +7,8 @@
 
 import { createGameState, resetGameState, GameState } from '../game/state';
 import { update } from '../game/update';
+import { applyInput, isPlayerTank, TankState } from '../game/tank';
+import type { LevelState } from '../game/level';
 import { Renderer } from '../render/renderer';
 import { Sfx } from '../audio/sfx';
 import { Keyboard } from '../input/keyboard';
@@ -21,7 +23,6 @@ import {
   FIELD_Y,
   FIELD_WIDTH,
   FIELD_HEIGHT,
-  TICKS_PER_SECOND,
 } from '../core/constants';
 import { drawText, textWidth, drawTile } from '../render/sprites';
 import {
@@ -31,7 +32,6 @@ import {
   LobbyPlayer,
   MAX_PLAYERS,
   ROOM_CODE_LENGTH,
-  SNAPSHOT_INTERVAL_TICKS,
 } from '../net/protocol';
 import { NetClient } from './net';
 import { clearScreen, drawBigTextCentered, drawTextCentered } from './ui';
@@ -43,8 +43,27 @@ const TITLE_ITEMS = ['1 PLAYER', 'CREATE ROOM', 'JOIN ROOM'] as const;
 
 // 联机输入心跳：即便输入未变化，也每 500ms 重发一次最近输入（对抗丢包 / 保活）。
 const INPUT_HEARTBEAT_MS = 500;
-// 名义快照间隔（ms）：仅在暂无实测到达间隔时用作插值分母的兜底。
-const NOMINAL_SNAPSHOT_MS = (SNAPSHOT_INTERVAL_TICKS * 1000) / TICKS_PER_SECOND;
+
+// ── 抖动缓冲（jitter buffer）参数 ──
+// 保留最近若干份快照 + 到达时刻，按 renderTime = now - interpDelay 在其间插值远程实体。
+const SNAP_BUFFER_SIZE = 16; // 快照环缓冲容量
+const GAP_SAMPLE_COUNT = 20; // 参与自适应的最近到达间隔样本数
+const INTERP_DELAY_START = 150; // 插值延迟起步（ms）
+const INTERP_DELAY_MIN = 120; // 自适应下限（ms）
+const INTERP_DELAY_MAX = 400; // 自适应上限（ms）
+const INTERP_DELAY_EASE = 0.01; // 每渲染帧向目标缓动的比例（约 1%/帧，避免可见的时间扭曲）
+
+// ── 本地坦克客户端预测 / 输入回放对账参数 ──
+// 对账采用「输入回放」（input replay）：服务器回执已应用的输入 seq（snap.inputAck），
+// 客户端以权威快照为基准、回放尚未确认的本地输入重建预测位置——领先的预测不再被拽回（消除橡皮筋）。
+const INPUT_HISTORY_SIZE = 512; // 输入历史环缓冲容量（2 的幂，便于 & 掩码）
+const INPUT_HISTORY_MASK = INPUT_HISTORY_SIZE - 1;
+const REPLAY_WINDOW_MAX = 480; // 回放窗口上限（tick）：predTick-ack 超此值视为历史越界，退回旧式吸附
+const CORRECTION_HARD_SNAP = 24; // 回放结果与当前预测误差超此值（px）即硬吸附（错位 / 被夹 / 丢包补偿）
+const CORRECTION_MAX = 12; // 平滑修正的渲染偏移量上限（px）
+const CORRECTION_DECAY = 0.85; // 修正偏移每 tick 的衰减系数
+const CORRECTION_EPS = 0.1; // 偏移小于此值（px）即归零，避免无尽的浮点尾巴
+const PREDICT_SNAP_DIST = 16; // 退回路径（无 ack / 越界）下预测与服务器误差超此值（px）即硬吸附
 
 // 主体色（复用调色板取色，避免魔法散落太多）。
 const COLOR_TITLE = '#e44437'; // 砖红标题
@@ -63,6 +82,13 @@ const ERROR_TEXT: Record<ServerErrorCode, string> = {
   not_all_ready: 'NOT ALL READY',
   bad_message: 'BAD MESSAGE',
 };
+
+// 抖动缓冲中的一份快照：原始快照 + 已解析出的完整地形（增量下发下 snap.level 可能缺省）+ 到达时刻。
+interface BufferedSnap {
+  snap: Snapshot;
+  level: LevelState;
+  arrival: number; // performance.now() 到达时刻（ms）
+}
 
 export class App {
   private ctx: CanvasRenderingContext2D;
@@ -90,11 +116,20 @@ export class App {
   private statusError = ''; // 红色错误行
   private pendingAction: { t: 'create' } | { t: 'join'; code: string } | null = null;
 
-  // 联机游戏快照 / 插值。
-  private prevSnap: Snapshot | null = null;
-  private latestSnap: Snapshot | null = null;
-  private prevArrival = 0;
-  private latestArrival = 0;
+  // 联机游戏快照 / 插值（抖动缓冲）。
+  private snapBuf: BufferedSnap[] = []; // 最近 SNAP_BUFFER_SIZE 份快照（按到达时间升序）
+  private arrivalGaps: number[] = []; // 最近 GAP_SAMPLE_COUNT 个到达间隔（ms），用于自适应
+  private lastArrival = 0; // 上一份快照到达时刻
+  private interpDelay = INTERP_DELAY_START; // 当前插值延迟（ms），逐帧向目标缓动
+  private clientLevel: LevelState | null = null; // 客户端持有的地形（增量下发：无 level 的快照沿用它）
+  // 本地玩家坦克的预测状态：本地即时响应输入，服务器仍权威。null = 未预测（缺席 / 非 playing）。
+  private predicted: TankState | null = null;
+  // 本地预测 tick 计数（每次 tickNet ++）与输入历史环缓冲：对账时据 seq 回放尚未确认的输入。
+  private predTick = 0;
+  private inputHistory: InputState[] = makeInputHistory();
+  // 平滑修正的渲染偏移：回放把 predicted 瞬间挪到新位置时，把「旧-新」差塞进此偏移并逐帧衰减，
+  // 保证渲染连续（不跳变）。仅影响渲染，碰撞 / 逻辑仍用 predicted 本体。
+  private correction = { x: 0, y: 0 };
   private readonly dummyRng: Rng = createRng(1); // 仅为凑齐 GameState 形状，永不用于权威
   private lastSentInput: InputState = emptyInput();
   private lastSendTime = 0;
@@ -171,14 +206,43 @@ export class App {
 
   private tickNet(): void {
     if (this.disconnected) return;
+    // 本帧预测 tick 号（自增在前：seq 即为本帧号，回放上界 t<=predTick 恰好闭合）。
+    this.predTick++;
     const input = this.keyboard.snapshot();
+    // 每帧记录输入历史（无论是否发送）：对账回放据 seq 逐帧取用。
+    this.inputHistory[this.predTick & INPUT_HISTORY_MASK] = input;
     const now = performance.now();
     const changed = !sameInput(input, this.lastSentInput);
     if (changed || now - this.lastSendTime >= INPUT_HEARTBEAT_MS) {
-      this.net.send({ t: 'input', input });
+      // seq = 本帧预测 tick；服务器据此回执 inputAck，客户端据此确定回放窗口。
+      this.net.send({ t: 'input', input, seq: this.predTick });
       this.lastSentInput = input;
       this.lastSendTime = now;
     }
+    // 本地坦克预测：每逻辑帧（60Hz）用与服务器完全相同的纯移动逻辑推进一步，
+    // 使本地转向 / 移动 / 轴吸附即时响应（消除一个 RTT 的输入手感延迟）。
+    this.stepPrediction(input);
+  }
+
+  // 用本帧输入推进本地预测坦克一步（仅在 playing 且未暂停时；开火 / 敌人 / 子弹不预测）。
+  private stepPrediction(input: InputState): void {
+    // 修正偏移逐帧（60Hz）衰减：无论预测是否活跃都推进，保证平滑归零。
+    this.decayCorrection();
+    const predicted = this.predicted;
+    const level = this.clientLevel;
+    const newest = this.newestSnap();
+    if (!predicted || !level || !newest) return;
+    if (newest.phase !== 'playing' || newest.paused) return;
+    // 碰撞用最新快照里的其他坦克（排除自身——其服务器位置已过时，留着会与预测体互撞）。
+    const others = newest.tanks.filter((t) => t.id !== predicted.id);
+    applyInput(predicted, input, level, others);
+  }
+
+  // 修正渲染偏移的逐帧衰减（*0.85），小于阈值即归零。
+  private decayCorrection(): void {
+    const c = this.correction;
+    c.x = Math.abs(c.x * CORRECTION_DECAY) < CORRECTION_EPS ? 0 : c.x * CORRECTION_DECAY;
+    c.y = Math.abs(c.y * CORRECTION_DECAY) < CORRECTION_EPS ? 0 : c.y * CORRECTION_DECAY;
   }
 
   // ───────────────────────── 网络事件 ─────────────────────────
@@ -209,9 +273,8 @@ export class App {
         this.players = msg.players;
         break;
       case 'started':
-        // 清空快照，等待第一份 snapshot 才真正进入渲染。
-        this.prevSnap = null;
-        this.latestSnap = null;
+        // 清空快照缓冲 / 预测，等待第一份 snapshot 才真正进入渲染。
+        this.resetNetPlayState();
         this.disconnected = false;
         this.lastSentInput = emptyInput();
         this.lastSendTime = 0;
@@ -232,12 +295,125 @@ export class App {
 
   private onSnapshot(snap: Snapshot, events: GameEvent[]): void {
     const now = performance.now();
-    this.prevSnap = this.latestSnap ?? snap;
-    this.prevArrival = this.latestSnap ? this.latestArrival : now;
-    this.latestSnap = snap;
-    this.latestArrival = now;
+
+    // 增量地形：带 level 则更新客户端地形，否则沿用上一份。
+    // 服务器保证新连接的首份快照必含 level，故此后 clientLevel 恒非空。
+    if (snap.level) this.clientLevel = snap.level;
+    if (!this.clientLevel) return; // 理论不达（首份必含 level）；无地形无法渲染，丢弃
+    const level = this.clientLevel;
+
+    // 入环缓冲（保留最近 SNAP_BUFFER_SIZE 份，按到达时间升序）。
+    this.snapBuf.push({ snap, level, arrival: now });
+    if (this.snapBuf.length > SNAP_BUFFER_SIZE) this.snapBuf.shift();
+
+    // 记录到达间隔（自适应插值延迟用）。
+    if (this.lastArrival > 0) {
+      this.arrivalGaps.push(now - this.lastArrival);
+      if (this.arrivalGaps.length > GAP_SAMPLE_COUNT) this.arrivalGaps.shift();
+    }
+    this.lastArrival = now;
+
+    // 本地坦克预测对账（reconciliation）。
+    this.reconcile(snap);
+
     // 快照携带的音效事件立即播放（覆盖两份快照之间累积的事件，避免漏音）。
     for (const e of events) this.sfx.play(e);
+  }
+
+  // 每份快照到达时对账本地预测坦克：服务器权威，预测只做“即时手感”。
+  // 核心为「输入回放」：以权威快照为基准，回放 ack 之后尚未确认的本地输入重建预测位置，
+  // 领先的预测因此不会被拽回一个 RTT 之前的服务器位置（消除橡皮筋）。
+  private reconcile(snap: Snapshot): void {
+    // 阶段边界 / 暂停：不预测，渲染纯服务器状态；丢弃预测与修正偏移（重新出现时再克隆）。
+    if (snap.phase !== 'playing' || snap.paused) {
+      this.clearPrediction();
+      return;
+    }
+    const server = snap.tanks.find((t) => isPlayerTank(t) && t.playerIndex === this.myPlayerIndex);
+    // 本地坦克缺席（阵亡 / 出生闪光中）：丢弃预测，渲染服务器真值，重新出现时再克隆。
+    if (!server) {
+      this.clearPrediction();
+      return;
+    }
+    // 首次出现 / 重新出现：直接克隆服务器坦克，偏移清零。
+    if (!this.predicted) {
+      this.predicted = { ...server };
+      this.correction.x = 0;
+      this.correction.y = 0;
+      return;
+    }
+
+    const level = this.clientLevel;
+    const ack = snap.inputAck?.[this.myPlayerIndex] ?? -1;
+    const p = this.predicted;
+
+    // 退回路径：尚无回执（ack<0）/ 历史窗口越界（predTick-ack 过大）/ 无地形。
+    // 罕见——沿用旧式行为：误差过大则硬吸附，否则保持预测。
+    if (!level || ack < 0 || this.predTick - ack > REPLAY_WINDOW_MAX) {
+      const err = Math.hypot(server.x - p.x, server.y - p.y);
+      if (err > PREDICT_SNAP_DIST) {
+        this.predicted = { ...server };
+        this.correction.x = 0;
+        this.correction.y = 0;
+      } else {
+        this.copyAuthFields(p, server); // 保持预测位置，仅同步非位置权威字段
+      }
+      return;
+    }
+
+    // 输入回放：从权威坦克克隆一份 sim，逐帧回放 ack+1..predTick 的本地输入。
+    // 碰撞用本份（最新）快照里的其他坦克。窗口通常 20–60 tick（10Hz 快照），开销可忽略。
+    const others = snap.tanks.filter((t) => t.id !== server.id);
+    const sim: TankState = { ...server };
+    for (let t = ack + 1; t <= this.predTick; t++) {
+      applyInput(sim, this.inputHistory[t & INPUT_HISTORY_MASK], level, others);
+    }
+
+    const oldX = p.x;
+    const oldY = p.y;
+    const err = Math.hypot(sim.x - oldX, sim.y - oldY);
+    if (err > CORRECTION_HARD_SNAP) {
+      // 误差过大：硬吸附到回放结果，清偏移。
+      this.predicted = sim;
+      this.correction.x = 0;
+      this.correction.y = 0;
+    } else {
+      // 平滑修正：predicted 直接采用回放结果，但把「旧-新」差累加进渲染偏移（限幅 ≤12px）后逐帧衰减，
+      // 使渲染位置连续、不跳变。
+      this.predicted = sim;
+      let ox = this.correction.x + (oldX - sim.x);
+      let oy = this.correction.y + (oldY - sim.y);
+      const mag = Math.hypot(ox, oy);
+      if (mag > CORRECTION_MAX) {
+        const s = CORRECTION_MAX / mag;
+        ox *= s;
+        oy *= s;
+      }
+      this.correction.x = ox;
+      this.correction.y = oy;
+    }
+    // 克隆自权威坦克 + applyInput 只改 x/y/dir/moving/slideTicks，故非位置权威字段已是服务器真值；
+    // 此处显式再同步一次以防未来 applyInput 触及更多字段（审计：当前不会）。
+    this.copyAuthFields(this.predicted, server);
+  }
+
+  // 丢弃预测并清零修正偏移（阶段边界 / 缺席时用）。
+  private clearPrediction(): void {
+    this.predicted = null;
+    this.correction.x = 0;
+    this.correction.y = 0;
+  }
+
+  // 把服务器权威的非位置字段同步到预测坦克（位置 x/y/dir/moving/slideTicks 由回放维持）。
+  private copyAuthFields(dst: TankState, src: TankState): void {
+    dst.hp = src.hp;
+    dst.level = src.level;
+    dst.invulnTicks = src.invulnTicks;
+    dst.carriesPowerup = src.carriesPowerup;
+    dst.speed = src.speed;
+    dst.bulletSpeed = src.bulletSpeed;
+    dst.alive = src.alive;
+    dst.prevFire = src.prevFire;
   }
 
   private onNetClose(): void {
@@ -262,9 +438,39 @@ export class App {
     this.players = [];
     this.roomCode = '';
     this.disconnected = false;
-    this.prevSnap = null;
-    this.latestSnap = null;
+    this.resetNetPlayState();
     this.screen = 'title';
+  }
+
+  // 清空一切联机对局态（快照缓冲 / 自适应统计 / 地形 / 预测 / 输入历史）。开局与返回标题共用。
+  private resetNetPlayState(): void {
+    this.snapBuf = [];
+    this.arrivalGaps = [];
+    this.lastArrival = 0;
+    this.interpDelay = INTERP_DELAY_START;
+    this.clientLevel = null;
+    this.predicted = null;
+    this.predTick = 0;
+    this.inputHistory = makeInputHistory();
+    this.correction.x = 0;
+    this.correction.y = 0;
+  }
+
+  // 缓冲中最新（到达时间最晚）的一份快照；空缓冲返回 null。
+  private newestSnap(): Snapshot | null {
+    const n = this.snapBuf.length;
+    return n > 0 ? this.snapBuf[n - 1].snap : null;
+  }
+
+  // 自适应插值延迟：目标 = clamp(p95(到达间隔) × 1.5, MIN, MAX)，逐帧缓动 1% 靠拢。
+  private adaptInterpDelay(): void {
+    const gaps = this.arrivalGaps;
+    if (gaps.length < 2) return;
+    const sorted = [...gaps].sort((a, b) => a - b);
+    // p95：取排序后约 95% 分位（floor(0.95×(n-1))）；样本少时自然退化为接近最大值。
+    const p95 = sorted[Math.floor(0.95 * (sorted.length - 1))];
+    const target = clamp(p95 * 1.5, INTERP_DELAY_MIN, INTERP_DELAY_MAX);
+    this.interpDelay += (target - this.interpDelay) * INTERP_DELAY_EASE;
   }
 
   // ───────────────────────── 键盘（仅菜单画面 + 断线覆盖层）─────────────────────────
@@ -540,37 +746,60 @@ export class App {
     if (this.disconnected) this.drawDisconnectOverlay();
   }
 
-  // 用最近两份快照构建插值后的可渲染 GameState 形状对象；无快照时返回 null。
-  // 仅对坦克 / 子弹的 x/y 做插值，其余字段直接取最新快照。
+  // 用抖动缓冲构建插值后的可渲染 GameState 形状对象；无快照时返回 null。
+  // renderTime = now - interpDelay，落在缓冲区两份快照 [from, to] 之间：
+  //   • 远程坦克 / 子弹的 x/y 在 from→to 间按 alpha 插值（其余字段取 to）；
+  //   • 本地坦克用预测位置覆盖（预测活跃时）；
+  //   • 非位置状态（地形 / HUD / 阶段 / 爆炸）取自 to，避免阶段闪烁；
+  //   • renderTime 超出最新快照（卡顿）→ 冻结在最新，不外推；早于最旧 → 用最旧。
   private buildNetRenderState(): GameState | null {
-    const latest = this.latestSnap;
-    if (!latest) return null;
-    const prev = this.prevSnap ?? latest;
+    const buf = this.snapBuf;
+    if (buf.length === 0) return null;
 
-    const interval = this.latestArrival > this.prevArrival ? this.latestArrival - this.prevArrival : NOMINAL_SNAPSHOT_MS;
-    const elapsed = performance.now() - this.latestArrival;
-    const alpha = clamp01(elapsed / interval);
+    this.adaptInterpDelay();
+    const renderTime = performance.now() - this.interpDelay;
 
-    // 坦克按 id 匹配上一帧位置做插值；找不到（新出生）则直接取最新位置。
-    const prevTankById = new Map<number, { x: number; y: number }>();
-    for (const t of prev.tanks) prevTankById.set(t.id, { x: t.x, y: t.y });
-    const tanks = latest.tanks.map((t) => {
-      const p = prevTankById.get(t.id);
-      if (!p) return t;
+    // 找到 ≤renderTime 的最新一份 from，其后一份为 to（越界则 to=from，冻结）。
+    let idx = 0;
+    for (let k = 0; k < buf.length; k++) {
+      if (buf[k].arrival <= renderTime) idx = k;
+      else break;
+    }
+    const from = buf[idx];
+    const to = buf[Math.min(idx + 1, buf.length - 1)];
+    const span = to.arrival - from.arrival;
+    // span=0（from===to，卡顿冻结）→ alpha 0；早于最旧时 renderTime<from.arrival → clamp 到 0。
+    const alpha = span > 0 ? clamp01((renderTime - from.arrival) / span) : 0;
+
+    const base = to.snap; // 非位置状态基准（较新那份）
+    const level = to.level; // 增量地形：始终用已解析出的完整 level
+
+    // 远程坦克：以 to 为准，按 id 匹配 from 旧位置插值；本地玩家坦克用预测覆盖。
+    const fromTankById = new Map<number, { x: number; y: number }>();
+    for (const t of from.snap.tanks) fromTankById.set(t.id, { x: t.x, y: t.y });
+    const predicted = this.predicted;
+    const corr = this.correction;
+    const tanks = base.tanks.map((t) => {
+      if (predicted && isPlayerTank(t) && t.playerIndex === this.myPlayerIndex) {
+        // 本地坦克：渲染预测位置 + 平滑修正偏移（仅视觉；碰撞 / 逻辑用 predicted 本体）。
+        return { ...predicted, x: predicted.x + corr.x, y: predicted.y + corr.y };
+      }
+      const p = fromTankById.get(t.id);
+      if (!p) return t; // 新出生：直接取 to 位置
       return { ...t, x: lerp(p.x, t.x, alpha), y: lerp(p.y, t.y, alpha) };
     });
 
     // 子弹按 ownerId 匹配（每坦克同时仅一发，ownerId 唯一）；方向不同或找不到则不插值。
-    const prevBulletByOwner = new Map<number, { x: number; y: number; dir: string }>();
-    for (const b of prev.bullets) prevBulletByOwner.set(b.ownerId, { x: b.x, y: b.y, dir: b.dir });
-    const bullets = latest.bullets.map((b, i) => {
-      const p = prevBulletByOwner.get(b.ownerId) ?? prevIndexBullet(prev, i);
+    const fromBulletByOwner = new Map<number, { x: number; y: number; dir: string }>();
+    for (const b of from.snap.bullets) fromBulletByOwner.set(b.ownerId, { x: b.x, y: b.y, dir: b.dir });
+    const bullets = base.bullets.map((b) => {
+      const p = fromBulletByOwner.get(b.ownerId);
       if (!p || p.dir !== b.dir) return b;
       return { ...b, x: lerp(p.x, b.x, alpha), y: lerp(p.y, b.y, alpha) };
     });
 
-    // 拼成 GameState 形状：塞入 dummy rng 与空 events（渲染层均不读取）。
-    return { ...latest, rng: this.dummyRng, events: [], tanks, bullets };
+    // 拼成 GameState 形状：塞入解析后的 level、dummy rng 与空 events（渲染层均不读取后二者）。
+    return { ...base, level, rng: this.dummyRng, events: [], tanks, bullets };
   }
 
   private drawDisconnectOverlay(): void {
@@ -597,6 +826,13 @@ export class App {
 
 // ───────────────────────── 纯函数工具 ─────────────────────────
 
+// 建一个填满 emptyInput 的输入历史环缓冲（开局 / 返回标题时重置用）。
+function makeInputHistory(): InputState[] {
+  const h = new Array<InputState>(INPUT_HISTORY_SIZE);
+  for (let i = 0; i < INPUT_HISTORY_SIZE; i++) h[i] = emptyInput();
+  return h;
+}
+
 function sameInput(a: InputState, b: InputState): boolean {
   return (
     a.up === b.up &&
@@ -616,7 +852,6 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
-function prevIndexBullet(prev: Snapshot, i: number): { x: number; y: number; dir: string } | undefined {
-  const b = prev.bullets[i];
-  return b ? { x: b.x, y: b.y, dir: b.dir } : undefined;
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
 }

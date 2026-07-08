@@ -28,6 +28,8 @@ const TICK_MS = 1000 / TICK_HZ; // ≈16.667ms
 const MAX_CATCHUP_TICKS = 30;
 // 全员断线后的销毁宽限期：期间保留房间与对局，等待重连。
 const EMPTY_ROOM_GRACE_MS = 60_000;
+// 快照背压阈值：连接的未送出缓冲超过此值则跳过本次快照（防弱网延迟滚雪球）。
+const SNAPSHOT_BACKPRESSURE_BYTES = 16 * 1024;
 
 // 房内一个座位。playerIndex 即游戏内座位号（0..3），决定出生点/配色/输入映射。
 interface Slot {
@@ -37,6 +39,12 @@ interface Slot {
   isHost: boolean;
   ws: WebSocket | null; // 断线时置 null
   input: InputState; // 该玩家最新输入（逐帧应用，收到新消息才更新）
+  // 该座位已应用的最新一条 input 消息的 seq（输入回放对账用，随快照以 inputAck 回执客户端）。
+  // -1 = 尚未收到任何输入；入房 / 重连 / 建房时重置为 -1。
+  inputSeq: number;
+  // 已成功下发给该连接的 level.rev（增量地形，见 protocol.ts）。-1 = 尚未发过任何 level；
+  // 入房 / 重连时重置为 -1，保证新连接的第一份快照必含完整地形。
+  sentLevelRev: number;
 }
 
 export type RoomPhase = 'lobby' | 'in-game';
@@ -114,6 +122,8 @@ export class Room {
       isHost: true,
       ws,
       input: emptyInput(),
+      inputSeq: -1,
+      sentLevelRev: -1,
     };
     this.slots.set(0, slot);
     this.cancelDestroyTimer();
@@ -133,6 +143,8 @@ export class Room {
       reclaimed.ws = ws;
       reclaimed.connected = true;
       reclaimed.input = emptyInput();
+      reclaimed.inputSeq = -1; // 重连：输入回执从头开始
+      reclaimed.sentLevelRev = -1; // 重连：强制下一份快照重发完整地形
       this.cancelDestroyTimer();
       // 先发 joined（含旧座位号），再补一条 started 让客户端直接进入游戏画面。
       Room.send(ws, {
@@ -155,6 +167,8 @@ export class Room {
       isHost: false,
       ws,
       input: emptyInput(),
+      inputSeq: -1,
+      sentLevelRev: -1,
     };
     this.slots.set(idx, slot);
     this.cancelDestroyTimer();
@@ -189,10 +203,14 @@ export class Room {
   }
 
   // ── 输入 ──
-  setInput(playerIndex: number, input: InputState): void {
+  // seq 为客户端本地预测 tick（单调递增）。仅接受 seq >= 已记录值，忽略乱序 / 迟到的旧包，
+  // 避免 inputAck 回退导致客户端回放窗口错乱。seq 随快照以 inputAck 回执，供客户端输入回放对账。
+  setInput(playerIndex: number, input: InputState, seq: number): void {
     const slot = this.slots.get(playerIndex);
     if (!slot || !slot.connected) return;
+    if (seq < slot.inputSeq) return; // 陈旧 / 乱序：丢弃
     slot.input = input;
+    slot.inputSeq = seq;
   }
 
   // ── 断线 ──
@@ -278,8 +296,45 @@ export class Room {
     }
 
     // 每 SNAPSHOT_INTERVAL_TICKS 帧广播一次权威快照 + 累积事件，随后清空累加器。
+    // 背压保护：某连接的发送缓冲积压超过阈值时跳过本次快照（弱网下宁可少发、
+    // 只发新鲜数据，否则积压滚雪球、延迟无限增长）。只跳快照，其余消息照发。
+    //
+    // 增量地形（见 protocol.ts）：每 tick 至多构造两份序列化——「含 level」与「不含 level」。
+    // 逐连接按其 sentLevelRev 是否等于当前 game.level.rev 决定用哪份；两份都按需惰性构造。
+    // 关键：仅在“真正发出含 level 的那份”后才推进 slot.sentLevelRev——被背压跳过的连接
+    // 保持 sentLevelRev 不变，下次仍会补发完整地形，绝不会漏掉地形更新。
     if (game.tick % SNAPSHOT_INTERVAL_TICKS === 0) {
-      this.broadcast({ t: 'snapshot', snap: pickSnapshot(game), events: this.eventAccumulator });
+      const events = this.eventAccumulator;
+      const levelRev = game.level.rev;
+      // 输入回执：按座位 0..playerCount-1 取各自已应用的最新 seq（缺席座位 -1）。
+      // 全体连接共享同一份 inputAck（各客户端只读自己那一格），故两份缓存负载仍可复用。
+      const inputAck: number[] = new Array(game.playerCount);
+      for (let i = 0; i < game.playerCount; i++) inputAck[i] = this.slots.get(i)?.inputSeq ?? -1;
+      let payloadWithLevel: string | null = null;
+      let payloadNoLevel: string | null = null;
+      for (const s of this.slots.values()) {
+        if (!s.ws || s.ws.readyState !== 1) continue;
+        if (s.ws.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) continue; // 背压：跳过，sentLevelRev 不动
+        const includeLevel = s.sentLevelRev !== levelRev;
+        let payload: string;
+        if (includeLevel) {
+          payloadWithLevel ??= JSON.stringify({
+            t: 'snapshot',
+            snap: pickSnapshot(game, true, inputAck),
+            events,
+          });
+          payload = payloadWithLevel;
+        } else {
+          payloadNoLevel ??= JSON.stringify({
+            t: 'snapshot',
+            snap: pickSnapshot(game, false, inputAck),
+            events,
+          });
+          payload = payloadNoLevel;
+        }
+        s.ws.send(payload);
+        if (includeLevel) s.sentLevelRev = levelRev; // 仅在实际发出后推进
+      }
       this.eventAccumulator = [];
     }
   }

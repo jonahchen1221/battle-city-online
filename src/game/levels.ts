@@ -39,7 +39,7 @@ export function parseLevel(rows: string[]): LevelState {
     }
   }
 
-  return { cols: FIELD_COLS, rows: FIELD_ROWS, cells, brickMask };
+  return { cols: FIELD_COLS, rows: FIELD_ROWS, cells, brickMask, rev: 0 };
 }
 
 // 五关地形。全部 40×30 子格（20×15 大格），对称设计，逐关地形更丰富。
