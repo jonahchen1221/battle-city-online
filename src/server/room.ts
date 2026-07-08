@@ -39,9 +39,6 @@ interface Slot {
   isHost: boolean;
   ws: WebSocket | null; // 断线时置 null
   input: InputState; // 该玩家最新输入（逐帧应用，收到新消息才更新）
-  // 该座位已应用的最新一条 input 消息的 seq（输入回放对账用，随快照以 inputAck 回执客户端）。
-  // -1 = 尚未收到任何输入；入房 / 重连 / 建房时重置为 -1。
-  inputSeq: number;
   // 已成功下发给该连接的 level.rev（增量地形，见 protocol.ts）。-1 = 尚未发过任何 level；
   // 入房 / 重连时重置为 -1，保证新连接的第一份快照必含完整地形。
   sentLevelRev: number;
@@ -122,7 +119,6 @@ export class Room {
       isHost: true,
       ws,
       input: emptyInput(),
-      inputSeq: -1,
       sentLevelRev: -1,
     };
     this.slots.set(0, slot);
@@ -143,7 +139,6 @@ export class Room {
       reclaimed.ws = ws;
       reclaimed.connected = true;
       reclaimed.input = emptyInput();
-      reclaimed.inputSeq = -1; // 重连：输入回执从头开始
       reclaimed.sentLevelRev = -1; // 重连：强制下一份快照重发完整地形
       this.cancelDestroyTimer();
       // 先发 joined（含旧座位号），再补一条 started 让客户端直接进入游戏画面。
@@ -167,7 +162,6 @@ export class Room {
       isHost: false,
       ws,
       input: emptyInput(),
-      inputSeq: -1,
       sentLevelRev: -1,
     };
     this.slots.set(idx, slot);
@@ -203,14 +197,11 @@ export class Room {
   }
 
   // ── 输入 ──
-  // seq 为客户端本地预测 tick（单调递增）。仅接受 seq >= 已记录值，忽略乱序 / 迟到的旧包，
-  // 避免 inputAck 回退导致客户端回放窗口错乱。seq 随快照以 inputAck 回执，供客户端输入回放对账。
-  setInput(playerIndex: number, input: InputState, seq: number): void {
+  // 保留该座位最新输入，逐帧应用。
+  setInput(playerIndex: number, input: InputState): void {
     const slot = this.slots.get(playerIndex);
     if (!slot || !slot.connected) return;
-    if (seq < slot.inputSeq) return; // 陈旧 / 乱序：丢弃
     slot.input = input;
-    slot.inputSeq = seq;
   }
 
   // ── 断线 ──
@@ -306,10 +297,6 @@ export class Room {
     if (game.tick % SNAPSHOT_INTERVAL_TICKS === 0) {
       const events = this.eventAccumulator;
       const levelRev = game.level.rev;
-      // 输入回执：按座位 0..playerCount-1 取各自已应用的最新 seq（缺席座位 -1）。
-      // 全体连接共享同一份 inputAck（各客户端只读自己那一格），故两份缓存负载仍可复用。
-      const inputAck: number[] = new Array(game.playerCount);
-      for (let i = 0; i < game.playerCount; i++) inputAck[i] = this.slots.get(i)?.inputSeq ?? -1;
       let payloadWithLevel: string | null = null;
       let payloadNoLevel: string | null = null;
       for (const s of this.slots.values()) {
@@ -320,14 +307,14 @@ export class Room {
         if (includeLevel) {
           payloadWithLevel ??= JSON.stringify({
             t: 'snapshot',
-            snap: pickSnapshot(game, true, inputAck),
+            snap: pickSnapshot(game, true),
             events,
           });
           payload = payloadWithLevel;
         } else {
           payloadNoLevel ??= JSON.stringify({
             t: 'snapshot',
-            snap: pickSnapshot(game, false, inputAck),
+            snap: pickSnapshot(game, false),
             events,
           });
           payload = payloadNoLevel;

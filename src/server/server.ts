@@ -226,12 +226,7 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
               sendError(ws, 'bad_message', 'input 形状非法');
               return;
             }
-            // seq 必须为有限数值（客户端本地预测 tick）；缺失 / 非法一律拒绝。
-            if (typeof msg.seq !== 'number' || !Number.isFinite(msg.seq)) {
-              sendError(ws, 'bad_message', 'input 缺少合法 seq');
-              return;
-            }
-            ctx.room.setInput(ctx.playerIndex, input, msg.seq);
+            ctx.room.setInput(ctx.playerIndex, input);
             break;
           }
 

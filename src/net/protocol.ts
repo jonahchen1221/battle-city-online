@@ -7,10 +7,10 @@
 import { InputState } from '../core/types';
 import { GameEvent } from '../game/state';
 
-// 每隔多少逻辑帧广播一次快照（60Hz / 6 = 10Hz）。
-// 客户端在两快照间做位置插值，10Hz 视觉依旧平滑；相比 20Hz 带宽减半，
-// 对跨境等弱网线路（高丢包时 TCP 有效吞吐骤降）更友好。
-export const SNAPSHOT_INTERVAL_TICKS = 6;
+// 每隔多少逻辑帧广播一次快照（60Hz / 3 = 20Hz）。
+// 客户端在两快照间做位置插值。面向良好线路（低 RTT / 零丢包）调优：带宽非瓶颈，
+// 更密的快照让插值更平滑、更贴近实时（缩短抖动缓冲延迟）。
+export const SNAPSHOT_INTERVAL_TICKS = 3;
 
 // 房间码：4 个大写字母（避开易混淆的 I/O）。
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -32,8 +32,7 @@ export type ClientMessage =
   | { t: 'ready'; ready: boolean } // 大厅内切换准备状态
   | { t: 'start' } // 房主开局（要求全员 ready）
   // 输入快照；状态变化时发送，服务器保留每人最新值逐帧应用。
-  // seq = 客户端发出时的本地预测 tick（单调递增整数），用于服务器回执 + 客户端输入回放对账（消除橡皮筋）。
-  | { t: 'input'; input: InputState; seq: number }
+  | { t: 'input'; input: InputState }
   | { t: 'leave' }; // 主动离开房间
 
 // ── 服务器 → 客户端 ──
@@ -67,19 +66,13 @@ import type { LevelState } from '../game/level';
 //     （新客户端 / 重连 / 地形刚被破坏）时，本次快照携带完整 level，并记录已下发的 rev；
 //   • rev 一致时省略 level，客户端沿用它上一次收到的 level 对象。
 // 客户端据此重建：snap.level 存在则替换本地地形，否则复用上一份（渲染永远有 level 可用）。
-//
-// inputAck：按 playerIndex 索引，服务器已应用的“该座位最新一条 input 消息的 seq”（尚无则 -1）。
-// 客户端据此从权威快照回放尚未确认的本地输入，重建预测位置（输入回放对账，消除橡皮筋）。
-// 全体客户端共享（对账时各自只读自己那一格），故仍可复用同一份缓存序列化负载。
 export type Snapshot = Omit<GameState, 'rng' | 'events' | 'level'> & {
   level?: LevelState;
-  inputAck: number[];
 };
 
 // 从权威 state 摘取快照字段（浅取引用，调用方须立即序列化，不得跨 tick 持有）。
 // includeLevel=true 时携带完整地形；false 时省略（增量：客户端沿用上一份 level）。
-// inputAck 由调用方（Room）按各座位当前 inputSeq 组装后传入。
-export function pickSnapshot(state: GameState, includeLevel: boolean, inputAck: number[]): Snapshot {
+export function pickSnapshot(state: GameState, includeLevel: boolean): Snapshot {
   const { rng: _rng, events: _events, level, ...rest } = state;
-  return includeLevel ? { ...rest, level, inputAck } : { ...rest, inputAck };
+  return includeLevel ? { ...rest, level } : { ...rest };
 }

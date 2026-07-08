@@ -110,9 +110,9 @@ async function main(): Promise<void> {
   console.log('[smoke] 开局', { playerCount: started1.playerCount });
   assert(started1.playerCount === 2, 'started.playerCount 为 2');
 
-  // 6) 发送一些输入（seq = 客户端本地预测 tick，服务器据此回执 inputAck）
-  c1.send({ t: 'input', seq: 1, input: { up: false, down: false, left: false, right: true, fire: true, start: false } });
-  c2.send({ t: 'input', seq: 1, input: { up: true, down: false, left: false, right: false, fire: false, start: false } });
+  // 6) 发送一些输入（服务器保留每人最新值逐帧应用）
+  c1.send({ t: 'input', input: { up: false, down: false, left: false, right: true, fire: true, start: false } });
+  c2.send({ t: 'input', input: { up: true, down: false, left: false, right: false, fire: false, start: false } });
 
   // 7) 收快照：校验含 2 台玩家坦克，且 tick 随时间递增
   await sleep(300);
