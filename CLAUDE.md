@@ -15,8 +15,8 @@ UI 目标是尽量还原 NES 原版观感；玩法保留经典机制，细节可
 
 ## 坐标与尺寸约定（NES 原版规格）
 
-- 原生分辨率 256×224，整数倍放大渲染（`RENDER_SCALE`），`imageSmoothing` 关闭。
-- 战场 208×208，位于 (16, 8)；右侧 32px 为 HUD 栏。
+- 原生分辨率 256×224，美术 2× 放大渲染（`ART_SCALE`），`imageSmoothing` 关闭。
+- 战场 208×208，位于 (16, 8)；右侧 32px 为 HUD 栏（x = FIELD_X + FIELD_WIDTH）。
 - 13×13 大格（16px，坦克尺寸）= 26×26 子格（8px，砖块破坏单位）。
 - 常量一律从 `src/core/constants.ts` 引用，不得散落魔法数字。
 
@@ -29,3 +29,5 @@ UI 目标是尽量还原 NES 原版观感；玩法保留经典机制，细节可
 
 - `npm run dev` — 开发服务器
 - `npm run typecheck` — 类型检查（提交前必须通过）
+- `npm run dev:server` — 联机服务器（tsx watch，热重载，端口 8080）
+- `npm run server` — 联机服务器（tsx 单次运行，端口 8080，可用 PORT 覆盖）

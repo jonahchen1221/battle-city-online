@@ -9,6 +9,7 @@ import {
   STAGE_CLEAR_DELAY_TICKS,
 } from '../core/constants';
 import { GameState, Phase, resetGameState } from './state';
+import { isPlayerTank } from './tank';
 
 // 阶段编排：鹰巢命中、失败/胜利判定、重开。update.ts 只做调用，逻辑集中于此以保持可读。
 
@@ -44,24 +45,24 @@ export function resolveEagleHit(state: GameState): void {
   }
 }
 
-// 场上是否有存活的玩家坦克。
+// 场上是否有存活的玩家坦克（任一玩家）。
 function anyPlayerAlive(state: GameState): boolean {
-  return state.tanks.some((t) => t.alive && t.kind === 'player1');
+  return state.tanks.some((t) => t.alive && isPlayerTank(t));
 }
 
-// 是否有玩家坦克正在出生闪光（复活中）。
+// 是否有玩家坦克正在出生闪光（复活中，任一玩家）。
 function anyPlayerSpawning(state: GameState): boolean {
-  return state.spawning.some((s) => s.tank.kind === 'player1');
+  return state.spawning.some((s) => isPlayerTank(s.tank));
 }
 
 // 是否有存活的敌方坦克。
 function anyEnemyAlive(state: GameState): boolean {
-  return state.tanks.some((t) => t.alive && t.kind !== 'player1');
+  return state.tanks.some((t) => t.alive && !isPlayerTank(t));
 }
 
 // 是否有敌方坦克正在出生闪光。
 function anyEnemySpawning(state: GameState): boolean {
-  return state.spawning.some((s) => s.tank.kind !== 'player1');
+  return state.spawning.some((s) => !isPlayerTank(s.tank));
 }
 
 // 胜利条件：队列空 且 无在场敌人 且 无出生中的敌人。
@@ -69,9 +70,10 @@ function stageCleared(state: GameState): boolean {
   return state.enemyQueue.length === 0 && !anyEnemyAlive(state) && !anyEnemySpawning(state);
 }
 
-// 玩家彻底失败：无剩余生命、无在场玩家、无复活闪光。
+// 玩家彻底失败（合作）：所有玩家皆无剩余生命，且场上无在场玩家、无复活闪光。
 function playerDefeated(state: GameState): boolean {
-  return state.playerLives <= 0 && !anyPlayerAlive(state) && !anyPlayerSpawning(state);
+  const allOutOfLives = state.livesByPlayer.every((l) => l <= 0);
+  return allOutOfLives && !anyPlayerAlive(state) && !anyPlayerSpawning(state);
 }
 
 // 武装一个延迟结果（仅当尚未武装）。

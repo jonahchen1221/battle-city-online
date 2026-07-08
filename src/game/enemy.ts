@@ -5,12 +5,12 @@ import {
   AI_DECISION_MIN_TICKS,
   AI_DECISION_RANGE_TICKS,
   AI_FIRE_DENOM,
-  MAX_ENEMIES_ON_FIELD,
+  maxEnemiesOnField,
   ENEMY_SPAWN_INTERVAL_TICKS,
   ENEMY_SPAWN_POINTS,
 } from '../core/constants';
 import { LevelState } from './level';
-import { TankState, createEnemy, applyInput, turnTank } from './tank';
+import { TankState, createEnemy, applyInput, turnTank, isPlayerTank } from './tank';
 import { hasLiveBullet, spawnBullet } from './bullet';
 import type { GameState } from './state';
 
@@ -41,10 +41,10 @@ function resetDecisionTimer(rng: Rng): number {
 function enemyCount(state: GameState): number {
   let n = 0;
   for (const s of state.spawning) {
-    if (s.tank.kind !== 'player1') n++;
+    if (!isPlayerTank(s.tank)) n++;
   }
   for (const t of state.tanks) {
-    if (t.alive && t.kind !== 'player1') n++;
+    if (t.alive && !isPlayerTank(t)) n++;
   }
   return n;
 }
@@ -54,7 +54,7 @@ function enemyCount(state: GameState): number {
 function updateSpawner(state: GameState): void {
   if (state.enemySpawnTimer > 0) state.enemySpawnTimer--;
   if (state.enemyQueue.length === 0) return;
-  if (enemyCount(state) >= MAX_ENEMIES_ON_FIELD) return;
+  if (enemyCount(state) >= maxEnemiesOnField(state.playerCount)) return;
   if (state.enemySpawnTimer > 0) return;
 
   const kind = state.enemyQueue.shift()!;
@@ -112,7 +112,7 @@ export function updateEnemies(state: GameState, level: LevelState): void {
   updateSpawning(state);
 
   for (const tank of state.tanks) {
-    if (!tank.alive || tank.kind === 'player1') continue;
+    if (!tank.alive || isPlayerTank(tank)) continue;
     updateOneEnemy(tank, state, level);
   }
 

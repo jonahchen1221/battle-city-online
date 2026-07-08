@@ -1,6 +1,6 @@
 import { GameState } from './state';
 import { InputState, emptyInput } from '../core/types';
-import { applyInput, TankState, createPlayer1 } from './tank';
+import { applyInput, TankState, EnemyKind, createPlayer, isPlayerTank } from './tank';
 import {
   spawnBullet,
   hasLiveBullet,
@@ -55,7 +55,7 @@ export function update(state: GameState, inputs: InputState[]): void {
   state.phaseTicks++;
   const level = state.level;
 
-  // 玩家坦克由输入驱动（未来 player2..4 时按顺序对应 inputs）。
+  // 玩家坦克由输入驱动：inputs[i] 对应 playerIndex===i 的坦克（按序号映射，非数组顺序）。
   updatePlayers(state, inputs);
 
   // 敌方：出生闪光推进（含玩家复活）、AI 行进/开火、生成新敌人。
@@ -81,13 +81,14 @@ export function update(state: GameState, inputs: InputState[]): void {
 }
 
 // 玩家坦克：输入驱动移动 + 边沿触发开火。
+// 输入按 playerIndex 映射（inputs[tank.playerIndex]）：某玩家阵亡后其坦克缺席，
+// 其余玩家的输入不会因数组塌缩而错位。
 function updatePlayers(state: GameState, inputs: InputState[]): void {
   const level = state.level;
-  let pi = 0;
   for (const tank of state.tanks) {
-    if (tank.kind !== 'player1') continue;
-    const input = inputs[pi++] ?? emptyInput();
+    if (!isPlayerTank(tank)) continue;
     if (!tank.alive) continue;
+    const input = inputs[tank.playerIndex] ?? emptyInput();
 
     // 出生护盾倒计时（实体化那一刻起算，逐帧递减到 0）。
     if (tank.invulnTicks > 0) tank.invulnTicks--;
@@ -118,13 +119,14 @@ function resolveBulletTanks(state: GameState): void {
       if (t.hp <= 0) {
         pushBigExplosion(state, t);
         t.alive = false;
-        if (t.kind === 'player1') {
+        if (isPlayerTank(t)) {
           state.events.push('playerDeath');
           onPlayerKilled(state, t);
         } else {
           // 敌方坦克被击毁：计分 + 计数（此处所有敌军死亡皆由玩家造成）。
-          state.score += ENEMY_SCORE[t.kind];
-          state.killsByKind[t.kind]++;
+          const kind = t.kind as EnemyKind; // 非玩家分支：kind 必为敌方种类
+          state.score += ENEMY_SCORE[kind];
+          state.killsByKind[kind]++;
           state.events.push('explosionBig');
         }
       }
@@ -140,13 +142,14 @@ function pushBigExplosion(state: GameState, t: TankState): void {
   state.explosions.push({ x: t.x - off, y: t.y - off, ticksLeft: EXPLOSION_BIG_TICKS, big: true });
 }
 
-// 玩家坦克被击毁：扣一条生命；若仍有剩余则走 60 帧出生闪光复活（复用敌人出生机制，
-// 而非即时瞬移），期间不可控/不可碰撞；若已无生命则保持死亡，交由 phase 判定 gameover。
+// 玩家坦克被击毁：扣该玩家一条生命；若其仍有剩余则走 60 帧出生闪光复活（复用敌人出生机制，
+// 而非即时瞬移），期间不可控/不可碰撞；若该玩家已无生命则保持死亡，交由 phase 判定 gameover。
 function onPlayerKilled(state: GameState, t: TankState): void {
-  state.playerLives--;
-  if (state.playerLives > 0) {
-    // 保留同一 id 以维持输入映射顺序；进入出生闪光队列，与敌人共用 updateSpawning。
-    state.spawning.push({ tank: createPlayer1(t.id), ticksLeft: SPAWN_FLASH_TICKS });
+  const idx = t.playerIndex;
+  state.livesByPlayer[idx]--;
+  if (state.livesByPlayer[idx] > 0) {
+    // 保留同一 id 与 playerIndex 以维持输入映射；进入出生闪光队列，与敌人共用 updateSpawning。
+    state.spawning.push({ tank: createPlayer(idx, t.id), ticksLeft: SPAWN_FLASH_TICKS });
   }
 }
 

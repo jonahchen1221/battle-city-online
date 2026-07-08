@@ -13,7 +13,7 @@ import {
   EXPLOSION_SMALL_TICKS,
 } from '../core/constants';
 import { Cell, LevelState, getCell, isSolidForBullet, removeBrickQuarters } from './level';
-import { TankState } from './tank';
+import { TankState, isPlayerTank } from './tank';
 import type { ExplosionState, GameEvent } from './state';
 
 // 子弹实体：纯数据、可序列化。x/y 为 4×4 包围盒左上角的战场相对像素坐标。
@@ -42,7 +42,7 @@ export function spawnBullet(tank: TankState): BulletState {
     dir: tank.dir,
     speed: tank.bulletSpeed,
     ownerId: tank.id,
-    fromEnemy: tank.kind !== 'player1',
+    fromEnemy: !isPlayerTank(tank),
     alive: true,
   };
   switch (tank.dir) {
@@ -292,8 +292,9 @@ export function resolveBulletBullet(
 
 // 子弹 vs 坦克命中判定（不含伤害结算）：
 // 敌弹只命中玩家坦克，玩家弹只命中敌方坦克（敌弹穿过敌人 —— 经典）。
+// 合作简化：玩家弹穿过任何玩家坦克（无友伤、不冻结）——由 !isPlayer 分支天然涵盖。
 export function bulletCanHit(b: BulletState, t: TankState): boolean {
-  const isPlayer = t.kind === 'player1';
+  const isPlayer = isPlayerTank(t);
   // 出生护盾期间：敌弹从坦克身上直接穿过（既不伤人，也不消失），经典表现。
   if (isPlayer && t.invulnTicks > 0) return false;
   return b.fromEnemy ? isPlayer : !isPlayer;

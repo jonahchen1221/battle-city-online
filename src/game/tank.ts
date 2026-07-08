@@ -5,8 +5,7 @@ import {
   FIELD_WIDTH,
   FIELD_HEIGHT,
   PLAYER_SPEED,
-  PLAYER1_SPAWN_X,
-  PLAYER1_SPAWN_Y,
+  PLAYER_SPAWN_POINTS,
   BULLET_SPEED,
   ENEMY_SPEED_BASIC,
   ENEMY_SPEED_FAST,
@@ -22,14 +21,19 @@ import {
 } from '../core/constants';
 import { LevelState, getCell, isSolidForTank } from './level';
 
-// 坦克种类：玩家 1 + 四种敌方。移动/碰撞逻辑敌我复用，靠 kind 区分外观与属性。
-export type TankKind = 'player1' | 'basic' | 'fast' | 'power' | 'armor';
+// 敌方坦克种类（用于计分/计数等以种类为键的表）。
+export type EnemyKind = 'basic' | 'fast' | 'power' | 'armor';
+
+// 坦克种类：玩家 + 四种敌方。移动/碰撞逻辑敌我复用，靠 kind 区分外观与属性。
+// 玩家不再区分 player1/2/…，统一为 'player'，具体序号见 playerIndex。
+export type TankKind = 'player' | EnemyKind;
 
 // 坦克实体：纯数据、可序列化（无函数/类实例）。设计为敌我复用，靠 kind 区分。
 // x/y 为 16×16 包围盒左上角的战场相对像素坐标（0..FIELD_WIDTH-16 / 0..FIELD_HEIGHT-16）。
 export interface TankState {
   id: number;
   kind: TankKind;
+  playerIndex: number; // 玩家序号 0..3（决定出生点/配色/输入映射）；敌人恒为 -1
   x: number;
   y: number;
   dir: Direction;
@@ -43,13 +47,20 @@ export interface TankState {
   invulnTicks: number; // 出生护盾剩余帧：>0 时敌弹穿过、不受伤（敌人恒为 0）
 }
 
-// 建立玩家 1：出生于战场左下、朝上。
-export function createPlayer1(id: number): TankState {
+// 判断一台坦克是否为玩家坦克。
+export function isPlayerTank(t: TankState): boolean {
+  return t.kind === 'player';
+}
+
+// 建立一名玩家坦克：按 playerIndex 取出生点，出生朝上。
+export function createPlayer(playerIndex: number, id: number): TankState {
+  const p = PLAYER_SPAWN_POINTS[playerIndex];
   return {
     id,
-    kind: 'player1',
-    x: PLAYER1_SPAWN_X,
-    y: PLAYER1_SPAWN_Y,
+    kind: 'player',
+    playerIndex,
+    x: p.x,
+    y: p.y,
     dir: 'up',
     moving: false,
     speed: PLAYER_SPEED,
@@ -93,6 +104,7 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
   return {
     id,
     kind,
+    playerIndex: -1, // 敌人无玩家序号
     x: p.x,
     y: p.y,
     dir: 'down',

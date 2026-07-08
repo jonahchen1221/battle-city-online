@@ -42,6 +42,24 @@ const PALETTE: Record<string, string> = {
   z: '#b48024', // 暗黄过渡（新增：y→d 之间的分色带）
   d: '#886018', // 阴影黄
   e: '#000000', // 黑色轮廓
+  // 玩家 2 坦克：经典绿（NES 2P olive/green 家族）。结构对齐黄色组：高光/亮过渡/主体/暗过渡/阴影。
+  A: '#78e048', // 高光绿
+  B: '#58c840', // 亮绿过渡
+  C: '#38a028', // 主体绿
+  M: '#2c7c1c', // 暗绿过渡
+  N: '#205810', // 阴影绿
+  // 玩家 3 坦克：青/蓝家族。
+  I: '#78d8f8', // 高光青
+  J: '#38b8f8', // 亮蓝过渡
+  K: '#0078f8', // 主体蓝
+  P: '#0058c8', // 暗蓝过渡
+  Q: '#003c88', // 阴影蓝
+  // 玩家 4 坦克：粉/品红家族。
+  U: '#f8b8f8', // 高光粉
+  V: '#f878d8', // 亮粉过渡
+  W: '#e840b0', // 主体品红
+  X: '#a82888', // 暗品红过渡
+  F: '#701858', // 阴影品红
 };
 
 // 校验一张精灵网格的尺寸（模块加载即执行，越早暴露排版错误越好）。
@@ -212,7 +230,7 @@ const EAGLE_DESTROYED = eagleDestroyedTile();
 //   * 履带齿：2px 明带 + 2px 暗带、齿间 1px 更暗分隔线（E 不参与 swapTreads，第二帧仍由 T↔t 互换生成）；
 //   * 炮管保持原位、宽 4 美术px（原 2 逻辑px），顶端收 1px。
 // 其余三朝向在构建图集时由像素网格旋转 90° 生成。
-// 注：原版 PLAYER_UP_0/1 与 TANK_STD 为同一版式（仅配色不同），故玩家坦克 = TANK_STD × MAP_PLAYER。
+// 注：原版 PLAYER_UP_0/1 与 TANK_STD 为同一版式（仅配色不同），故各玩家坦克 = TANK_STD × MAP_PLAYERS[i]。
 
 // 标准车体（玩家 / 基础 / 威力共用）：6px 履带（原 3px），车体 12px 宽。
 // prettier-ignore
@@ -327,8 +345,16 @@ const TANK_ARMOR = assertGrid([
 
 // 记号 → 调色板字符 的重着色映射（'.' 与未列出的字符原样透传）。
 type ColorMap = Record<string, string>;
-// 玩家：黄车体（高光 Y / 过渡 h/z / 主体 y / 阴影 d），钢制履带 c/a + 黑分隔，炮管亮黄。
-const MAP_PLAYER: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'y', S: 'h', Z: 'z', L: 'Y', D: 'd', O: 'e', R: 'Y' };
+// 玩家 1：黄车体（高光 Y / 过渡 h/z / 主体 y / 阴影 d），钢制履带 c/a + 黑分隔，炮管亮黄。
+const MAP_PLAYER1: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'y', S: 'h', Z: 'z', L: 'Y', D: 'd', O: 'e', R: 'Y' };
+// 玩家 2：绿车体（高光 A / 过渡 B/M / 主体 C / 阴影 N），炮管亮绿。
+const MAP_PLAYER2: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'C', S: 'B', Z: 'M', L: 'A', D: 'N', O: 'e', R: 'A' };
+// 玩家 3：蓝/青车体（高光 I / 过渡 J/P / 主体 K / 阴影 Q），炮管亮青。
+const MAP_PLAYER3: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'K', S: 'J', Z: 'P', L: 'I', D: 'Q', O: 'e', R: 'I' };
+// 玩家 4：粉/品红车体（高光 U / 过渡 V/X / 主体 W / 阴影 F），炮管亮粉。
+const MAP_PLAYER4: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'W', S: 'V', Z: 'X', L: 'U', D: 'F', O: 'e', R: 'U' };
+// 按 playerIndex 索引的四套玩家配色。
+const MAP_PLAYERS: ColorMap[] = [MAP_PLAYER1, MAP_PLAYER2, MAP_PLAYER3, MAP_PLAYER4];
 // 基础型：银灰车体（高光 c / 过渡 s/v / 主体 b / 阴影 a），炮管浅灰（亮，黑底可见）。
 const MAP_BASIC: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', R: 'c' };
 // 威力型：银车体 + 绿色高光点缀（L→绿 / 过渡 S→亮绿），炮管仍为亮色。
@@ -390,7 +416,9 @@ const MINI_TANK = assertGrid([
   '................',
 ], 16, 16, 'miniTank');
 const HUD_ENEMY = recolor(MINI_TANK, { X: 'e' });
-const HUD_LIFE = recolor(MINI_TANK, { X: 'y' });
+// 每名玩家一套按主体色着色的生命迷你坦克（P1 黄 / P2 绿 / P3 蓝 / P4 粉）。
+const HUD_LIFE_BODY = ['y', 'C', 'K', 'W'];
+const HUD_LIFE_TANKS = HUD_LIFE_BODY.map((c) => recolor(MINI_TANK, { X: c }));
 
 // ── HUD 关卡旗（32×32）：暗杆 + 白旗红边。旗号由 drawText 另绘。──
 // prettier-ignore
@@ -437,15 +465,20 @@ const FONT: FontGlyphs = {
   A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
   B: ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'],
   C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
+  D: ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
   E: ['#####', '#....', '#....', '###..', '#....', '#....', '#####'],
   F: ['#####', '#....', '#....', '###..', '#....', '#....', '#....'],
   G: ['.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.###.'],
+  H: ['#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
   I: ['.###.', '..#..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+  J: ['....#', '....#', '....#', '....#', '....#', '#...#', '.###.'],
+  K: ['#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#'],
   L: ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
   M: ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
   N: ['#...#', '##..#', '#.#.#', '#.#.#', '#..##', '#...#', '#...#'],
   O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
   P: ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
+  Q: ['.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#'],
   R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
   S: ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
   T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
@@ -453,6 +486,10 @@ const FONT: FontGlyphs = {
   V: ['#...#', '#...#', '#...#', '#...#', '#...#', '.#.#.', '..#..'],
   W: ['#...#', '#...#', '#...#', '#.#.#', '#.#.#', '#.#.#', '.#.#.'],
   X: ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
+  Y: ['#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
+  Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+  '=': ['.....', '.....', '#####', '.....', '#####', '.....', '.....'],
+  '-': ['.....', '.....', '.....', '#####', '.....', '.....', '.....'],
   '0': ['.###.', '#..##', '#.#.#', '#.#.#', '##..#', '#...#', '.###.'],
   '1': ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.'],
   '2': ['.###.', '#...#', '....#', '..##.', '.#...', '#....', '#####'],
@@ -581,7 +618,7 @@ export interface SpriteAtlas {
   ice: Sprite;
   eagle: Sprite;
   eagleDestroyed: Sprite;
-  playerTank: TankFrames;
+  playerTank: TankFrames[]; // 按 playerIndex（0..3）索引：4 套配色 × 4 朝向 × 2 帧
   enemyTank: {
     basic: TankFrames;
     fast: TankFrames;
@@ -595,7 +632,7 @@ export interface SpriteAtlas {
   explosionSmall: [Sprite, Sprite, Sprite]; // 小爆炸 3 帧（32×32）
   explosionBig: [Sprite, Sprite]; // 大爆炸 2 帧（64×64）
   hudEnemy: Sprite; // HUD 剩余敌军小坦克（16×16）
-  hudLifeTank: Sprite; // HUD 玩家生命迷你坦克（16×16）
+  hudLifeTank: Sprite[]; // HUD 玩家生命迷你坦克（16×16），按 playerIndex 着色
   hudFlag: Sprite; // HUD 关卡旗（32×32）
   font: FontGlyphs; // 像素字体掩码（着色在 drawText 时选定）
 }
@@ -624,6 +661,12 @@ const Y_ARMOR = 176;
 const Y_ARMOR_FLASH = 208;
 const Y_FX = 240; // 32 高：出生星 4 帧 + 小爆炸 3 帧
 const Y_BIG = 272; // 64 高：大爆炸 2 帧（64）+ 护盾 2 帧（32）
+// 追加的玩家坦克行（P1 复用 Y_PLAYER；P2/P3/P4 附在图集底部，避免打乱既有偏移）。
+const Y_PLAYER2 = 336;
+const Y_PLAYER3 = 368;
+const Y_PLAYER4 = 400;
+// 各 playerIndex 对应的图集行 y 偏移。
+const PLAYER_ROW_Y = [Y_PLAYER, Y_PLAYER2, Y_PLAYER3, Y_PLAYER4];
 
 // 把一台坦克的朝上两帧铺到某一行：旋转生成其余朝向，
 // 按 up0,up1,down0,down1,left0,left1,right0,right1 排布于 x=0,32,…,224。
@@ -658,7 +701,7 @@ function tankFramesAt(canvas: HTMLCanvasElement, y: number): TankFrames {
 // 启动时调用一次，构建离屏图集并返回带取样矩形的 API。
 export function createSpriteAtlas(): SpriteAtlas {
   const width = 256;
-  const height = 336;
+  const height = 432; // 追加 3 行玩家坦克（P2/P3/P4，各 32 高）后的总高
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -676,7 +719,10 @@ export function createSpriteAtlas(): SpriteAtlas {
   paint(ctx, TREES, 64, Y_TERRAIN);
   paint(ctx, ICE, 80, Y_TERRAIN);
   paint(ctx, HUD_ENEMY, 96, Y_TERRAIN);
-  paint(ctx, HUD_LIFE, 112, Y_TERRAIN);
+  // 四套玩家生命迷你坦克：x=112/128/144/160。
+  for (let i = 0; i < HUD_LIFE_TANKS.length; i++) {
+    paint(ctx, HUD_LIFE_TANKS[i], 112 + i * 16, Y_TERRAIN);
+  }
 
   // 鹰巢行（32×32）+ 子弹（8×8）
   paint(ctx, EAGLE, 0, Y_EAGLE);
@@ -684,8 +730,11 @@ export function createSpriteAtlas(): SpriteAtlas {
   paint(ctx, HUD_FLAG, 64, Y_EAGLE);
   paint(ctx, BULLET, 96, Y_EAGLE);
 
-  // 玩家坦克行
-  paintTankRow(ctx, recolor(TANK_STD, MAP_PLAYER), recolor(swapTreads(TANK_STD), MAP_PLAYER), Y_PLAYER);
+  // 玩家坦克行：四套配色，各占一行（P1 在 Y_PLAYER，P2/P3/P4 在图集底部追加行）。
+  for (let i = 0; i < MAP_PLAYERS.length; i++) {
+    const map = MAP_PLAYERS[i];
+    paintTankRow(ctx, recolor(TANK_STD, map), recolor(swapTreads(TANK_STD), map), PLAYER_ROW_Y[i]);
+  }
 
   // 敌方坦克各行（由记号模板重着色 + 履带第二帧）
   paintTankRow(ctx, recolor(TANK_STD, MAP_BASIC), recolor(swapTreads(TANK_STD), MAP_BASIC), Y_BASIC);
@@ -722,7 +771,7 @@ export function createSpriteAtlas(): SpriteAtlas {
     ice: s(80, Y_TERRAIN, 16, 16),
     eagle: s(0, Y_EAGLE, 32, 32),
     eagleDestroyed: s(32, Y_EAGLE, 32, 32),
-    playerTank: tankFramesAt(canvas, Y_PLAYER),
+    playerTank: PLAYER_ROW_Y.map((y) => tankFramesAt(canvas, y)),
     enemyTank: {
       basic: tankFramesAt(canvas, Y_BASIC),
       fast: tankFramesAt(canvas, Y_FAST),
@@ -741,7 +790,7 @@ export function createSpriteAtlas(): SpriteAtlas {
     explosionSmall: [s(128, Y_FX, 32, 32), s(160, Y_FX, 32, 32), s(192, Y_FX, 32, 32)],
     explosionBig: [s(0, Y_BIG, 64, 64), s(64, Y_BIG, 64, 64)],
     hudEnemy: s(96, Y_TERRAIN, 16, 16),
-    hudLifeTank: s(112, Y_TERRAIN, 16, 16),
+    hudLifeTank: HUD_LIFE_TANKS.map((_, i) => s(112 + i * 16, Y_TERRAIN, 16, 16)),
     hudFlag: s(64, Y_EAGLE, 32, 32),
     font: FONT,
   };

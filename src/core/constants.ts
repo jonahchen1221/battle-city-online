@@ -48,9 +48,18 @@ export const TANK_SIZE = TILE; // 16
 // 玩家坦克移动速度（px/tick）
 export const PLAYER_SPEED = 0.75;
 
-// 玩家 1 出生点（战场相对坐标，子格 8 列 / 24 行，即左下角朝上）
-export const PLAYER1_SPAWN_X = 8 * SUBTILE; // 64
-export const PLAYER1_SPAWN_Y = 24 * SUBTILE; // 192
+// 可支持的最大玩家数（1–4 人合作）。
+export const MAX_PLAYERS = 4;
+
+// 玩家出生点（战场相对坐标，底行朝上）。按 playerIndex（0..3）索引：
+//   P1/P2 内侧贴近鹰巢（经典 2P 布局），P3/P4 更靠外；全部位于底行 y=192（子格 24 行）。
+//   P1 子格列 8（x=64）、P2 列 16（x=128）、P3 列 4（x=32）、P4 列 20（x=160）。
+export const PLAYER_SPAWN_POINTS: ReadonlyArray<{ x: number; y: number }> = [
+  { x: 8 * SUBTILE, y: 24 * SUBTILE }, // P1 = (64, 192)
+  { x: 16 * SUBTILE, y: 24 * SUBTILE }, // P2 = (128, 192)
+  { x: 4 * SUBTILE, y: 24 * SUBTILE }, // P3 = (32, 192)
+  { x: 20 * SUBTILE, y: 24 * SUBTILE }, // P4 = (160, 192)
+];
 
 // 子弹尺寸与速度
 export const BULLET_SIZE = 4;
@@ -75,7 +84,7 @@ export const ARMOR_HP = 4;
 // 敌弹速度：威力坦克的子弹更快，其余与玩家一致。
 export const ENEMY_BULLET_SPEED_POWER = 3;
 export const ENEMY_BULLET_SPEED_DEFAULT = 2;
-// 出生点（战场相对坐标，16×16 盒左上角）：左 / 中 / 右，出生朝下。
+// 出生点（战场相对坐标，16×16 盒左上角）：左 / 中 / 右，出生朝下，按序轮转。
 export const ENEMY_SPAWN_POINTS: ReadonlyArray<{ x: number; y: number }> = [
   { x: 0, y: 0 }, // 左
   { x: 96, y: 0 }, // 中
@@ -90,9 +99,15 @@ export const AI_DECISION_MIN_TICKS = 30;
 export const AI_DECISION_RANGE_TICKS = 31; // 30 + rng.int(31) → 30..60
 // AI 开火概率：每帧约 1/60（且当前无在场子弹时）。
 export const AI_FIRE_DENOM = 60;
-// 关卡敌军总数与同屏上限。
+// 关卡敌军总数（单一可调常量；暂不随人数变化）。
 export const STAGE_ENEMY_TOTAL = 20;
-export const MAX_ENEMIES_ON_FIELD = 4;
+// 同屏敌军上限的基数与每多一名玩家的增量。
+export const MAX_ENEMIES_BASE = 4;
+export const MAX_ENEMIES_PER_EXTRA_PLAYER = 2;
+// 同屏敌军上限随人数放大：4 / 6 / 8 / 10（1–4 人）。
+export function maxEnemiesOnField(playerCount: number): number {
+  return MAX_ENEMIES_BASE + MAX_ENEMIES_PER_EXTRA_PLAYER * (playerCount - 1);
+}
 // 出生间隔（帧）：计时归零且场上有空位时出生新坦克。
 export const ENEMY_SPAWN_INTERVAL_TICKS = 190;
 // 装甲坦克受损后闪烁：每约 4 帧切换一次银/白配色。

@@ -57,6 +57,12 @@ export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private atlas: SpriteAtlas;
 
+  // 只读暴露图集，供 src/client 的标题/大厅 UI 复用精灵（如菜单光标用的迷你坦克）。
+  // 客户端 UI 层绝不修改图集，仅取样绘制。
+  get spriteAtlas(): SpriteAtlas {
+    return this.atlas;
+  }
+
   constructor(canvas: HTMLCanvasElement) {
     // 画布内部分辨率 = 原生尺寸 × 美术倍数（512×448）。所有布局数学仍以逻辑像素书写，
     // 仅在 ctx 调用处（fillRect/clip）与 drawTile/drawText/drawQuarter 内部乘以 ART_SCALE，
@@ -120,16 +126,22 @@ export class Renderer {
       drawTile(ctx, atlas.hudEnemy, hudX + 5 + col * 12, FIELD_Y + 8 + row * 10);
     }
 
-    // 玩家生命：IP 标签 + 迷你黄坦克 + 存量（= lives-1，与 NES 一致，不含当前在场）。
-    const labelY = FIELD_Y + 120;
-    drawText(ctx, atlas, 'IP', hudX + 6, labelY, COLOR_HUD_ICON);
-    const stock = Math.max(0, state.playerLives - 1);
-    drawTile(ctx, atlas.hudLifeTank, hudX + 5, labelY + 12);
-    drawText(ctx, atlas, String(stock), hudX + 16, labelY + 13, COLOR_HUD_ICON);
+    // 玩家生命：每名在场玩家一行（自上而下堆叠于 32px 栏内）。
+    // 每行：'nP' 标签 + 该玩家配色的迷你坦克 + 存量数字（= lives-1，与 NES 一致，不含当前在场）。
+    const livesTop = FIELD_Y + 116;
+    const rowH = 20;
+    for (let i = 0; i < state.playerCount; i++) {
+      const rowY = livesTop + i * rowH;
+      drawText(ctx, atlas, `${i + 1}P`, hudX + 6, rowY, COLOR_HUD_ICON);
+      const stock = Math.max(0, state.livesByPlayer[i] - 1);
+      drawTile(ctx, atlas.hudLifeTank[i], hudX + 3, rowY + 8);
+      drawText(ctx, atlas, String(stock), hudX + 20, rowY + 13, COLOR_HUD_ICON);
+    }
 
-    // 关卡旗 + 关号（当前恒为第 1 关）。
-    drawTile(ctx, atlas.hudFlag, hudX + 7, labelY + 34);
-    drawText(ctx, atlas, '1', hudX + 12, labelY + 54, COLOR_HUD_ICON);
+    // 关卡旗 + 关号（当前恒为第 1 关）：置于生命块下方。
+    const flagY = livesTop + state.playerCount * rowH + 2;
+    drawTile(ctx, atlas.hudFlag, hudX + 7, flagY);
+    drawText(ctx, atlas, '1', hudX + 12, flagY + 20, COLOR_HUD_ICON);
   }
 
   // 结果覆盖层。GAME OVER：经典红，phaseTicks 前 GAMEOVER_SLIDE_TICKS 帧由底部滑到中央后停住。
@@ -244,6 +256,7 @@ export class Renderer {
         const shieldFrame = Math.floor(state.tick / SHIELD_ANIM_TICKS) % 2;
         drawTile(ctx, atlas.shield[shieldFrame], px, py);
       }
+
     }
   }
 
@@ -251,8 +264,8 @@ export class Renderer {
   private tankFrames(tank: TankState, tick: number): TankFrames {
     const { atlas } = this;
     switch (tank.kind) {
-      case 'player1':
-        return atlas.playerTank;
+      case 'player':
+        return atlas.playerTank[tank.playerIndex];
       case 'fast':
         return atlas.enemyTank.fast;
       case 'power':

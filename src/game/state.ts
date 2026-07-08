@@ -2,7 +2,7 @@ import { Rng, createRng } from '../core/rng';
 import { STAGE_ENEMY_TOTAL, PLAYER_LIVES_START } from '../core/constants';
 import { LevelState, cloneLevel } from './level';
 import { STAGE_1 } from './levels';
-import { TankState, TankKind, createPlayer1 } from './tank';
+import { TankState, TankKind, createPlayer } from './tank';
 import { BulletState } from './bullet';
 
 // 出生中的敌方坦克：闪光结束后原样加入 tanks，期间不可碰撞、不受控。
@@ -53,7 +53,8 @@ export interface GameState {
   phase: Phase; // 当前阶段
   phaseTicks: number; // 进入当前阶段以来的帧数（gameover 滑入动画等据此推算）
   eagleDestroyed: boolean; // 鹰巢（基地）是否已被摧毁
-  playerLives: number; // 玩家剩余生命（含当前在场坦克）
+  playerCount: number; // 本局玩家数（1–4）
+  livesByPlayer: number[]; // 每名玩家的剩余生命（含当前在场坦克），按 playerIndex 索引
   // 待定结果：某触发（鹰毁 / 玩家阵亡 / 全歼）已武装但仍在延迟模拟中；
   // resultTimer 归零后 phase 切到 pendingResult。null 表示未武装。
   pendingResult: Exclude<Phase, 'playing'> | null;
@@ -75,24 +76,30 @@ function createStageQueue(): TankKind[] {
   return queue;
 }
 
-export function createGameState(seed: number): GameState {
+export function createGameState(seed: number, playerCount = 1): GameState {
+  // 玩家坦克：id 为 1..N，playerIndex 为 0..N-1。
+  const tanks: TankState[] = [];
+  for (let i = 0; i < playerCount; i++) {
+    tanks.push(createPlayer(i, i + 1));
+  }
   return {
     tick: 0,
     rng: createRng(seed),
     // 拷贝一份，避免就地破坏砖块时污染 STAGE_1 常量。
     level: cloneLevel(STAGE_1),
-    tanks: [createPlayer1(1)],
+    tanks,
     bullets: [],
     spawning: [],
     explosions: [],
     enemyQueue: createStageQueue(),
     enemySpawnTimer: 0, // 开局即可出生第一台
     enemySpawnPoint: 0,
-    nextEnemyId: 2, // 玩家 1 占用 id=1
+    nextEnemyId: playerCount + 1, // 玩家占用 id=1..N
     phase: 'playing',
     phaseTicks: 0,
     eagleDestroyed: false,
-    playerLives: PLAYER_LIVES_START,
+    playerCount,
+    livesByPlayer: new Array<number>(playerCount).fill(PLAYER_LIVES_START),
     pendingResult: null,
     resultTimer: 0,
     score: 0,
@@ -104,7 +111,7 @@ export function createGameState(seed: number): GameState {
 }
 
 // 就地重置为全新的第 1 关（保留同一 state 对象引用，供 main.ts 持有）。
-// 用于 gameover / stageclear 时按 start 重开：seed 由旧 rng 派生，保持确定性。
+// 用于 gameover / stageclear 时按 start 重开：seed 由旧 rng 派生，保持确定性；玩家数沿用本局。
 export function resetGameState(state: GameState, seed: number): void {
-  Object.assign(state, createGameState(seed));
+  Object.assign(state, createGameState(seed, state.playerCount));
 }

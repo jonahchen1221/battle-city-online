@@ -1,0 +1,76 @@
+// src/client 专用绘制助手：复用 sprites 的像素字体，但可按整数倍放大（标题用），
+// 以及若干居中/清屏便捷函数。所有坐标为 *逻辑* 像素（内部乘 ART_SCALE 落到画布）。
+// 不修改 sprites.ts：大字通过读取 atlas.font 掩码、以 ART_SCALE×scale 的方块自行绘制。
+
+import { ART_SCALE, NATIVE_WIDTH, NATIVE_HEIGHT } from '../core/constants';
+import { SpriteAtlas, FONT_ADVANCE, drawText, textWidth } from '../render/sprites';
+
+// 用黑色铺满整个画布（标题/大厅/连接界面的底）。
+export function clearScreen(ctx: CanvasRenderingContext2D, color = '#000000'): void {
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, NATIVE_WIDTH * ART_SCALE, NATIVE_HEIGHT * ART_SCALE);
+}
+
+// 放大后的字体行宽（逻辑像素）：与 textWidth 同口径，再乘 scale。
+export function bigTextWidth(text: string, scale: number): number {
+  return textWidth(text) * scale;
+}
+
+// 大字：把 5×7 字体掩码的每个点绘制为 (ART_SCALE×scale) 见方的块，字距 FONT_ADVANCE×scale。
+// scale=1 时等价于 drawText。用于标题“BATTLE CITY”的粗块像素观感。
+export function drawBigText(
+  ctx: CanvasRenderingContext2D,
+  atlas: SpriteAtlas,
+  text: string,
+  x: number,
+  y: number,
+  scale: number,
+  color = '#ffffff',
+): void {
+  if (scale === 1) {
+    drawText(ctx, atlas, text, x, y, color);
+    return;
+  }
+  ctx.fillStyle = color;
+  const block = ART_SCALE * scale; // 每个字体像素点在画布上的方块边长
+  for (let i = 0; i < text.length; i++) {
+    const glyph = atlas.font[text[i]];
+    if (!glyph) continue;
+    const gx0 = (x + i * FONT_ADVANCE * scale) * ART_SCALE;
+    const gy0 = y * ART_SCALE;
+    for (let gy = 0; gy < glyph.length; gy++) {
+      const line = glyph[gy];
+      for (let gc = 0; gc < line.length; gc++) {
+        if (line[gc] === '#') ctx.fillRect(gx0 + gc * block, gy0 + gy * block, block, block);
+      }
+    }
+  }
+}
+
+// 居中绘制一行普通字体文本，返回其左缘 x（少数场景需要）。
+export function drawTextCentered(
+  ctx: CanvasRenderingContext2D,
+  atlas: SpriteAtlas,
+  text: string,
+  cx: number,
+  y: number,
+  color = '#ffffff',
+): number {
+  const x = cx - Math.round(textWidth(text) / 2);
+  drawText(ctx, atlas, text, x, y, color);
+  return x;
+}
+
+// 居中绘制大字。
+export function drawBigTextCentered(
+  ctx: CanvasRenderingContext2D,
+  atlas: SpriteAtlas,
+  text: string,
+  cx: number,
+  y: number,
+  scale: number,
+  color = '#ffffff',
+): void {
+  const x = cx - Math.round(bigTextWidth(text, scale) / 2);
+  drawBigText(ctx, atlas, text, x, y, scale, color);
+}
