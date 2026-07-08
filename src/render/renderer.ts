@@ -7,6 +7,8 @@ import {
   FIELD_WIDTH,
   FIELD_HEIGHT,
   SUBTILE,
+  TANK_SIZE,
+  PLAYER_LABEL_COLORS,
   QUARTER,
   COLOR_FRAME,
   COLOR_FIELD,
@@ -257,6 +259,19 @@ export class Renderer {
         drawTile(ctx, atlas.shield[shieldFrame], px, py);
       }
 
+      // 多人局：在每台在场玩家坦克上方绘制该玩家配色的 "1P".."4P" 小标签，
+      // 居中于坦克、夹紧在战场矩形内（与坦克同处裁剪区内，故也会被树林遮挡）。
+      // 单机局（playerCount===1）不绘制，保持原版清爽观感。
+      if (state.playerCount > 1 && tank.kind === 'player') {
+        const label = `${tank.playerIndex + 1}P`;
+        const w = textWidth(label);
+        const color = PLAYER_LABEL_COLORS[tank.playerIndex] ?? COLOR_HUD_ICON;
+        let lx = Math.round(px + TANK_SIZE / 2 - w / 2);
+        let ly = py - 9;
+        lx = Math.max(FIELD_X, Math.min(lx, FIELD_X + FIELD_WIDTH - w));
+        ly = Math.max(FIELD_Y, ly);
+        drawText(ctx, atlas, label, lx, ly, color);
+      }
     }
   }
 

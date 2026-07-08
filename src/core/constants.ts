@@ -1,14 +1,15 @@
 // NES 原生分辨率与布局（所有游戏逻辑均以此坐标系为准，渲染时整体放大）
-export const NATIVE_WIDTH = 256;
-export const NATIVE_HEIGHT = 224;
+// 为 1–4 人合作放大战场：原生宽 = FIELD_X(16) + 320 + 32(HUD) = 368；高 = 8 + 240 + 8 = 256。
+export const NATIVE_WIDTH = 368;
+export const NATIVE_HEIGHT = 256;
 
-// 战场：13×13 个大格（每格 16px），即 26×26 个子格（每格 8px）
+// 战场：20×15 个大格（每格 16px），即 40×30 个子格（每格 8px）
 export const TILE = 16; // 大格边长（坦克尺寸）
 export const SUBTILE = 8; // 子格边长（砖块破坏的基本单位）
-export const FIELD_COLS = 26; // 子格列数
-export const FIELD_ROWS = 26; // 子格行数
-export const FIELD_WIDTH = FIELD_COLS * SUBTILE; // 208
-export const FIELD_HEIGHT = FIELD_ROWS * SUBTILE; // 208
+export const FIELD_COLS = 40; // 子格列数
+export const FIELD_ROWS = 30; // 子格行数
+export const FIELD_WIDTH = FIELD_COLS * SUBTILE; // 320
+export const FIELD_HEIGHT = FIELD_ROWS * SUBTILE; // 240
 
 // 战场在屏幕上的偏移（左侧 16px 灰边，顶部 8px，右侧留 32px HUD 栏）
 export const FIELD_X = 16;
@@ -18,9 +19,9 @@ export const FIELD_Y = 8;
 export const TICKS_PER_SECOND = 60;
 
 // 美术分辨率倍数（仅限渲染层！）：把所有精灵按 2× 重新绘制、画布内部分辨率放大到
-// NATIVE_*×ART_SCALE（512×448），从而获得 4× 像素细节。
-// 逻辑坐标 / 游戏代码（src/game/）一律保持在 256×224 空间，不受此常量影响。
-// 屏幕显示缩放不再是固定倍数，而由 main.ts 依视口大小取 512×448 画布的最大整数 CSS 倍率。
+// NATIVE_*×ART_SCALE（736×512），从而获得 4× 像素细节。
+// 逻辑坐标 / 游戏代码（src/game/）一律保持在 368×256 空间，不受此常量影响。
+// 屏幕显示缩放不再是固定倍数，而由 main.ts 依视口大小取 736×512 画布的最大半整数（0.5 步长）CSS 倍率。
 export const ART_SCALE = 2;
 
 // NES 经典配色
@@ -52,13 +53,21 @@ export const PLAYER_SPEED = 0.75;
 export const MAX_PLAYERS = 4;
 
 // 玩家出生点（战场相对坐标，底行朝上）。按 playerIndex（0..3）索引：
-//   P1/P2 内侧贴近鹰巢（经典 2P 布局），P3/P4 更靠外；全部位于底行 y=192（子格 24 行）。
-//   P1 子格列 8（x=64）、P2 列 16（x=128）、P3 列 4（x=32）、P4 列 20（x=160）。
+//   P1/P2 内侧贴近鹰巢（经典 2P 布局），P3/P4 更靠外；全部位于底行 y=224（子格 28 行，= FIELD_HEIGHT-16）。
+//   P1 子格列 14（x=112）、P2 列 24（x=192）、P3 列 6（x=48）、P4 列 32（x=256）。
 export const PLAYER_SPAWN_POINTS: ReadonlyArray<{ x: number; y: number }> = [
-  { x: 8 * SUBTILE, y: 24 * SUBTILE }, // P1 = (64, 192)
-  { x: 16 * SUBTILE, y: 24 * SUBTILE }, // P2 = (128, 192)
-  { x: 4 * SUBTILE, y: 24 * SUBTILE }, // P3 = (32, 192)
-  { x: 20 * SUBTILE, y: 24 * SUBTILE }, // P4 = (160, 192)
+  { x: 14 * SUBTILE, y: 28 * SUBTILE }, // P1 = (112, 224)
+  { x: 24 * SUBTILE, y: 28 * SUBTILE }, // P2 = (192, 224)
+  { x: 6 * SUBTILE, y: 28 * SUBTILE }, // P3 = (48, 224)
+  { x: 32 * SUBTILE, y: 28 * SUBTILE }, // P4 = (256, 224)
+];
+
+// 每名玩家的高亮配色（浮空 "1P".."4P" 标签用；取自各玩家坦克高光色）。
+export const PLAYER_LABEL_COLORS: ReadonlyArray<string> = [
+  '#f0c860', // P1 黄
+  '#78e048', // P2 绿
+  '#78d8f8', // P3 青
+  '#f8b8f8', // P4 粉
 ];
 
 // 子弹尺寸与速度
@@ -84,11 +93,12 @@ export const ARMOR_HP = 4;
 // 敌弹速度：威力坦克的子弹更快，其余与玩家一致。
 export const ENEMY_BULLET_SPEED_POWER = 3;
 export const ENEMY_BULLET_SPEED_DEFAULT = 2;
-// 出生点（战场相对坐标，16×16 盒左上角）：左 / 中 / 右，出生朝下，按序轮转。
+// 出生点（战场相对坐标，16×16 盒左上角）：顶行四点 左 / 中左 / 中右 / 右，出生朝下，按序轮转。
 export const ENEMY_SPAWN_POINTS: ReadonlyArray<{ x: number; y: number }> = [
   { x: 0, y: 0 }, // 左
-  { x: 96, y: 0 }, // 中
-  { x: 192, y: 0 }, // 右
+  { x: 104, y: 0 }, // 中左
+  { x: 200, y: 0 }, // 中右
+  { x: 304, y: 0 }, // 右（右缘：304 + 16 = 320 = FIELD_WIDTH）
 ];
 // 出生闪光（星形）持续帧数，闪光结束后坦克才实体化（可碰撞）。
 export const SPAWN_FLASH_TICKS = 60;
@@ -128,9 +138,9 @@ export const GAMEOVER_DELAY_TICKS = 90;
 export const STAGE_CLEAR_DELAY_TICKS = 180;
 // "GAME OVER" 由屏幕底部滑到中央所需帧数。
 export const GAMEOVER_SLIDE_TICKS = 60;
-// 鹰巢（基地）位置：子格列 12–13、行 24–25 → 战场像素 (96,192)，16×16。
-export const EAGLE_COL = 12;
-export const EAGLE_ROW = 24;
+// 鹰巢（基地）位置：子格列 19–20、行 28–29 → 战场像素 (152,224)，16×16。底部正中。
+export const EAGLE_COL = 19;
+export const EAGLE_ROW = 28;
 
 // ── 出生护盾（经典无敌）──
 // 玩家坦克实体化（开局 / 复活）时获得的无敌帧数；期间敌弹穿过、不受伤。
