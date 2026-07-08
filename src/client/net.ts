@@ -3,10 +3,16 @@
 
 import { ClientMessage, ServerMessage } from '../net/protocol';
 
-// 默认服务器地址：同主机 8080 端口（可由构造参数覆盖，便于联调）。
+// 默认服务器地址（可由构造参数覆盖，便于联调）。
+// - 开发（vite 5173 + 独立游戏服 8080）：连同主机的 8080 端口。
+// - 生产（单进程同端口托管 dist + WS）：走同源，协议随页面自动选 ws/wss。
 export function defaultServerUrl(): string {
-  const host = typeof location !== 'undefined' && location.hostname ? location.hostname : 'localhost';
-  return `ws://${host}:8080`;
+  if (import.meta.env.DEV) {
+    const host = typeof location !== 'undefined' && location.hostname ? location.hostname : 'localhost';
+    return `ws://${host}:8080`;
+  }
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${location.host}`;
 }
 
 export class NetClient {

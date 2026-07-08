@@ -33,3 +33,4 @@ UI 目标是尽量还原 NES 原版观感；玩法保留经典机制，细节可
 - `npm run typecheck` — 类型检查（提交前必须通过）
 - `npm run dev:server` — 联机服务器（tsx watch，热重载，端口 8080）
 - `npm run server` — 联机服务器（tsx 单次运行，端口 8080，可用 PORT 覆盖）
+- `npm start` — 生产模式：单端口托管 dist（HTTP 静态）+ WS（需先 `npm run build`；见 DEPLOY.md）

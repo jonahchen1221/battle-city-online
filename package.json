@@ -7,15 +7,18 @@
     "dev": "vite",
     "dev:server": "tsx watch src/server/server.ts",
     "server": "tsx src/server/server.ts",
+    "start": "tsx src/server/server.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "tsx": "^4.23.0",
+    "ws": "^8.21.0"
+  },
   "devDependencies": {
     "@types/ws": "^8.18.1",
-    "tsx": "^4.23.0",
     "typescript": "^5.5.4",
-    "vite": "^6.0.0",
-    "ws": "^8.21.0"
+    "vite": "^6.0.0"
   }
 }

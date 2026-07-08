@@ -69,8 +69,9 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 async function main(): Promise<void> {
   console.log(`[smoke] 启动服务器 :${PORT}`);
-  const wss = createServer(PORT);
-  await new Promise<void>((r) => wss.on('listening', () => r()));
+  // createServer 现返回 { httpServer, wss }：WS 挂在 http.Server 上（同端口）。
+  const { httpServer, wss } = createServer(PORT);
+  await new Promise<void>((r) => httpServer.on('listening', () => r()));
 
   const c1 = await client('P1');
   const c2 = await client('P2');
@@ -137,9 +138,12 @@ async function main(): Promise<void> {
   const tanksAfter = latestSnap.snap.tanks.filter((t) => t.kind === 'player').length;
   assert(tanksAfter === 2, '断线玩家座位保留（进行中不释放），仍为 2 台玩家坦克');
 
-  // 收尾：关闭连接与服务器，确保无残留进程。
+  // 收尾：关闭连接与服务器，确保无残留进程。先终结所有残留 ws 连接，
+  // 否则 httpServer.close 会等待未关闭的 socket 而挂起。
   c1.ws.close();
-  await new Promise<void>((r) => wss.close(() => r()));
+  for (const client of wss.clients) client.terminate();
+  wss.close();
+  await new Promise<void>((r) => httpServer.close(() => r()));
 
   console.log(`\n[smoke] 结果：${pass} 通过 / ${fail} 失败`);
   process.exit(fail === 0 ? 0 : 1);
