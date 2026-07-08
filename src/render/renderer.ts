@@ -146,9 +146,22 @@ export class Renderer {
       const startY = FIELD_Y + FIELD_HEIGHT; // 屏幕底部
       const y = Math.round(startY + (cy - startY) * t);
       drawText(ctx, atlas, text, x, y, COLOR_GAMEOVER);
+      // 滑入完成后提示重开操作
+      if (state.phaseTicks > GAMEOVER_SLIDE_TICKS) {
+        this.drawRestartHint(state, cy + 24);
+      }
     } else if (state.phase === 'stageclear') {
       this.drawStageClear(state);
     }
+  }
+
+  // 闪烁的 "PRESS ENTER" 重开提示（gameover / stageclear 共用），与 PAUSE 同款闪烁节奏。
+  private drawRestartHint(state: GameState, y: number): void {
+    if (Math.floor(state.phaseTicks / PAUSE_BLINK_TICKS) % 2 !== 0) return; // 灭相
+    const { ctx, atlas } = this;
+    const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
+    const text = 'PRESS ENTER';
+    drawText(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), y, COLOR_STAGE_CLEAR);
   }
 
   // 通关结算画面：标题 + 逐类击毁数/得分 + 总分，白字，经典战果统计版式。
@@ -187,6 +200,9 @@ export class Renderer {
     drawText(ctx, atlas, 'TOTAL', nameX, y, white);
     const totalStr = String(state.score);
     drawText(ctx, atlas, totalStr, scoreRightX - textWidth(totalStr), y, white);
+
+    // 重开提示。
+    this.drawRestartHint(state, y + 24);
   }
 
   // 暂停覆盖层：黄色 "PAUSE" 居中，按 PAUSE_BLINK_TICKS 周期闪烁（半亮半灭）。
