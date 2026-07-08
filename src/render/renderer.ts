@@ -1,4 +1,5 @@
 import {
+  ART_SCALE,
   NATIVE_WIDTH,
   NATIVE_HEIGHT,
   FIELD_X,
@@ -45,14 +46,23 @@ import {
   textWidth,
 } from './sprites';
 
+// 把逻辑坐标吸附到最近的“美术像素”（1/ART_SCALE 逻辑像素）。
+// 直接对逻辑坐标取整会把运动量化成 2 美术像素一跳，浪费高清分辨率的平滑度。
+function snapArt(v: number): number {
+  return Math.round(v * ART_SCALE) / ART_SCALE;
+}
+
 // 渲染层只读 GameState，不做任何逻辑推进。
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private atlas: SpriteAtlas;
 
   constructor(canvas: HTMLCanvasElement) {
-    canvas.width = NATIVE_WIDTH;
-    canvas.height = NATIVE_HEIGHT;
+    // 画布内部分辨率 = 原生尺寸 × 美术倍数（512×448）。所有布局数学仍以逻辑像素书写，
+    // 仅在 ctx 调用处（fillRect/clip）与 drawTile/drawText/drawQuarter 内部乘以 ART_SCALE，
+    // 不使用 ctx.scale（否则 2× 精灵会被二次缩放）。
+    canvas.width = NATIVE_WIDTH * ART_SCALE;
+    canvas.height = NATIVE_HEIGHT * ART_SCALE;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D context unavailable');
     this.ctx = ctx;
@@ -63,11 +73,11 @@ export class Renderer {
   draw(state: GameState, _alpha: number): void {
     const { ctx } = this;
 
-    // 屏幕灰边 + 战场黑底
+    // 屏幕灰边 + 战场黑底（直接的 ctx 矩形按 ART_SCALE 放大）
     ctx.fillStyle = COLOR_FRAME;
-    ctx.fillRect(0, 0, NATIVE_WIDTH, NATIVE_HEIGHT);
+    ctx.fillRect(0, 0, NATIVE_WIDTH * ART_SCALE, NATIVE_HEIGHT * ART_SCALE);
     ctx.fillStyle = COLOR_FIELD;
-    ctx.fillRect(FIELD_X, FIELD_Y, FIELD_WIDTH, FIELD_HEIGHT);
+    ctx.fillRect(FIELD_X * ART_SCALE, FIELD_Y * ART_SCALE, FIELD_WIDTH * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
 
     // 第一遍：地形中除树林外的一切（在实体之下）
     this.drawGround(state.level, state.tick, state.eagleDestroyed);
@@ -77,7 +87,7 @@ export class Renderer {
     // 硬裁剪到战场矩形（NES 同款）：边缘的大爆炸等特效不得溢出到灰边/HUD。
     ctx.save();
     ctx.beginPath();
-    ctx.rect(FIELD_X, FIELD_Y, FIELD_WIDTH, FIELD_HEIGHT);
+    ctx.rect(FIELD_X * ART_SCALE, FIELD_Y * ART_SCALE, FIELD_WIDTH * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
     ctx.clip();
     this.drawSpawnStars(state);
     this.drawTanks(state);
@@ -196,7 +206,7 @@ export class Renderer {
     for (const sp of state.spawning) {
       const elapsed = SPAWN_FLASH_TICKS - sp.ticksLeft;
       const frame = Math.floor(elapsed / SPAWN_STAR_ANIM_TICKS) % 4;
-      drawTile(ctx, atlas.spawnStar[frame], Math.round(FIELD_X + sp.tank.x), Math.round(FIELD_Y + sp.tank.y));
+      drawTile(ctx, atlas.spawnStar[frame], snapArt(FIELD_X + sp.tank.x), snapArt(FIELD_Y + sp.tank.y));
     }
   }
 
@@ -206,8 +216,8 @@ export class Renderer {
     const { ctx, atlas } = this;
     for (const tank of state.tanks) {
       if (!tank.alive) continue;
-      const px = Math.round(FIELD_X + tank.x);
-      const py = Math.round(FIELD_Y + tank.y);
+      const px = snapArt(FIELD_X + tank.x);
+      const py = snapArt(FIELD_Y + tank.y);
       const frame = tank.moving ? Math.floor(state.tick / TRACK_ANIM_TICKS) % 2 : 0;
       const frames = this.tankFrames(tank, state.tick);
       const sprite = frames[tank.dir][frame];
@@ -246,7 +256,7 @@ export class Renderer {
     const { ctx, atlas } = this;
     for (const bullet of state.bullets) {
       if (!bullet.alive) continue;
-      drawTile(ctx, atlas.bullet, Math.round(FIELD_X + bullet.x), Math.round(FIELD_Y + bullet.y));
+      drawTile(ctx, atlas.bullet, snapArt(FIELD_X + bullet.x), snapArt(FIELD_Y + bullet.y));
     }
   }
 
@@ -270,7 +280,7 @@ export class Renderer {
         );
         sprite = atlas.explosionSmall[frame];
       }
-      drawTile(ctx, sprite, Math.round(FIELD_X + e.x), Math.round(FIELD_Y + e.y));
+      drawTile(ctx, sprite, snapArt(FIELD_X + e.x), snapArt(FIELD_Y + e.y));
     }
   }
 

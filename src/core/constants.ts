@@ -17,8 +17,11 @@ export const FIELD_Y = 8;
 // 固定逻辑帧率（与 NES 一致）；所有速度单位为 px/tick
 export const TICKS_PER_SECOND = 60;
 
-// 渲染放大倍数
-export const RENDER_SCALE = 3;
+// 美术分辨率倍数（仅限渲染层！）：把所有精灵按 2× 重新绘制、画布内部分辨率放大到
+// NATIVE_*×ART_SCALE（512×448），从而获得 4× 像素细节。
+// 逻辑坐标 / 游戏代码（src/game/）一律保持在 256×224 空间，不受此常量影响。
+// 屏幕显示缩放不再是固定倍数，而由 main.ts 依视口大小取 512×448 画布的最大整数 CSS 倍率。
+export const ART_SCALE = 2;
 
 // NES 经典配色
 export const COLOR_FRAME = '#636363'; // 屏幕灰边
