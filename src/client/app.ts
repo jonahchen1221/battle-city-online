@@ -477,8 +477,10 @@ export class App {
       const labelX = cx - Math.round(textWidth(label) / 2);
       drawText(ctx, atlas, label, labelX, y, selected ? COLOR_MENU : COLOR_MENU_DIM);
       if (selected) {
-        // 光标：复用 HUD 生命迷你坦克（P1 黄），置于文字左侧。
-        drawTile(ctx, atlas.hudLifeTank[0], labelX - 22, y - 4);
+        // 光标：复用 HUD 生命迷你坦克（P1 黄），置于文字左侧、与文字垂直居中对齐。
+        // 文字 7px 高、视觉中心在 y+3.5；迷你坦克车体只占格子上部、内容中心在格顶 +3；
+        // 令两中心相等 → 格顶 = y+0.5（×ART_SCALE 后为整数美术像素，保持清晰）。
+        drawTile(ctx, atlas.hudLifeTank[0], labelX - 22, y + 0.5);
       }
     }
 
