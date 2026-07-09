@@ -5,11 +5,12 @@ export interface InputState {
   left: boolean;
   right: boolean;
   fire: boolean;
-  start: boolean;
+  start: boolean; // Enter：开局 / 结算重开 / 大厅
+  pause: boolean; // P：暂停 / 恢复（与 start 分离，避免键位兼职冲突）
 }
 
 export function emptyInput(): InputState {
-  return { up: false, down: false, left: false, right: false, fire: false, start: false };
+  return { up: false, down: false, left: false, right: false, fire: false, start: false, pause: false };
 }
 
 export type Direction = 'up' | 'down' | 'left' | 'right';

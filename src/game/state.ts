@@ -74,8 +74,10 @@ export interface GameState {
   resultTimer: number; // 距切换到 pendingResult 的剩余帧数
   scoreByPlayer: number[]; // 每名玩家的累计得分（跨关累积），按 playerIndex 索引
   killsByPlayer: Array<Record<EnemyKind, number>>; // 每名玩家各种敌军击毁数（每关重置），按 playerIndex 索引
-  paused: boolean; // 是否暂停（游玩中按 start 切换）
-  prevStart: boolean; // 上一帧 start 键聚合状态（边沿检测：暂停切换 / 结算重开）
+  paused: boolean; // 是否暂停（游玩中按 P 切换；谁都能暂停/恢复）
+  pausedBy: number; // 触发本次暂停的玩家 playerIndex（用于显示 "nP PAUSED"）；未暂停时 -1
+  prevStart: boolean; // 上一帧 start 键聚合状态（边沿检测：结算重开 / 大厅）
+  prevPause: boolean; // 上一帧 pause 键聚合状态（边沿检测：暂停切换）
   // ── 道具系统 ──
   powerup: PowerupState | null; // 场上当前道具浮标（同时至多一枚）；被拾取 / 被新掉落替换前持续存在
   enemyFreezeTicks: number; // timer 道具：>0 时敌军冻结（不动、不开火），逐帧递减
@@ -141,7 +143,9 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     scoreByPlayer: new Array<number>(playerCount).fill(0),
     killsByPlayer: emptyKillsByPlayer(playerCount),
     paused: false,
+    pausedBy: -1,
     prevStart: false,
+    prevPause: false,
     powerup: null,
     enemyFreezeTicks: 0,
     shovelTicks: 0,
@@ -190,6 +194,8 @@ export function nextStage(state: GameState): void {
   state.shovelTicks = 0;
   state.enemiesDequeued = 0;
   state.paused = false;
+  state.pausedBy = -1;
+  state.prevPause = false;
 
   // 尚有生命的玩家在各自出生点复活（经出生闪光入场），并沿用其 star 等级。
   for (let i = 0; i < state.playerCount; i++) {

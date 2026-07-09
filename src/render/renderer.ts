@@ -138,6 +138,9 @@ export class Renderer {
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const cy = FIELD_Y + FIELD_HEIGHT / 2 - 4;
     drawText(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), cy, COLOR_HUD_ICON);
+    // 不显眼的操作提示：教会玩家 P 可暂停（每关开场都会看到，不占游戏画面）。
+    const hint = 'P = PAUSE';
+    drawText(ctx, atlas, hint, cx - Math.round(textWidth(hint) / 2), cy + 40, COLOR_HUD_ICON);
   }
 
   // 右侧 32px 灰栏 HUD（x 224..256）：黑色图标/文字，经典 NES 布局。
@@ -280,8 +283,16 @@ export class Renderer {
     const { ctx, atlas } = this;
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const cy = FIELD_Y + FIELD_HEIGHT / 2 - 4;
-    const text = 'PAUSE';
-    drawText(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), cy, COLOR_PAUSE);
+    drawText(ctx, atlas, 'PAUSE', cx - Math.round(textWidth('PAUSE') / 2), cy, COLOR_PAUSE);
+
+    // 多人局显示是谁暂停的（该玩家配色）；单人不显示。均提示 "P = RESUME"。
+    if (state.playerCount > 1 && state.pausedBy >= 0) {
+      const who = `${state.pausedBy + 1}P PAUSED`;
+      const color = PLAYER_LABEL_COLORS[state.pausedBy] ?? COLOR_STAGE_CLEAR;
+      drawText(ctx, atlas, who, cx - Math.round(textWidth(who) / 2), cy + 16, color);
+    }
+    const hint = 'P = RESUME';
+    drawText(ctx, atlas, hint, cx - Math.round(textWidth(hint) / 2), cy + 32, COLOR_STAGE_CLEAR);
   }
 
   // 出生闪光星：坦克实体化前在出生点循环播放 4 帧星形。

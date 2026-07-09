@@ -674,7 +674,8 @@ function sameInput(a: InputState, b: InputState): boolean {
     a.left === b.left &&
     a.right === b.right &&
     a.fire === b.fire &&
-    a.start === b.start
+    a.start === b.start &&
+    a.pause === b.pause
   );
 }
 

@@ -105,7 +105,7 @@ interface ConnContext {
 function sanitizeInput(raw: unknown): InputState | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const o = raw as Record<string, unknown>;
-  const keys = ['up', 'down', 'left', 'right', 'fire', 'start'] as const;
+  const keys = ['up', 'down', 'left', 'right', 'fire', 'start', 'pause'] as const;
   for (const k of keys) if (typeof o[k] !== 'boolean') return null;
   return {
     up: o.up as boolean,
@@ -114,6 +114,7 @@ function sanitizeInput(raw: unknown): InputState | null {
     right: o.right as boolean,
     fire: o.fire as boolean,
     start: o.start as boolean,
+    pause: o.pause as boolean,
   };
 }
 

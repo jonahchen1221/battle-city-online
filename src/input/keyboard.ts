@@ -13,6 +13,7 @@ const KEY_MAP: Record<string, keyof InputState> = {
   Space: 'fire',
   KeyJ: 'fire',
   Enter: 'start',
+  KeyP: 'pause',
 };
 
 export class Keyboard {

@@ -29,10 +29,14 @@ import {
 export function update(state: GameState, inputs: InputState[]): void {
   state.tick++;
 
-  // start 键聚合 + 边沿检测：暂停切换与结算推进都只认“按下的那一帧”，避免按住连触发。
+  // start（Enter）与 pause（P）各自聚合 + 边沿检测：只认“按下的那一帧”，避免按住连触发。
+  // start 仅用于结算重开 / 大厅；pause 仅用于暂停切换。二者分离，互不干扰。
   const startDown = inputs.some((i) => i.start);
   const startEdge = startDown && !state.prevStart;
   state.prevStart = startDown;
+  const pauseDown = inputs.some((i) => i.pause);
+  const pauseEdge = pauseDown && !state.prevPause;
+  state.prevPause = pauseDown;
 
   // stagestart 开场幕布：冻结模拟（不推进坦克/子弹/AI），仅推进 phaseTicks；到时自动进入 playing。
   // 期间忽略 start 键（不可暂停 / 不可跳过）。
@@ -63,10 +67,20 @@ export function update(state: GameState, inputs: InputState[]): void {
     return;
   }
 
-  // 暂停切换：start 边沿翻转 paused（含解除）。暂停期间彻底冻结模拟，仅 tick 继续走
-  // （供渲染层驱动 "PAUSE" 闪烁与护盾流光）。
-  if (startEdge) {
+  // 暂停切换：pause（P）边沿翻转 paused（谁都能暂停、谁都能恢复）。暂停期间彻底冻结模拟，
+  // 仅 tick 继续走（供渲染层驱动 "PAUSE" 闪烁与护盾流光）。
+  // 暂停时记录触发者 playerIndex（inputs[i] 对应 playerIndex i），用于显示 "nP PAUSED"；恢复时清为 -1。
+  if (pauseEdge) {
     state.paused = !state.paused;
+    if (state.paused) {
+      let by = 0;
+      for (let i = 0; i < inputs.length; i++) {
+        if (inputs[i]?.pause) { by = i; break; }
+      }
+      state.pausedBy = by;
+    } else {
+      state.pausedBy = -1;
+    }
     state.events.push('pause');
   }
   if (state.paused) return;
