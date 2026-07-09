@@ -42,7 +42,22 @@ export class Sfx {
         this.noise(0.6, { from: 2800, to: 90, vol: 0.34 }); // 最长最重
         break;
       case 'stageStart':
-        this.jingle([392, 523, 659, 784], 0.14, 'square', 0.14); // G4-C5-E5-G5 开场小调（约 0.56s）
+        // 关卡开场号角（经典 NES 过场风格，非原曲逐音复刻，凭听感重制）：
+        // 方波主旋律 —— C 大调琶音上行 + 跳进收束长音；叠一层三角波低音填充厚度。
+        // 全曲约 2s，恰好奏完于开场幕布（STAGE_START_TICKS = 120 帧）内。
+        this.seq(
+          [
+            [392, 0.13], [523, 0.13], [659, 0.13], [784, 0.26], [659, 0.13],
+            [784, 0.13], [1047, 0.36], [880, 0.13], [988, 0.13], [1047, 0.46],
+          ],
+          'square',
+          0.14,
+        );
+        this.seq(
+          [[131, 0.26], [131, 0.26], [196, 0.26], [196, 0.26], [131, 0.26], [196, 0.2], [131, 0.49]],
+          'triangle',
+          0.08,
+        );
         break;
       case 'stageClear':
         this.jingle([523, 659, 784], 0.12, 'square', 0.14); // C5-E5-G5 上行
@@ -115,6 +130,26 @@ export class Sfx {
     src.connect(filter).connect(gain).connect(ctx.destination);
     src.start(t);
     src.stop(t + dur);
+  }
+
+  // 逐音符旋律：每个音符可指定自己的时长（[频率, 秒]），支持收束长音等节奏变化。
+  // 从 ctx.currentTime 起顺序排布；多次调用（不同音色）即叠成多声部（主旋律 + 低音）。
+  private seq(notes: Array<[number, number]>, type: OscillatorType, vol: number): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    let t = ctx.currentTime;
+    for (const [f, dur] of notes) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(f, t);
+      gain.gain.setValueAtTime(vol, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + dur);
+      t += dur;
+    }
   }
 
   // 依次播放若干音符，构成短旋律（通关/失败/暂停提示）。
