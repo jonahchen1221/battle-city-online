@@ -66,23 +66,44 @@ fly deploy
 - HTTPS 域名下客户端自动使用 `wss`，无需额外配置。
 - 全员断线后房间保留 60 秒宽限期供重连，超时自动销毁。
 
-## 阿里云轻量应用服务器（当前选定方案）
+## 阿里云轻量应用服务器（当前选定方案）—— 从零复活手册
 
-> 推荐：香港地域（免备案、可绑域名开 HTTPS）、Ubuntu 22.04/24.04、最低配即可（约 ¥34/月）。
-> 控制台防火墙需放行 80 与 443 端口。
+> 服务器可随时销毁退订，一切所需都在本仓库 + 本地 SSH 密钥里；按本节从零重建约 10 分钟。
+> 实测结论（2026-07）：玩家在大陆 → 选**大陆地域**（如武汉/杭州，43ms/0% 丢包）；
+> 香港虽免备案但跨境线路差（实测 147ms/20% 丢包）。大陆地域用 `http://IP` 访问免备案（绑域名才需备案）。
 
-1. **初始化（服务器上以 root 执行一次）**：
+**第 -1 步：购买清单**（阿里云控制台 → 轻量应用服务器）：
+- 地域：大陆（武汉/杭州等，离玩家近的）；镜像：**系统镜像 Ubuntu 24.04**（勿选应用镜像）；
+- 套餐：最低配即可（游戏单房间 CPU 占用 <1%）；时长 1 个月起，**自动续费按需**；
+- 购买后到实例的"防火墙"页确认已放行 TCP 80/443（新实例默认通常已有 22/80/443/ICMP）。
+
+**第 0 步：SSH 引导（不需要 root 密码）**——用控制台"命令助手"把本地公钥装进新机器：
+- 控制台 → 该地域 → 命令助手 → 新建命令（Shell），内容如下，执行目标选中新实例：
+  ```bash
+  mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL3DPWII8hzGIHDPTdhNyb4YhO01dCambBuA7uSy9C7B battle-city-deploy' >> /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
+  ```
+  （公钥对应本地私钥 `~/.ssh/battle_city_hk`；换了工作机则先 `ssh-keygen -t ed25519` 生成新对并替换上面的公钥。）
+- 本地 `~/.ssh/config` 加/改别名（换 IP 只改这里，仓库脚本不含 IP）：
+  ```
+  Host battle-city
+    HostName <新服务器公网IP>
+    User root
+    IdentityFile ~/.ssh/battle_city_hk
+  ```
+- 验证：`ssh battle-city 'echo ok'`。
+
+1. **初始化（本地一条命令，含上传脚本）**：
    ```bash
-   # 无域名：
-   bash setup-server.sh
-   # 有域名（需已解析到本机 IP）：
-   bash setup-server.sh play.example.com
+   scp scripts/setup-server.sh battle-city:/root/ && ssh battle-city 'bash /root/setup-server.sh'
+   # 有域名（需已解析到新 IP）：…… 'bash /root/setup-server.sh play.example.com'
    ```
    脚本内容见 `scripts/setup-server.sh`：安装 Node 22 + Caddy，配置 systemd（崩溃自启/开机自启）与反向代理（有域名时自动 HTTPS）。
 2. **部署 / 更新（本地执行）**：
    ```bash
-   ./scripts/deploy.sh root@<服务器IP>
+   ./scripts/deploy.sh battle-city
    ```
-   构建 → rsync 上传 → 装生产依赖 → 重启服务 → 健康检查，一条命令完成。
+   构建 → rsync 上传 → 装生产依赖 → 重启服务 → 健康检查，一条命令完成。以后每次更新代码也只需这一条。
 3. **访问**：有域名 `https://域名`；无域名 `http://服务器IP`。朋友打开同一地址，JOIN ROOM 输房间码即可。
 4. **排查**：`systemctl status battle-city`、`journalctl -u battle-city -f`、`systemctl status caddy`。
