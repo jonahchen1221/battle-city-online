@@ -159,7 +159,7 @@ export function update(
     state.explosions,
     state.events,
   );
-  // 近距离对射时，普通 20 帧冷却会让智能坦克成功拦下一发后必吃玩家的下一发。
+  // 近距离对射时，普通射击冷却仍可能让智能坦克成功拦下一发后必吃玩家的下一发。
   // 对消只缩短智能坦克的装填，不影响传统敌军，也不凭空增加同时在场的弹量。
   if (interceptedEnemyOwners.size > 0) {
     for (const tank of state.tanks) {
@@ -208,7 +208,7 @@ function advanceTankPowerupTimers(state: GameState): void {
     if (tank.ghostTicks > 0) tank.ghostTicks--;
     if (tank.fireCooldown > 0) {
       // 敌方射击冷却属于 AI 行动节拍：timer 冻结时暂停，hourglass 减速时仅在偶数 tick
-      // 推进。否则智能坦克的确定性 20 帧冷却会在沙漏期间照常走完，实际射速完全不降。
+      // 推进。否则智能坦克的确定性冷却会在沙漏期间照常走完，实际射速完全不降。
       const enemyActionBlocked =
         !isPlayerTank(tank) &&
         (state.enemyFreezeTicks > 0 || (state.enemySlowTicks > 0 && state.tick % 2 !== 0));

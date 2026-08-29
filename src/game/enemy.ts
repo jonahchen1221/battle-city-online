@@ -26,6 +26,7 @@ import {
   SMART_AI_REPLAN_TICKS,
   SMART_AI_STUCK_TICKS,
   SMART_AI_ESCAPE_TICKS,
+  SMART_AI_SPAWN_FIRE_DELAY_TICKS,
   SMART_AI_TURN_FIRE_DELAY_TICKS,
   SMART_AI_FIRE_COOLDOWN_TICKS,
   SMART_AI_BRICK_COST,
@@ -1603,7 +1604,8 @@ function fireSmartTank(
   state: GameState,
   targetPath?: SmartShotPath,
 ): boolean {
-  const canFire = tank.smartTurnFireTicks === 0 &&
+  const canFire = tank.smartSpawnFireTicks === 0 &&
+    tank.smartTurnFireTicks === 0 &&
     tank.fireCooldown === 0 &&
     liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
   if (
@@ -1897,6 +1899,9 @@ function updateSpawning(state: GameState, level: LevelState, obstacles: TankStat
           state.escort ?? undefined,
         )
       ) {
+        if (s.tank.kind === 'smart') {
+          s.tank.smartSpawnFireTicks = SMART_AI_SPAWN_FIRE_DELAY_TICKS;
+        }
         state.tanks.push(s.tank);
       } else {
         s.ticksLeft = 1;
@@ -2251,6 +2256,13 @@ export function updateEnemies(state: GameState, level: LevelState): void {
 
   updateSpawner(state, obstacles);
   updateBossMinions(state, obstacles);
+
+  // 独立于 AI 行动门禁推进：出生保护按真实游戏帧计算，冻结 / 减速不会把 9 帧拉长。
+  for (const tank of state.tanks) {
+    if (tank.alive && tank.kind === 'smart' && tank.smartSpawnFireTicks > 0) {
+      tank.smartSpawnFireTicks--;
+    }
+  }
 }
 
 // ── Boss 关小兵补充器 ──

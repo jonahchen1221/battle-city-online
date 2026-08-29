@@ -182,10 +182,12 @@ export const SMART_AI_REPLAN_TICKS = 12;
 // 智能坦克连续无位移达到此帧数后，进入局部脱困；脱困方向保持一段时间以真正绕开动态障碍。
 export const SMART_AI_STUCK_TICKS = 12;
 export const SMART_AI_ESCAPE_TICKS = 24;
-// 智能坦克转向后等待约 150ms 再开火：60Hz 下 9 帧，避免瞬间转头射击。
-export const SMART_AI_TURN_FIRE_DELAY_TICKS = 9;
-// 智能坦克的最低射击间隔；避免炮弹在近距离立刻消失时逐帧重新开火。
-export const SMART_AI_FIRE_COOLDOWN_TICKS = 20;
+// 智能坦克实体化后的前 9 个逻辑帧禁止开火，给玩家留出辨认出生位置的反应时间。
+export const SMART_AI_SPAWN_FIRE_DELAY_TICKS = 9;
+// 智能坦克转向后等待 12 帧（约 200ms）再开火，避免瞬间转头射击。
+export const SMART_AI_TURN_FIRE_DELAY_TICKS = 12;
+// 智能坦克的最低射击间隔同为 12 帧；避免炮弹近距离消失时逐帧重新开火。
+export const SMART_AI_FIRE_COOLDOWN_TICKS = 12;
 // 智能坦克炮弹与玩家弹对消后只保留一帧装填；下一逻辑帧即可继续反制连续射击。
 export const SMART_AI_INTERCEPT_RELOAD_TICKS = 1;
 // A* 中进入含砖位置的代价：优先选择短绕路，无路可绕时仍会主动射穿砖墙。

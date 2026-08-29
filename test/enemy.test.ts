@@ -16,6 +16,7 @@ import {
   ESCORT_STOPPED_SPAWN_DIVISOR,
   SMART_AI_FIRE_COOLDOWN_TICKS,
   SMART_AI_LEAD_LOOKAHEAD_TICKS,
+  SMART_AI_SPAWN_FIRE_DELAY_TICKS,
   SMART_AI_TURN_FIRE_DELAY_TICKS,
   STAGE_ENEMY_TOTAL,
   SUBTILE,
@@ -102,6 +103,43 @@ test('enemy waits in spawn flash while its spawn point is occupied', () => {
   assert.deepEqual(state.tanks.map((tank) => tank.id), [occupant.id, incoming.id]);
   assert.equal(state.spawning.length, 0);
   assert.deepEqual({ x: incoming.x, y: incoming.y }, { x: 200, y: 0 });
+});
+
+test('smart enemy cannot fire during its first 9 materialized frames', () => {
+  const state = createGameState(142, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 40, y: 120, invulnTicks: 9999 });
+  Object.assign(smart, {
+    x: 40,
+    y: 40,
+    dir: 'down' as const,
+    speed: 0,
+    smartTargetId: player.id,
+    smartGoalX: 40,
+    smartGoalY: 40,
+  });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player];
+  state.spawning = [{ tank: smart, ticksLeft: 1 }];
+  state.enemyQueue = [];
+
+  assert.equal(SMART_AI_SPAWN_FIRE_DELAY_TICKS, 9);
+  for (let frame = 1; frame <= SMART_AI_SPAWN_FIRE_DELAY_TICKS; frame++) {
+    updateEnemies(state, state.level);
+    assert.equal(
+      state.bullets.some((bullet) => bullet.ownerId === smart.id),
+      false,
+      `smart tank fired on protected spawn frame ${frame}`,
+    );
+  }
+
+  updateEnemies(state, state.level);
+  assert.ok(
+    state.bullets.some((bullet) => bullet.ownerId === smart.id),
+    'smart tank should be allowed to fire on the frame after spawn protection expires',
+  );
 });
 
 test('smart enemy uses pathfinding to close the distance to the nearest player', () => {
@@ -455,7 +493,7 @@ test('smart enemy turns a blocked corner into a reachable firing position', () =
   assert.ok(state.bullets.some((bullet) => bullet.ownerId === smart.id));
 });
 
-test('smart enemy waits about 150ms between turning to aim and firing', () => {
+test('smart enemy waits 12 frames between turning to aim and firing', () => {
   const state = createGameState(42, 1);
   const player = state.tanks[0];
   const smart = createEnemy('smart', 2, 0);
@@ -470,6 +508,7 @@ test('smart enemy waits about 150ms between turning to aim and firing', () => {
   updateEnemies(state, state.level);
 
   assert.equal(smart.dir, 'down');
+  assert.equal(SMART_AI_TURN_FIRE_DELAY_TICKS, 12);
   assert.equal(smart.smartTurnFireTicks, SMART_AI_TURN_FIRE_DELAY_TICKS);
   assert.equal(state.bullets.length, 0);
 
@@ -779,6 +818,7 @@ test('smart enemy keeps a minimum cooldown after its previous bullet disappears'
 
   update(state, [emptyInput()]);
   assert.equal(state.bullets.length, 1);
+  assert.equal(SMART_AI_FIRE_COOLDOWN_TICKS, 12);
   assert.equal(smart.fireCooldown, SMART_AI_FIRE_COOLDOWN_TICKS);
 
   state.bullets[0].alive = false;

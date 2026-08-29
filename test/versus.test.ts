@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PLAYER_INVULN_TICKS } from '../src/core/constants';
+import {
+  PLAYER_INVULN_TICKS,
+  SMART_AI_SPAWN_FIRE_DELAY_TICKS,
+} from '../src/core/constants';
 import { emptyInput } from '../src/core/types';
 import { onVersusEnemyKilled } from '../src/game/death';
 import { updateEnemies } from '../src/game/enemy';
@@ -26,6 +29,9 @@ test('versus creates one smart opponent per player with matching independent liv
   assert.deepEqual(enemies.map((tank) => tank.versusIndex), [0, 1, 2]);
   assert.deepEqual(enemies.map((tank) => tank.id), [4, 5, 6]);
   assert.ok(enemies.every((tank) => tank.invulnTicks === PLAYER_INVULN_TICKS));
+  assert.ok(
+    enemies.every((tank) => tank.smartSpawnFireTicks === SMART_AI_SPAWN_FIRE_DELAY_TICKS),
+  );
   assert.equal(state.level.cells.includes(Cell.EAGLE), false, 'versus arenas must not contain a base');
 });
 
