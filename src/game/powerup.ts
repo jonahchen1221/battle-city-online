@@ -253,8 +253,13 @@ export function tryPickupPowerup(state: GameState): void {
 function applyPowerupEffect(state: GameState, collector: TankState, kind: PowerupKind): void {
   switch (kind) {
     case 'star':
-      // 升级：等级 +1，封顶 3。等级作用于该玩家子弹（弹速 / 双弹 / 破钢，见 bullet.ts）。
-      collector.level = Math.min(PLAYER_MAX_LEVEL, collector.level + 1);
+      if (collector.level < PLAYER_MAX_LEVEL) {
+        // 升级：等级 +1，封顶 3。等级作用于该玩家子弹（弹速 / 双弹 / 破钢，见 bullet.ts）。
+        collector.level++;
+      } else if (collector.invulnTicks <= 0) {
+        // 已无法继续升级：仅在护盾已耗尽时补充一整段护盾。
+        collector.invulnTicks = HELMET_INVULN_TICKS;
+      }
       break;
     case 'grenade':
       grenadeKillAll(state, collector);
