@@ -16,7 +16,7 @@ function liveBullets(state: ReturnType<typeof createGameState>): number {
 }
 
 test('a fire press while the bullet slot is full is buffered and fires when it frees', () => {
-  const state = createGameState(1, 1);
+  const state = createGameState(1, 1, 2);
   state.phase = 'playing';
 
   update(state, [fireInput()]); // 第一发
@@ -33,7 +33,7 @@ test('a fire press while the bullet slot is full is buffered and fires when it f
 });
 
 test('a buffered press expires after FIRE_BUFFER_TICKS', () => {
-  const state = createGameState(1, 1);
+  const state = createGameState(1, 1, 2);
   state.phase = 'playing';
 
   update(state, [fireInput()]);

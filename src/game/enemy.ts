@@ -587,8 +587,9 @@ function updateBossMinions(state: GameState, obstacles: TankState[]): void {
   if (enemyCount(state) >= BOSS_MINION_MAX) return;
   if (boss.minionTimer > 0) return;
 
-  // 关号决定种类池：第一座 Boss 关（BOSS_STAGES[0]）用 A 池，其余（最终战）用 B 池。
-  const pool = state.stage === BOSS_STAGES[0] ? BOSS_MINION_KINDS_A : BOSS_MINION_KINDS_B;
+  // 关号决定种类池：最终战（BOSS_STAGES 最后一档）用 B 池，其余 Boss 关用 A 池。
+  const pool =
+    state.stage === BOSS_STAGES[BOSS_STAGES.length - 1] ? BOSS_MINION_KINDS_B : BOSS_MINION_KINDS_A;
   const kind = pool[state.rng.int(pool.length)];
   const tank = createEnemy(kind, state.nextEnemyId, 0);
   const spot = pickSpawnSpot(state, tank, obstacles);

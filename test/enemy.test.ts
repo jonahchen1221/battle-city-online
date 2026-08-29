@@ -182,7 +182,7 @@ test('smart enemy turns in place at a half-brick snap point and fires immediatel
 });
 
 test('smart enemy neither fires down the eagle lane nor damages the eagle with its bullets', () => {
-  const state = createGameState(42, 1);
+  const state = createGameState(42, 1, 2);
   const player = state.tanks[0];
   const smart = createEnemy('smart', 2, 0);
   const eagleX = EAGLE_COL * SUBTILE;
@@ -214,13 +214,14 @@ test('smart enemy neither fires down the eagle lane nor damages the eagle with i
 });
 
 test('stage enemy queues include smart tanks without changing the configured total', () => {
-  const expectedSmartCounts = [4, 5, 6, 7, 8];
-  for (let stage = 1; stage <= 5; stage++) {
+  // 第 1 关已改为 Boss 关（空编成），普通关从第 2 关起。
+  const expectedSmartCounts = [5, 6, 7, 8];
+  for (let stage = 2; stage <= 5; stage++) {
     const state = createGameState(42, 1, stage);
     assert.equal(state.enemyQueue.length, STAGE_ENEMY_TOTAL);
     assert.equal(
       state.enemyQueue.filter((kind) => kind === 'smart').length,
-      expectedSmartCounts[stage - 1],
+      expectedSmartCounts[stage - 2],
     );
   }
 });

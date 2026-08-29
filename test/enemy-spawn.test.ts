@@ -7,7 +7,7 @@ import { FIELD_HEIGHT, FIELD_WIDTH, SUBTILE, TANK_SIZE } from '../src/core/const
 
 // 驱动生成器直至攒够 count 台敌军闪光，返回各自的出生坐标。
 function collectSpawns(seed: number, count: number): Array<{ x: number; y: number }> {
-  const state = createGameState(seed, 1);
+  const state = createGameState(seed, 1, 2);
   state.phase = 'playing';
   state.enemyFreezeTicks = 0;
   const spots: Array<{ x: number; y: number }> = [];
@@ -29,7 +29,7 @@ function collectSpawns(seed: number, count: number): Array<{ x: number; y: numbe
 test('enemy spawns land on random valid spots in the upper half', () => {
   const spots = collectSpawns(20260829, 12);
   assert.equal(spots.length, 12);
-  const state = createGameState(20260829, 1); // 同 seed 的初始地形，用于校验落点可通行
+  const state = createGameState(20260829, 1, 2); // 同 seed 的初始地形，用于校验落点可通行
   for (const p of spots) {
     // 上半场 + 子格对齐 + 场内。
     assert.ok(p.y <= FIELD_HEIGHT / 2 - TANK_SIZE, `y=${p.y} 超出上半场`);

@@ -129,8 +129,8 @@ export const STAGE_ENEMY_TOTAL = 20;
 // 关卡总数（levels.ts STAGES 的长度）；通关第 12 关后回卷到第 1 关。
 // 序列：普通关 1–5 → Boss 关 A（6）→ 普通关 7–11 → Boss 关 B / 最终战（12）。
 export const STAGE_COUNT = 12;
-// Boss 关的关号（1-based）。第 6 关为 Boss A，第 12 关为 Boss B（最终战）。
-export const BOSS_STAGES: ReadonlyArray<number> = [6, 12];
+// Boss 关的关号（1-based）。第 1 / 6 关为 Boss A 竞技场，第 12 关为 Boss B（最终战）。
+export const BOSS_STAGES: ReadonlyArray<number> = [1, 6, 12];
 // 某关号是否为 Boss 关。stage 可为任意正整数（回卷关号先归一到 1..STAGE_COUNT）。
 export function isBossStage(stage: number): boolean {
   return BOSS_STAGES.includes(((stage - 1) % STAGE_COUNT) + 1);
@@ -140,12 +140,8 @@ export function isBossStage(stage: number): boolean {
 // Boss 关（第 6 / 12 关，索引 5 / 11）为空数组：不走有限队列，小兵由 Boss 关专属逻辑无限补充
 //（见 enemy.ts updateBossMinions）。
 export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; count: number }>> = [
-  // 第 1 关：基础 14 + 快速 2 + 智能 4（智能占 20%）
-  [
-    { kind: 'basic', count: 14 },
-    { kind: 'fast', count: 2 },
-    { kind: 'smart', count: 4 },
-  ],
+  // 第 1 关：Boss 关（空编成，小兵无限补充）
+  [],
   // 第 2 关：基础 8 + 快速 5 + 威力 2 + 智能 5（智能占 25%）
   [
     { kind: 'basic', count: 8 },

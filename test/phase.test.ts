@@ -4,7 +4,7 @@ import { updatePhase } from '../src/game/phase';
 import { createGameState } from '../src/game/state';
 
 test('game over overrides an armed stage clear when the eagle dies during the delay', () => {
-  const state = createGameState(42, 1);
+  const state = createGameState(42, 1, 2);
   state.phase = 'playing';
   state.enemyQueue = [];
   state.spawning = [];
