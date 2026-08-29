@@ -130,6 +130,8 @@ function sanitizeInput(raw: unknown): InputState | null {
   const o = raw as Record<string, unknown>;
   const keys = ['up', 'down', 'left', 'right', 'fire', 'start', 'pause'] as const;
   for (const k of keys) if (typeof o[k] !== 'boolean') return null;
+  // dash 为后加字段：旧客户端可能不带，缺省按未按下处理（宽容旧版本，避免联机握手期硬断）。
+  const dash = typeof o.dash === 'boolean' ? (o.dash as boolean) : false;
   return {
     up: o.up as boolean,
     down: o.down as boolean,
@@ -138,6 +140,7 @@ function sanitizeInput(raw: unknown): InputState | null {
     fire: o.fire as boolean,
     start: o.start as boolean,
     pause: o.pause as boolean,
+    dash,
   };
 }
 

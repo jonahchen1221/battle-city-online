@@ -1,7 +1,7 @@
 import { InputState, emptyInput } from '../core/types';
 import { DirOrder, DIRS, Dir } from './dir-order';
 
-// 键位：方向键 / WASD 移动，Space 或 J 开火，Enter 开始
+// 键位：方向键 / WASD 移动，Space 或 J 开火，C 冲刺，Enter 开始
 const KEY_MAP: Record<string, keyof InputState> = {
   ArrowUp: 'up',
   ArrowDown: 'down',
@@ -13,6 +13,7 @@ const KEY_MAP: Record<string, keyof InputState> = {
   KeyD: 'right',
   Space: 'fire',
   KeyJ: 'fire',
+  KeyC: 'dash',
   Enter: 'start',
   KeyP: 'pause',
 };
@@ -21,7 +22,7 @@ function isDir(field: keyof InputState): field is Dir {
   return (DIRS as readonly string[]).includes(field);
 }
 
-// 非方向的动作键（开火 / 开始 / 暂停）。
+// 非方向的动作键（开火 / 冲刺 / 开始 / 暂停）。
 type ActionField = Exclude<keyof InputState, Dir>;
 
 export class Keyboard {

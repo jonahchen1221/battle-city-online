@@ -25,10 +25,13 @@ import {
 import { Cell, LevelState, getCell, isSolidForTank } from '../src/game/level';
 import { BOSS_ARENAS, STAGES, bossArenaForStage, normalLevelForStage } from '../src/game/levels';
 
-// 全部 40×30 战场原型：十张普通图 + 两张 Boss 竞技场（护送关是 80×90 世界，另见 escort.test.ts）。
+// 全部 40×30 战场原型：十张普通图 + 十张 Boss 竞技场（护送关是 80×90 世界，另见 escort.test.ts）。
 const ARENAS: Array<{ name: string; level: LevelState }> = [
   ...STAGES.map((level, i) => ({ name: `普通图 ${i + 1}（第 ${i * STAGE_CYCLE + 1} 关）`, level })),
-  ...BOSS_ARENAS.map((level, i) => ({ name: `Boss 竞技场 ${'AB'[i]}`, level })),
+  ...BOSS_ARENAS.map((level, i) => ({
+    name: `Boss 竞技场 ${i + 1}（第 ${(i + 1) * STAGE_CYCLE} 关）`,
+    level,
+  })),
 ];
 
 // 敌军出生只取上半场（y ≤ FIELD_HEIGHT/2 − TANK_SIZE，见 enemy.ts pickSpawnSpot）。
@@ -76,12 +79,12 @@ function reachableFromSpawns(level: LevelState): Set<number> {
   return seen;
 }
 
-test('三段循环：30 关、10 张普通图 + 2 张 Boss 竞技场，全部被 parseLevel 解析成 40×30', () => {
+test('三段循环：30 关、10 张普通图 + 10 张 Boss 竞技场，全部被 parseLevel 解析成 40×30', () => {
   assert.equal(STAGE_COUNT, 30);
   assert.equal(STAGE_CYCLE, 3);
   assert.equal(STAGE_GROUP_COUNT, 10);
   assert.equal(STAGES.length, STAGE_GROUP_COUNT);
-  assert.equal(BOSS_ARENAS.length, 2);
+  assert.equal(BOSS_ARENAS.length, STAGE_GROUP_COUNT);
   assert.deepEqual([...BOSS_STAGES], [3, 6, 9, 12, 15, 18, 21, 24, 27, 30]);
   for (const { name, level } of ARENAS) {
     assert.equal(level.cols, FIELD_COLS, `${name} 列数`);
@@ -90,7 +93,7 @@ test('三段循环：30 关、10 张普通图 + 2 张 Boss 竞技场，全部被
   }
 });
 
-test('普通图按组号取，Boss 竞技场按组号奇偶交替取 A/B', () => {
+test('普通图与 Boss 竞技场都按组号取第 t 张', () => {
   for (let t = 1; t <= STAGE_GROUP_COUNT; t++) {
     const normalStage = t * STAGE_CYCLE - 2;
     const bossStage = t * STAGE_CYCLE;
@@ -101,8 +104,8 @@ test('普通图按组号取，Boss 竞技场按组号奇偶交替取 A/B', () =>
     assert.equal(normalLevelForStage(normalStage), STAGES[t - 1], `第 ${normalStage} 关取第 ${t} 张图`);
     assert.equal(
       bossArenaForStage(bossStage),
-      BOSS_ARENAS[t % 2 === 1 ? 0 : 1],
-      `第 ${bossStage} 关竞技场 ${t % 2 === 1 ? 'A' : 'B'}`,
+      BOSS_ARENAS[t - 1],
+      `第 ${bossStage} 关应取第 ${t} 张竞技场`,
     );
   }
   // 回卷关号同样归一：第 31 关 = 第 1 关。
@@ -134,7 +137,7 @@ test('每张普通图都有位于底部正中的 2×2 鹰巢', () => {
 test('Boss 竞技场没有鹰巢、留出 Boss 初始空域、且下半场有掩体', () => {
   for (let i = 0; i < BOSS_ARENAS.length; i++) {
     const level = BOSS_ARENAS[i];
-    const stage = `竞技场 ${'AB'[i]}`;
+    const stage = `竞技场 ${i + 1}`;
     // 1) 全图不得出现任何鹰巢格。
     for (let row = 0; row < FIELD_ROWS; row++) {
       for (let col = 0; col < FIELD_COLS; col++) {
@@ -156,6 +159,7 @@ test('Boss 竞技场没有鹰巢、留出 Boss 初始空域、且下半场有掩
       }
     }
     // 3) 下半场（rows 15..29）必须存在掩体，否则弹幕无处可躲。
+    //    最难的第 10 张「末日王座」只剩中央王座平台（24 格），故下限取 20。
     let cover = 0;
     for (let row = FIELD_ROWS / 2; row < FIELD_ROWS; row++) {
       for (let col = 0; col < FIELD_COLS; col++) {
@@ -163,10 +167,10 @@ test('Boss 竞技场没有鹰巢、留出 Boss 初始空域、且下半场有掩
         if (cell === Cell.BRICK || cell === Cell.STEEL) cover++;
       }
     }
-    assert.ok(cover >= 40, `${stage} 下半场掩体仅 ${cover} 格`);
+    assert.ok(cover >= 20, `${stage} 下半场掩体仅 ${cover} 格`);
   }
-  // 竞技场 B（最终战所用）的掩体应严格少于竞技场 A。
-  const coverOf = (level: LevelState): number => {
+  // 十张竞技场的下半场掩体必须随序号严格递减（逐场更难的第一条轴线）。
+  const lowerCoverOf = (level: LevelState): number => {
     let n = 0;
     for (let row = FIELD_ROWS / 2; row < FIELD_ROWS; row++) {
       for (let col = 0; col < FIELD_COLS; col++) {
@@ -176,7 +180,12 @@ test('Boss 竞技场没有鹰巢、留出 Boss 初始空域、且下半场有掩
     }
     return n;
   };
-  assert.ok(coverOf(BOSS_ARENAS[1]) < coverOf(BOSS_ARENAS[0]), '竞技场 B 的掩体应比 A 更少');
+  let prev = Infinity;
+  for (let i = 0; i < BOSS_ARENAS.length; i++) {
+    const cover = lowerCoverOf(BOSS_ARENAS[i]);
+    assert.ok(cover < prev, `竞技场 ${i + 1} 下半场掩体 ${cover} 未少于上一张 ${prev}`);
+    prev = cover;
+  }
 });
 
 test('每张 40×30 战场的四个玩家出生位都是空地', () => {

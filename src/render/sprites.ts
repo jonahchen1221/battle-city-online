@@ -740,6 +740,32 @@ const BULLET_LASER_UP = assertGrid([
   '.......II.......',
 ], 16, 16, 'bulletLaser');
 
+// ── Boss 地雷（16×16 美术 = 8×8 逻辑）──
+// 经典水雷造型：黑轮廓 + 深灰球体 + 四周尖刺，中央一枚指示灯。
+// 未武装用银色灯（'c'），武装后用亮红灯（recolor 换成 '2'），配合渲染层的闪烁提示“会炸”。
+// prettier-ignore
+const MINE = assertGrid([
+  '.......ee.......',
+  '..e....ee....e..',
+  '..ee..ebbe..ee..',
+  '...ee.ebbe.ee...',
+  '....ebbbbbbe....',
+  '...ebbbbbbbbe...',
+  '..ebbbbbbbbbbe..',
+  'eeebbbbccbbbbeee',
+  'eeebbbbccbbbbeee',
+  '..ebbbbbbbbbbe..',
+  '...ebbbbbbbbe...',
+  '....ebbbbbbe....',
+  '...ee.ebbe.ee...',
+  '..ee..ebbe..ee..',
+  '..e....ee....e..',
+  '.......ee.......',
+], 16, 16, 'mine');
+
+// 武装后的地雷：指示灯换成亮红，球体略微提亮（更醒目）。
+const MINE_ARMED = recolor(MINE, { c: '2', b: 'a' });
+
 // ── HUD 迷你坦克（16×16）──
 // 敌军是方炮塔宽履带，玩家是箭头车鼻窄履带；HUD 中同样不只靠颜色辨认。
 // prettier-ignore
@@ -1269,6 +1295,7 @@ export interface SpriteAtlas {
   explosionBig: [Sprite, Sprite]; // 大爆炸 2 帧（64×64）
   boss: Array<Record<Direction, Sprite>>; // Boss 车体（32×32 逻辑）：索引 0=阶段1、1=阶段2
   bossFlash: Record<Direction, Sprite>; // Boss 受击白闪帧
+  bossMine: Sprite[]; // Boss 地雷（8×8 逻辑）：索引 0=未武装、1=已武装（闪红相）
   hudEnemy: Sprite; // HUD 剩余敌军小坦克（16×16）
   hudLifeTank: Sprite[]; // HUD 玩家生命迷你坦克（16×16），按 playerIndex 着色
   hudFlag: Sprite; // HUD 关卡旗（32×32）
@@ -1412,6 +1439,9 @@ export function createSpriteAtlas(): SpriteAtlas {
   paint(ctx, laserRight, 128, Y_EAGLE);
   paint(ctx, laserDown, 144, Y_EAGLE);
   paint(ctx, laserLeft, 160, Y_EAGLE);
+  // Boss 地雷两帧（未武装 / 武装）：x=176 / 192，各 16×16 美术 = 8×8 逻辑。
+  paint(ctx, MINE, 176, Y_EAGLE);
+  paint(ctx, MINE_ARMED, 192, Y_EAGLE);
 
   // 玩家坦克行：四套配色，各占一行（P1 在 Y_PLAYER，P2/P3/P4 在图集底部追加行）。
   for (let i = 0; i < MAP_PLAYERS.length; i++) {
@@ -1523,6 +1553,7 @@ export function createSpriteAtlas(): SpriteAtlas {
     explosionBig: [s(0, Y_BIG, 64, 64), s(64, Y_BIG, 64, 64)],
     boss: [bossFramesAt(canvas, Y_BOSS_P1), bossFramesAt(canvas, Y_BOSS_P2)],
     bossFlash: bossFramesAt(canvas, Y_BOSS_FLASH),
+    bossMine: [s(176, Y_EAGLE, 16, 16), s(192, Y_EAGLE, 16, 16)],
     hudEnemy: s(96, Y_TERRAIN, 16, 16),
     hudLifeTank: HUD_LIFE_TANKS.map((_, i) => s(112 + i * 16, Y_TERRAIN, 16, 16)),
     hudFlag: s(64, Y_EAGLE, 32, 32),

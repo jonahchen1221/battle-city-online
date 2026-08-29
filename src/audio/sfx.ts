@@ -25,6 +25,9 @@ export class Sfx {
       case 'playerFire':
         this.tone(720, 300, 0.06, 'square', 0.12); // 下滑方波脆响
         break;
+      case 'dash':
+        this.tone(300, 900, 0.09, 'square', 0.1); // 上滑方波「咻」：短促推进感
+        break;
       case 'brickHit':
         this.noise(0.05, { from: 5200, to: 3200, vol: 0.14 }); // 短噪声爆
         break;

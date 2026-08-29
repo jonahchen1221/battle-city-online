@@ -1,4 +1,7 @@
 import type { EnemyKind } from '../game/tank';
+// 仅类型引用（编译期擦除，不产生运行时依赖）：Boss 攻击池表在本文件里定义，
+// 但攻击种类的真值来源仍是 src/game/boss.ts 的状态机。
+import type { BossAttackKind } from '../game/boss';
 
 // NES 原生分辨率与布局（所有游戏逻辑均以此坐标系为准，渲染时整体放大）
 // 为 1–4 人合作放大战场：原生宽 = FIELD_X(16) + 320 + 32(HUD) = 368；高 = 8 + 240 + 8 = 256。
@@ -69,6 +72,27 @@ export const TANK_SIZE = TILE; // 16
 
 // 玩家坦克移动速度（px/tick）
 export const PLAYER_SPEED = 0.75;
+
+// ── 冲刺技能（玩家专属）──
+// 按下冲刺键后沿当前朝向高速位移 2 个大格，随后进入 5 秒冷却；期间车身周围渲染倒计时圆环。
+export const DASH_DISTANCE = TILE * 2; // 32：冲刺总位移（2 个大格）
+export const DASH_TICKS = 12; // 冲刺持续帧数（约 0.2s）
+// 每帧步长 = 32 / 12 ≈ 2.67px，远小于 16px 车体，现有碰撞二分不会穿透地形。
+// 这是绝对速度：不与 boots 快靴倍率叠加（见 tank.ts moveTank 的步长覆盖参数）。
+export const DASH_SPEED = DASH_DISTANCE / DASH_TICKS;
+export const DASH_COOLDOWN_TICKS = 5 * TICKS_PER_SECOND; // 300 帧 = 5 秒
+export const DASH_READY_FLASH_TICKS = 30; // CD 转好后小圈黄闪的持续帧数（渲染用）
+// ── 冲刺的渲染参数（仅渲染层读取）──
+export const DASH_RING_RADIUS = 11; // 倒计时圆环半径（逻辑像素，略大于 16px 车体的一半）
+export const DASH_RING_SAMPLES = 72; // 整圈的采样点数（逐点 fillRect，像素风、无抗锯齿）
+export const DASH_READY_BLINK_TICKS = 5; // 就绪黄闪的明灭周期（帧）
+export const COLOR_DASH_RING = '#ffffff'; // 冷却剩余弧段（白）
+export const COLOR_DASH_READY = '#f0c860'; // 就绪闪烁（经典黄）
+// 冲刺残影：在坦克后方这些距离处以对应透明度各画一份当前精灵。
+export const DASH_TRAIL_STEPS: ReadonlyArray<{ dist: number; alpha: number }> = [
+  { dist: 12, alpha: 0.2 },
+  { dist: 6, alpha: 0.35 },
+];
 
 // 可支持的最大玩家数（1–4 人合作）。
 export const MAX_PLAYERS = 4;
@@ -449,16 +473,32 @@ export const BOSS_Y = 48;
 export const BOSS_SPEED = ENEMY_SPEED_BASIC;
 // 单机局的追踪速度：一阶段定点不动（速度 0，见 boss.ts bossMoveSpeed），二阶段起慢速追踪。
 export const BOSS_SPEED_SOLO_P2 = 0.35;
+// 移动方向承诺期（帧）：新选中的方向至少坚持这么久（被堵或该轴走完则立即解除）。
+// 消除两类甩头：斜向追击时主次轴逐帧互换的楼梯抖动、绕障时逐帧重评估的来回横跳。
+export const BOSS_MOVE_COMMIT_TICKS = 16;
 export const BOSS_BREACH_INTERVAL_TICKS = 120;
 export const BOSS_BREACH_BULLET_SPEED = 2;
 // Boss 弹幕的射手 id：任何坦克都不会取到 0（玩家 id 从 1 起），故可安全用作哨兵值。
 export const BOSS_OWNER_ID = 0;
 
-// 血量（受击次数制）：单人 100，每多一名玩家 +60 → 100 / 160 / 220 / 280。
+// ── Boss 序号（b）──
+// 第 b 位 Boss = 第 b 组的第 3 关（关号 3b），b ∈ 1..STAGE_GROUP_COUNT(10)。
+// 竞技场、血量、攻击间隔、技能解锁全部按它索引，绝不再各自算关号。
+export function bossOrdinalForStage(stage: number): number {
+  return stageGroup(stage);
+}
+
+// 血量（受击次数制）：基础 100 + 10×(b−1)，每多一名玩家再 +60。
+// 例：1 号 Boss 单人 100 / 四人 280；10 号 Boss 单人 190 / 四人 370。
 export const BOSS_HP_BASE = 100;
+export const BOSS_HP_PER_ORDINAL = 10;
 export const BOSS_HP_PER_EXTRA_PLAYER = 60;
-export function bossMaxHp(playerCount: number): number {
-  return BOSS_HP_BASE + BOSS_HP_PER_EXTRA_PLAYER * (playerCount - 1);
+export function bossMaxHp(playerCount: number, bossOrdinal = 1): number {
+  return (
+    BOSS_HP_BASE +
+    BOSS_HP_PER_ORDINAL * (bossOrdinal - 1) +
+    BOSS_HP_PER_EXTRA_PLAYER * (playerCount - 1)
+  );
 }
 // 单发伤害：激光弹 −2，其余一律 −1（drill / star 等级不改变对 Boss 的伤害）。
 export const BOSS_DAMAGE_NORMAL = 1;
@@ -469,8 +509,134 @@ export const BOSS_HIT_FLASH_TICKS = 3;
 export const BOSS_PHASE2_HP_RATIO = 0.5;
 
 // 攻击循环：冷却归零即从该阶段的攻击池随机（state.rng）选一发动。
+// 这两个值是**1 号 Boss 的基准**；实际间隔由 bossAttackIntervalTicks 按序号 b 线性收紧。
 export const BOSS_ATTACK_INTERVAL_P1 = 180;
 export const BOSS_ATTACK_INTERVAL_P2 = 160;
+
+// 每高一位 Boss，攻击间隔再收紧 1.5%：b=1 为 100%、b=10 为 1 − 0.015×9 = 86.5%。
+export const BOSS_ATTACK_INTERVAL_STEP = 0.015;
+// 狂暴（仅 10 号 Boss，hp < 25% 时单向进入）：攻击间隔再 ×0.75、弹幕弹速 ×1.2。
+export const BOSS_ENRAGE_ORDINAL = STAGE_GROUP_COUNT; // 10 —— 只有最后一位 Boss 会狂暴
+export const BOSS_ENRAGE_HP_RATIO = 0.25;
+export const BOSS_ENRAGE_INTERVAL_MULT = 0.75;
+export const BOSS_ENRAGE_BULLET_SPEED_MULT = 1.2;
+
+// 某位 Boss 在某阶段的攻击间隔（帧）。纯函数、无副作用：
+//   基准（P1 180 / P2 160）× 序号收紧 × 狂暴倍率，向下取整，至少 1 帧。
+// 对固定的 phase / enraged，结果随 b 单调不增（见 test/boss.test.ts）。
+export function bossAttackIntervalTicks(
+  phase: 1 | 2,
+  bossOrdinal: number,
+  enraged = false,
+): number {
+  const base = phase === 2 ? BOSS_ATTACK_INTERVAL_P2 : BOSS_ATTACK_INTERVAL_P1;
+  const ramp = 1 - BOSS_ATTACK_INTERVAL_STEP * (bossOrdinal - 1);
+  const mult = enraged ? BOSS_ENRAGE_INTERVAL_MULT : 1;
+  return Math.max(1, Math.floor(base * ramp * mult));
+}
+
+// ── 技能解锁表（按 Boss 序号累积）──
+// 1 号 Boss = 现状基础组；此后每位 Boss 进一件新技能，且一旦解锁永不移除。
+//   b≥2 弹幕墙 bulletWall（P1 池） / b≥3 蓄力冲撞 charge（P2 池）
+//   b≥4 迫击炮雨 mortar（P1 池）   / b≥5 召唤援军 summon（P1 池）
+//   b≥6 沿途布雷 mines（被动，不进攻击池，见 bossMinesEnabled）
+//   b≥7 磁力牵引 magnet（P2 池）   / b≥8 横扫激光 sweepLaser（P2 池）
+//   b=9 无新技能：全池解锁 + 间隔继续收紧；b=10 狂暴（见 BOSS_ENRAGE_*）。
+export const BOSS_SKILL_UNLOCK_BULLET_WALL = 2;
+export const BOSS_SKILL_UNLOCK_CHARGE = 3;
+export const BOSS_SKILL_UNLOCK_MORTAR = 4;
+export const BOSS_SKILL_UNLOCK_SUMMON = 5;
+export const BOSS_SKILL_UNLOCK_MINES = 6;
+export const BOSS_SKILL_UNLOCK_MAGNET = 7;
+export const BOSS_SKILL_UNLOCK_SWEEP = 8;
+
+// 1 号 Boss 的基础攻击池（历史行为）。
+const BOSS_BASE_ATTACKS_P1: ReadonlyArray<BossAttackKind> = ['laser', 'radial', 'burst'];
+const BOSS_BASE_ATTACKS_P2: ReadonlyArray<BossAttackKind> = [
+  'laser',
+  'radial',
+  'burst',
+  'spin',
+  'dualLaser',
+];
+
+// 第 b 位 Boss 的两个阶段攻击池（表驱动，纯函数；池内等概率由 state.rng 取一）。
+export function bossSkillsFor(b: number): {
+  p1: ReadonlyArray<BossAttackKind>;
+  p2: ReadonlyArray<BossAttackKind>;
+} {
+  const p1: BossAttackKind[] = [...BOSS_BASE_ATTACKS_P1];
+  const p2: BossAttackKind[] = [...BOSS_BASE_ATTACKS_P2];
+  if (b >= BOSS_SKILL_UNLOCK_BULLET_WALL) p1.push('bulletWall');
+  if (b >= BOSS_SKILL_UNLOCK_CHARGE) p2.push('charge');
+  if (b >= BOSS_SKILL_UNLOCK_MORTAR) p1.push('mortar');
+  if (b >= BOSS_SKILL_UNLOCK_SUMMON) p1.push('summon');
+  if (b >= BOSS_SKILL_UNLOCK_MAGNET) p2.push('magnet');
+  if (b >= BOSS_SKILL_UNLOCK_SWEEP) p2.push('sweepLaser');
+  return { p1, p2 };
+}
+
+// 沿途布雷是被动技能（不进攻击池）：第 6 位起的 Boss 一边移动一边在车尾丢雷。
+export function bossMinesEnabled(b: number): boolean {
+  return b >= BOSS_SKILL_UNLOCK_MINES;
+}
+
+// ⑥ 弹幕墙 bulletWall（b≥2，P1 池）：从 Boss 所在行朝目标半场齐射一整排子弹，
+// 横向间隔 16px，随机（rng）留一个 32px（= 2 个弹位）的缺口 —— 缺口就是唯一生路。
+export const BOSS_WALL_SPACING = TILE; // 16：相邻两发的横向间隔
+export const BOSS_WALL_GAP_SLOTS = 2; // 连续留空的弹位数（2 × 16px = 32px 缺口）
+export const BOSS_WALL_SPEED = 1.6;
+
+// ⑦ 蓄力冲撞 charge（b≥3，P2 池）：预警 45 帧（整条冲撞路径闪烁）→ 4px/帧冲锋，
+// 沿途砖块整格粉碎、撞到玩家即击毁；撞钢眩晕 90 帧、撞边界 / 水面眩晕 45 帧。
+// **眩晕期是本技能的核心反制窗口**：Boss 不移动、不攻击，可以随便打（见 boss.ts）。
+export const BOSS_CHARGE_WARN_TICKS = 45;
+export const BOSS_CHARGE_SPEED = 4;
+export const BOSS_CHARGE_STUN_STEEL_TICKS = 90;
+export const BOSS_CHARGE_STUN_SOFT_TICKS = 45;
+// 预警路径闪烁周期（帧）。
+export const BOSS_CHARGE_BLINK_TICKS = 5;
+
+// ⑧ 迫击炮雨 mortar（b≥4，P1 池）：选 4 个落点（每名存活玩家附近 ±32px 散布，
+// 不足 4 个用随机点凑满），地面画闪烁十字标记 48 帧后爆炸：
+// 16×16 判定内的玩家即毁、砖块整格清除、钢块不毁。
+export const BOSS_MORTAR_COUNT = 4;
+export const BOSS_MORTAR_FUSE_TICKS = 48;
+export const BOSS_MORTAR_SCATTER = 32; // 每轴 ±32px 的散布半径
+export const BOSS_MORTAR_BLAST = TILE; // 16×16 爆炸判定
+export const BOSS_MORTAR_MARK_BLINK_TICKS = 6;
+
+// ⑨ 召唤援军 summon（b≥5，P1 池）：立即在 Boss 两侧闪现 2 只小兵（无视 BOSS_MINION_MAX
+// 软上限），但全场敌军受硬上限约束，超出则少放。种类取当前关的小兵池。
+export const BOSS_SUMMON_COUNT = 2;
+export const BOSS_ENEMY_HARD_CAP = 6;
+
+// ⑩ 沿途布雷 mines（b≥6，被动）：Boss 处于移动状态时每 90 帧在车尾放一枚 8×8 地雷。
+// 武装延时 60 帧（此前无害），武装后玩家碰触即爆（击毁玩家 + 小爆炸），
+// 240 帧后自爆消失；任何子弹打中都能提前引爆（安全排雷）。
+export const BOSS_MINE_SIZE = SUBTILE; // 8×8
+export const BOSS_MINE_MAX = 6; // 全场同时存在的地雷上限
+export const BOSS_MINE_INTERVAL_TICKS = 90;
+export const BOSS_MINE_ARM_TICKS = 60;
+export const BOSS_MINE_LIFE_TICKS = 240;
+export const BOSS_MINE_BLINK_TICKS = 8; // 武装后闪红周期（帧）
+
+// ⑪ 磁力牵引 magnet（b≥7，P2 池）：预警 30 帧（Boss 泛紫脉冲）→ 持续 90 帧，
+// 每帧把所有存活玩家向 Boss 中心拉 0.25px（逐轴做地形碰撞校验，拉不动就停在障碍前），
+// 同时每 30 帧放一圈 8 向弹幕。
+export const BOSS_MAGNET_WARN_TICKS = 30;
+export const BOSS_MAGNET_TICKS = 90;
+export const BOSS_MAGNET_PULL_PER_TICK = 0.25;
+export const BOSS_MAGNET_WAVE_INTERVAL_TICKS = 30;
+export const BOSS_MAGNET_BULLETS = 8;
+export const BOSS_MAGNET_SPEED = 1.5;
+export const BOSS_MAGNET_PULSE_TICKS = 6; // 紫色脉冲环的呼吸周期（帧）
+
+// ⑫ 横扫激光 sweepLaser（b≥8，P2 池）：预警 45 帧（起始列红线 + 扫向箭头）→
+// 激光列以 1.2px/帧朝目标所在半场横移，扫完该半场即结束；站到另一半场即安全。
+// 命中判定复用整列激光（同一玩家一次横扫至多结算一次）。
+export const BOSS_SWEEP_WARN_TICKS = 45;
+export const BOSS_SWEEP_SPEED = 1.2;
 
 // ① 垂直粗激光（两阶段）：前摇 90 帧（红色瞄准线，不伤人）→ 激光 30 帧（宽 16px、整列贯穿）。
 // 双列激光（⑤）与它共用这组计时。
@@ -514,6 +680,10 @@ export function bossMinionsOnField(playerCount: number): number {
 // 各 Boss 关的小兵种类池（按 state.rng 等概率取）：最终战（第 STAGE_COUNT 关）用 B 池，其余用 A 池。
 export const BOSS_MINION_KINDS_A: ReadonlyArray<EnemyKind> = ['basic', 'fast'];
 export const BOSS_MINION_KINDS_B: ReadonlyArray<EnemyKind> = ['power', 'smart'];
+// 某 Boss 关的小兵池（定时补充与 summon 技能共用同一张表，绝不各自判关号）。
+export function bossMinionKindsForStage(stage: number): ReadonlyArray<EnemyKind> {
+  return normalizeStage(stage) === STAGE_COUNT ? BOSS_MINION_KINDS_B : BOSS_MINION_KINDS_A;
+}
 
 // 中立道具对 Boss 的控制效果（玩家拾取时生效，与敌军的冻结 / 减速另行计算）：
 // timer（时钟）冻结 Boss 2 秒 —— 不动、不破障、攻击状态机整体暂停；
@@ -530,6 +700,12 @@ export const COLOR_BOSS_AIM = '#f85838';
 export const COLOR_BOSS_LASER_CORE = '#ffffff';
 export const COLOR_BOSS_LASER_EDGE = '#58f8f8';
 export const COLOR_BOSS_FREEZE = '#58a8f8';
+// 新技能的渲染配色：冲撞预警路径 / 迫击炮落点十字 / 磁力紫脉冲 / 地雷本体与武装闪红。
+export const COLOR_BOSS_CHARGE_WARN = '#f8b800';
+export const COLOR_BOSS_MORTAR_MARK = '#f85838';
+export const COLOR_BOSS_MAGNET = '#a858f8';
+export const COLOR_BOSS_MINE_BODY = '#7c7c7c';
+export const COLOR_BOSS_MINE_ARMED = '#e44437';
 
 // 武器在 HUD 上的字母配色（与道具图标内的字母同色系；cannon 用 COLOR_HUD_ICON 黑）。
 export const COLOR_WEAPON_SPREAD = '#f0c860'; // 黄

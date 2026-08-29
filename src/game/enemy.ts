@@ -32,10 +32,7 @@ import {
   bossMinionsOnField,
   BOSS_MINION_INTERVAL_TICKS,
   BOSS_MINION_CARRIER_EVERY,
-  BOSS_MINION_KINDS_A,
-  BOSS_MINION_KINDS_B,
-  STAGE_COUNT,
-  normalizeStage,
+  bossMinionKindsForStage,
   STAGE_ENEMY_TOTAL,
 } from '../core/constants';
 import { Cell, LevelState, brickMaskOverlapsRect, getCell } from './level';
@@ -980,9 +977,8 @@ function updateBossMinions(state: GameState, obstacles: TankState[]): void {
   if (enemyCount(state) >= bossMinionsOnField(state.playerCount)) return;
   if (boss.minionTimer > 0) return;
 
-  // 关号决定种类池：最终战（归一后 = STAGE_COUNT，即第 30 关）用 B 池，其余 Boss 关用 A 池。
-  const pool =
-    normalizeStage(state.stage) === STAGE_COUNT ? BOSS_MINION_KINDS_B : BOSS_MINION_KINDS_A;
+  // 关号决定种类池（与 summon 技能共用同一张表）：最终战用 B 池，其余 Boss 关用 A 池。
+  const pool = bossMinionKindsForStage(state.stage);
   const kind = pool[state.rng.int(pool.length)];
   const tank = createEnemy(kind, state.nextEnemyId, 0);
   const spot = pickSpawnSpot(state, tank, obstacles);

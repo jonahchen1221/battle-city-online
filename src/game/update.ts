@@ -12,7 +12,7 @@ import {
   makeSmallExplosion,
 } from './bullet';
 import { updateEnemies } from './enemy';
-import { collisionTanks, updateBoss, resolveBulletBoss } from './boss';
+import { collisionTanks, updateBoss, updateMines, resolveBulletBoss } from './boss';
 import { updatePhase, resolveEagleHit, retryStage } from './phase';
 import {
   tryPickupPowerup,
@@ -29,6 +29,9 @@ import {
   FRIENDLY_FREEZE_TICKS,
   MACHINE_FIRE_INTERVAL_TICKS,
   FIRE_BUFFER_TICKS,
+  DASH_TICKS,
+  DASH_COOLDOWN_TICKS,
+  DASH_READY_FLASH_TICKS,
 } from '../core/constants';
 
 // 每逻辑帧调用一次。纯函数式推进：只依赖 state 与 inputs，
@@ -132,6 +135,9 @@ export function update(state: GameState, inputs: InputState[]): void {
   resolveBulletBullet(state.bullets, state.explosions, state.events);
   resolveEagleHit(state);
   resolveBulletBoss(state);
+  // Boss 地雷（仅第 6 位起的 Boss 会布雷）：武装 / 触雷 / 被子弹引爆 / 到期自爆。
+  // 放在子弹推进之后，用的是本帧的最终弹道位置。
+  updateMines(state);
   resolveEscortHits(state);
   resolveBulletTanks(state);
 
@@ -179,17 +185,39 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     if (!tank.alive) continue;
     const input = inputs[tank.playerIndex] ?? emptyInput();
 
+    // ── 冲刺（技能）──
+    // 按下沿与冷却计时在冻结 / 半速跳帧期间照常推进：CD 不因被控而停摆，
+    // 解冻那帧也不会因一直按住冲刺键而被误判为一次新按下（同 prevFire 的处理）。
+    const dashPressed = input.dash && !tank.prevDash;
+    tank.prevDash = input.dash;
+    if (tank.dashCooldown > 0) {
+      tank.dashCooldown--;
+      // 冷却刚归零的那一帧装填“就绪黄闪”，仅供渲染层读取。
+      if (tank.dashCooldown === 0) tank.dashReadyFlashTicks = DASH_READY_FLASH_TICKS;
+    } else if (tank.dashReadyFlashTicks > 0) {
+      tank.dashReadyFlashTicks--;
+    }
+
     // 敌方 timer 阻止移动 / 开火；敌方 hourglass 让玩家隔帧行动。
     const personallyFrozen = tank.freezeTicks > 0;
     if (personallyFrozen) tank.freezeTicks--;
     const globallyFrozen = state.playerFreezeTicks > 0;
     const slowedSkip = !globallyFrozen && !personallyFrozen &&
       state.playerSlowTicks > 0 && state.tick % 2 !== 0;
+    // 冻结取消冲刺：无论来自队友子弹还是敌方 timer，进行中的冲刺立即中止（CD 照走）。
+    if (personallyFrozen || globallyFrozen) tank.dashTicks = 0;
     if (globallyFrozen || slowedSkip) {
       tank.moving = false;
       tank.slideTicks = 0;
       tank.prevFire = input.fire; // 仍记录开火键状态，供轻点缓冲的按下沿检测使用
       continue;
+    }
+
+    // 触发冲刺：按下沿 + CD 已好 + 不在冲刺中 + 未被冻结（全局冻结已在上方 continue）。
+    if (dashPressed && tank.dashCooldown === 0 && tank.dashTicks === 0 && !personallyFrozen) {
+      tank.dashTicks = DASH_TICKS;
+      tank.dashCooldown = DASH_COOLDOWN_TICKS;
+      state.events.push('dash');
     }
 
     // 友军冻结只封移动 / 转向、不封开火：被队友定住时仍可按被定住时的朝向原地输出。

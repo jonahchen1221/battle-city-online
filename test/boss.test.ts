@@ -31,10 +31,47 @@ import {
   stageKind,
   bossMaxHp,
   bossMinionsOnField,
+  BOSS_ATTACK_INTERVAL_P1,
+  BOSS_ATTACK_INTERVAL_P2,
+  BOSS_WALL_SPACING,
+  BOSS_WALL_GAP_SLOTS,
+  BOSS_CHARGE_WARN_TICKS,
+  BOSS_CHARGE_SPEED,
+  BOSS_CHARGE_STUN_STEEL_TICKS,
+  BOSS_CHARGE_STUN_SOFT_TICKS,
+  BOSS_MORTAR_COUNT,
+  BOSS_MORTAR_FUSE_TICKS,
+  BOSS_MORTAR_BLAST,
+  BOSS_SUMMON_COUNT,
+  BOSS_ENEMY_HARD_CAP,
+  BOSS_MINE_SIZE,
+  BOSS_MINE_MAX,
+  BOSS_MINE_ARM_TICKS,
+  BOSS_MINE_LIFE_TICKS,
+  BOSS_MINE_INTERVAL_TICKS,
+  BOSS_MAGNET_WARN_TICKS,
+  BOSS_MAGNET_TICKS,
+  BOSS_MAGNET_BULLETS,
+  BOSS_SWEEP_WARN_TICKS,
+  BOSS_SWEEP_SPEED,
+  BOSS_LASER_WIDTH,
+  BOSS_RADIAL_SPEED,
+  SPAWN_FLASH_TICKS,
+  FIELD_WIDTH,
+  FIELD_HEIGHT,
+  bossAttackIntervalTicks,
+  bossMinesEnabled,
+  bossSkillsFor,
 } from '../src/core/constants';
 import { createGameState, nextStage, type GameState } from '../src/game/state';
 import { update } from '../src/game/update';
-import { bossBlockerTanks, updateBoss, resolveBulletBoss } from '../src/game/boss';
+import {
+  bossBlockerTanks,
+  startBossAttack,
+  updateBoss,
+  updateMines,
+  resolveBulletBoss,
+} from '../src/game/boss';
 import { updateEnemies } from '../src/game/enemy';
 import {
   BOSS_NEUTRAL_WEAPONS,
@@ -42,7 +79,7 @@ import {
   tryPickupPowerup,
   type PowerupKind,
 } from '../src/game/powerup';
-import { isPlayerTank, type TankState } from '../src/game/tank';
+import { createEnemy, isPlayerTank, type TankState } from '../src/game/tank';
 import type { BulletState } from '../src/game/bullet';
 import { Cell, createEmptyLevel, getCell, setCell } from '../src/game/level';
 import { BOSS_ARENAS } from '../src/game/levels';
@@ -150,10 +187,11 @@ test('三类关的 createGameState 冒烟：boss / escort 互斥，地图尺寸�
   assert.equal(boss.enemyQueue.length, 0, 'Boss 关不走有限出生队列');
 });
 
-test('Boss 竞技场：无鹰巢、Boss 空域留空、玩家出生位是空地', () => {
+test('十张 Boss 竞技场：无鹰巢、Boss 空域留空、玩家出生位是空地', () => {
+  assert.equal(BOSS_ARENAS.length, 10, '十位 Boss 各有一张主场');
   for (let i = 0; i < BOSS_ARENAS.length; i++) {
     const level = BOSS_ARENAS[i];
-    const name = `竞技场 ${'AB'[i]}`;
+    const name = `竞技场 ${i + 1}`;
     for (let row = 0; row < FIELD_ROWS; row++) {
       for (let col = 0; col < FIELD_COLS; col++) {
         assert.notEqual(getCell(level, col, row), Cell.EAGLE, `${name} 不应有鹰巢`);
@@ -179,7 +217,7 @@ test('Boss 竞技场：无鹰巢、Boss 空域留空、玩家出生位是空地'
 
 // ── Boss 生成 ──
 
-test('Boss 只在 Boss 关生成，血量随人数放大', () => {
+test('Boss 只在 Boss 关生成，血量随人数与序号放大', () => {
   assert.equal(createGameState(1, 1, 4).boss, null, '普通关不应有 Boss');
   assert.equal(createGameState(1, 1, 7).boss, null, '普通关不应有 Boss');
   assert.equal(createGameState(1, 1, 5).boss, null, '护送关不应有 Boss');
@@ -204,7 +242,93 @@ test('Boss 只在 Boss 关生成，血量随人数放大', () => {
   nextStage(state);
   assert.equal(state.stage, BOSS_B_STAGE);
   assert.equal(state.escort, null, '进入 Boss 关时护送目标必须清空');
-  assert.equal(state.boss?.maxHp, 160);
+  // 第 10 位 Boss、双人局：100 + 10×9 + 60 = 250。
+  assert.equal(state.boss?.ordinal, 10);
+  assert.equal(state.boss?.maxHp, 250);
+});
+
+test('bossMaxHp：基础 100 + 10×(b−1)，每多一人 +60，且随 b 严格递增', () => {
+  assert.equal(bossMaxHp(1, 1), 100);
+  assert.equal(bossMaxHp(1, 10), 190);
+  assert.equal(bossMaxHp(4, 1), 280);
+  assert.equal(bossMaxHp(4, 10), 370);
+  assert.equal(bossMaxHp(4), 280, '省略序号时按 1 号 Boss 计');
+  for (let players = 1; players <= 4; players++) {
+    for (let b = 2; b <= 10; b++) {
+      assert.equal(
+        bossMaxHp(players, b) - bossMaxHp(players, b - 1),
+        10,
+        `${players} 人局：第 ${b} 位 Boss 应比上一位多 10 血`,
+      );
+    }
+  }
+  // 每张 Boss 关按关号自动取序号（3 → 1、6 → 2 … 30 → 10）。
+  for (let i = 0; i < BOSS_STAGES.length; i++) {
+    const boss = createGameState(9, 1, BOSS_STAGES[i]).boss!;
+    assert.equal(boss.ordinal, i + 1, `第 ${BOSS_STAGES[i]} 关的 Boss 序号`);
+    assert.equal(boss.maxHp, 100 + 10 * i);
+  }
+});
+
+test('bossSkillsFor：技能按 Boss 序号累积解锁，解锁后永不移除', () => {
+  const base1 = ['laser', 'radial', 'burst'];
+  const base2 = ['laser', 'radial', 'burst', 'spin', 'dualLaser'];
+  // 1 号 Boss = 现状基础组。
+  assert.deepEqual([...bossSkillsFor(1).p1], base1);
+  assert.deepEqual([...bossSkillsFor(1).p2], base2);
+  // 逐位解锁：b=2 弹幕墙 / 3 冲撞 / 4 迫击炮 / 5 召唤 / 7 磁力 / 8 横扫（6 为被动布雷）。
+  assert.deepEqual([...bossSkillsFor(2).p1], [...base1, 'bulletWall']);
+  assert.deepEqual([...bossSkillsFor(2).p2], base2);
+  assert.deepEqual([...bossSkillsFor(3).p2], [...base2, 'charge']);
+  assert.deepEqual([...bossSkillsFor(4).p1], [...base1, 'bulletWall', 'mortar']);
+  assert.deepEqual([...bossSkillsFor(5).p1], [...base1, 'bulletWall', 'mortar', 'summon']);
+  assert.deepEqual([...bossSkillsFor(6).p1], [...bossSkillsFor(5).p1], '第 6 位的新技能是被动布雷');
+  assert.deepEqual([...bossSkillsFor(6).p2], [...bossSkillsFor(5).p2]);
+  assert.deepEqual([...bossSkillsFor(7).p2], [...base2, 'charge', 'magnet']);
+  assert.deepEqual([...bossSkillsFor(8).p2], [...base2, 'charge', 'magnet', 'sweepLaser']);
+  // 第 9 / 10 位无新技能：全池解锁（与第 8 位相同）。
+  assert.deepEqual([...bossSkillsFor(9).p1], [...bossSkillsFor(8).p1]);
+  assert.deepEqual([...bossSkillsFor(9).p2], [...bossSkillsFor(8).p2]);
+  assert.deepEqual([...bossSkillsFor(10).p1], [...bossSkillsFor(8).p1]);
+  assert.deepEqual([...bossSkillsFor(10).p2], [...bossSkillsFor(8).p2]);
+  // 累积性：任一技能一旦出现在第 b 位的池里，就必须出现在此后每一位的池里。
+  for (let b = 2; b <= 10; b++) {
+    for (const key of ['p1', 'p2'] as const) {
+      for (const skill of bossSkillsFor(b - 1)[key]) {
+        assert.ok(bossSkillsFor(b)[key].includes(skill), `第 ${b} 位丢了技能 ${skill}`);
+      }
+    }
+  }
+  // 被动布雷：第 6 位起解锁。
+  for (let b = 1; b <= 10; b++) assert.equal(bossMinesEnabled(b), b >= 6, `第 ${b} 位布雷`);
+});
+
+test('bossAttackIntervalTicks：随序号单调不增、收紧到 86.5%，狂暴再 ×0.75', () => {
+  for (const phase of [1, 2] as const) {
+    let prev = Infinity;
+    for (let b = 1; b <= 10; b++) {
+      const interval = bossAttackIntervalTicks(phase, b);
+      assert.ok(interval <= prev, `phase${phase} 第 ${b} 位间隔 ${interval} 比上一位还长`);
+      assert.ok(interval >= 1);
+      prev = interval;
+    }
+  }
+  assert.equal(bossAttackIntervalTicks(1, 1), BOSS_ATTACK_INTERVAL_P1);
+  assert.equal(bossAttackIntervalTicks(2, 1), BOSS_ATTACK_INTERVAL_P2);
+  // b=10：180 × (1 − 0.015×9) = 180 × 0.865 = 155.7 → 155。
+  assert.equal(bossAttackIntervalTicks(1, 10), Math.floor(BOSS_ATTACK_INTERVAL_P1 * 0.865));
+  assert.equal(bossAttackIntervalTicks(2, 10), Math.floor(BOSS_ATTACK_INTERVAL_P2 * 0.865));
+  // 狂暴：同参数下严格更短。
+  for (const phase of [1, 2] as const) {
+    assert.ok(
+      bossAttackIntervalTicks(phase, 10, true) < bossAttackIntervalTicks(phase, 10, false),
+      `phase${phase} 狂暴后间隔应更短`,
+    );
+  }
+  assert.equal(
+    bossAttackIntervalTicks(1, 10, true),
+    Math.floor(BOSS_ATTACK_INTERVAL_P1 * 0.865 * 0.75),
+  );
 });
 
 test('Boss 车体为普通坦克的 2×2，并以四个实心格参与坦克碰撞', () => {
@@ -263,8 +387,18 @@ test('Boss 遇到砖墙会停下并发射双发破障激光，清出 32px 通路
   const boss = state.boss!;
   const wallRow = (boss.y + boss.size) / SUBTILE;
   const wallCol = boss.x / SUBTILE;
-  for (let col = wallCol; col < wallCol + boss.size / SUBTILE; col++) {
+  // 砖墙横贯全场：A* 寻路会绕开只有车宽的小段砖墙（见钢墙绕行用例），
+  // 只有确实无路可绕时才会选择穿砖路径并触发破障。
+  for (let col = 0; col < state.level.cols; col++) {
     setCell(state.level, col, wallRow, Cell.BRICK);
+  }
+  // 场景手术（换图 + 砌墙）后清除移动方向承诺：它是 playingAt 预热帧在旧地图上留下的。
+  boss.moveCommitTicks = 0;
+  // 玩家摆到 Boss 正下方（目标列已对齐）：A* 对未对齐目标会先横移对齐再穿墙（整体最优），
+  // 本用例要验证的是“穿墙是第一步”时立即停下破障。
+  for (const player of state.tanks.filter(isPlayerTank)) {
+    player.x = boss.x + (boss.size - TANK_SIZE) / 2;
+    player.y = boss.y + boss.size + SUBTILE * 4;
   }
   const startY = boss.y;
 
@@ -525,6 +659,451 @@ test('phase 2 的 16 向旋转弹幕：2 波、每波 16 发、波间 30 帧', (
 
   assert.equal(state.bullets.length, BOSS_SPIN_BULLETS * BOSS_SPIN_WAVES);
   assert.equal(boss.attack, 'none', '两波打完应回到冷却');
+});
+
+// ── 新技能（按 Boss 序号解锁）──
+
+test('弹幕墙：整排 16px 间隔的子弹，随机留一个 32px 缺口，朝目标半场飞', () => {
+  // 第 6 关 = 第 2 位 Boss（弹幕墙解锁关）。
+  const state = playingAt(61, 1, 6);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  boss.x = 144;
+  boss.y = 48;
+  const player = state.tanks.find(isPlayerTank)!;
+  player.x = 160;
+  player.y = 208; // 正下方 → 齐射朝下
+  state.bullets = [];
+
+  startBossAttack(state, boss, 'bulletWall');
+
+  const slots = FIELD_WIDTH / BOSS_WALL_SPACING; // 20
+  assert.equal(state.bullets.length, slots - BOSS_WALL_GAP_SLOTS, '缺口恰好吃掉两个弹位');
+  const present = new Set<number>();
+  for (const b of state.bullets) {
+    assert.equal(b.ownerId, BOSS_OWNER_ID);
+    assert.equal(b.fromEnemy, true, '弹幕墙必须可被玩家子弹抵消');
+    assert.ok(b.vy > 0 && b.vx === 0, '目标在下方 → 全部垂直朝下');
+    assert.equal(b.y, boss.y + boss.size, '自 Boss 车体下沿出膛');
+    const cx = b.x + BULLET_SIZE / 2;
+    assert.equal((cx - BOSS_WALL_SPACING / 2) % BOSS_WALL_SPACING, 0, `弹位未对齐：${cx}`);
+    present.add((cx - BOSS_WALL_SPACING / 2) / BOSS_WALL_SPACING);
+  }
+  // 缺口：恰好两个**连续**弹位缺席。
+  const missing: number[] = [];
+  for (let i = 0; i < slots; i++) if (!present.has(i)) missing.push(i);
+  assert.equal(missing.length, BOSS_WALL_GAP_SLOTS);
+  assert.equal(missing[1], missing[0] + 1, `缺口必须连续，实得 ${missing.join(',')}`);
+
+  // 目标在上方时改为朝上齐射（自车体上沿出膛）。
+  player.y = 8;
+  state.bullets = [];
+  startBossAttack(state, boss, 'bulletWall');
+  assert.ok(state.bullets.every((b) => b.vy < 0), '目标在上方 → 全部垂直朝上');
+});
+
+test('蓄力冲撞：预警 45 帧后 4px/帧冲锋，粉碎沿途砖块、碾毁玩家，撞钢眩晕 90 帧', () => {
+  // 第 9 关 = 第 3 位 Boss（冲撞解锁关）。双人局：一名诱饵、一名挡在路上。
+  const state = playingAt(62, 2, 9);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  boss.x = 0;
+  boss.y = 96; // 车体占 rows 12–15
+  const players = state.tanks.filter(isPlayerTank).sort((a, b) => a.playerIndex - b.playerIndex);
+  players[0].x = 300;
+  players[0].y = 96; // 诱饵：同一行的右侧，护盾保留
+  players[1].x = 100;
+  players[1].y = 96; // 挡路者：会被碾毁
+  players[1].invulnTicks = 0;
+  state.livesByPlayer[1] = 5;
+
+  // 沿途砖块（cols 8-9 / rows 12-13）与终点钢墙（cols 20-21 / rows 12-15）。
+  for (const col of [8, 9]) for (const row of [12, 13]) setCell(state.level, col, row, Cell.BRICK);
+  for (const col of [20, 21]) {
+    for (let row = 12; row <= 15; row++) setCell(state.level, col, row, Cell.STEEL);
+  }
+
+  startBossAttack(state, boss, 'charge');
+  assert.equal(boss.attack, 'charge');
+  assert.equal(boss.chargeDir, 'right', '与 Boss 更接近对齐的是横轴');
+  assert.equal(boss.windupTicks, BOSS_CHARGE_WARN_TICKS);
+
+  // 预警相：整整 45 帧不移动（这是玩家唯一的让位窗口）。
+  for (let i = 0; i < BOSS_CHARGE_WARN_TICKS; i++) updateBoss(state);
+  assert.equal(boss.x, 0, '预警期间车体不得移动');
+  assert.equal(boss.windupTicks, 0);
+
+  // 冲锋首帧：整整 4px。
+  updateBoss(state);
+  assert.equal(boss.x, BOSS_CHARGE_SPEED);
+
+  // 一路冲到钢墙前停下：新位置若与钢块重叠即刹停，故最后落点为 128（128+32=160=钢墙左沿）。
+  for (let i = 0; i < 60 && boss.attack === 'charge'; i++) updateBoss(state);
+  assert.equal(boss.attack, 'none', '撞停后应回到冷却');
+  assert.equal(boss.x, 128, '车体应紧贴钢墙外沿');
+  assert.equal(boss.stunTicks, BOSS_CHARGE_STUN_STEEL_TICKS, '撞钢眩晕 90 帧');
+  assert.ok(BOSS_CHARGE_STUN_STEEL_TICKS > BOSS_CHARGE_STUN_SOFT_TICKS);
+
+  // 沿途砖块整格粉碎，钢墙原样保留。
+  for (const col of [8, 9]) {
+    for (const row of [12, 13]) {
+      assert.equal(getCell(state.level, col, row), Cell.EMPTY, `砖块 (${col},${row}) 应被粉碎`);
+    }
+  }
+  assert.equal(getCell(state.level, 20, 12), Cell.STEEL, '钢墙不可粉碎');
+  // 挡在路上的玩家被碾毁。
+  assert.equal(players[1].alive, false, '被冲撞碾到的玩家应被击毁');
+  assert.equal(state.livesByPlayer[1], 4);
+
+  // 眩晕期：不移动、不攻击，但照常挨打 —— 这是核心反制窗口。
+  const stunPos = { x: boss.x, y: boss.y };
+  const hpBefore = boss.hp;
+  state.bullets = [playerBulletOnBoss(601, 'normal')];
+  state.bullets[0].x = boss.x + boss.size / 2;
+  state.bullets[0].y = boss.y + boss.size / 2;
+  resolveBulletBoss(state);
+  assert.equal(boss.hp, hpBefore - 1, '眩晕中的 Boss 仍可被扣血');
+  const timerBefore = boss.attackTimer;
+  for (let i = 0; i < BOSS_CHARGE_STUN_STEEL_TICKS; i++) updateBoss(state);
+  assert.equal(boss.x, stunPos.x, '眩晕期间不移动');
+  assert.equal(boss.y, stunPos.y);
+  assert.equal(boss.attackTimer, timerBefore, '眩晕期间攻击计时完全不推进');
+  assert.equal(boss.stunTicks, 0, '90 帧后解除眩晕');
+});
+
+test('蓄力冲撞：撞到战场边界只眩晕 45 帧（比撞钢短一半）', () => {
+  const state = playingAt(63, 2, 9);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  boss.x = 144;
+  boss.y = FIELD_HEIGHT - boss.size - 8; // 贴近下边界
+  for (const p of state.tanks.filter(isPlayerTank)) {
+    p.x = 152;
+    p.y = FIELD_HEIGHT - 16; // 正下方 → 纵轴冲撞
+  }
+  startBossAttack(state, boss, 'charge');
+  assert.equal(boss.chargeDir, 'down');
+  for (let i = 0; i < BOSS_CHARGE_WARN_TICKS + 10 && boss.attack === 'charge'; i++) {
+    updateBoss(state);
+  }
+  assert.equal(boss.y, FIELD_HEIGHT - boss.size, '应钳在边界上');
+  assert.equal(boss.stunTicks, BOSS_CHARGE_STUN_SOFT_TICKS);
+});
+
+test('迫击炮雨：4 个落点、48 帧引信，起爆清砖并击毁站桩玩家（钢不毁）', () => {
+  // 第 12 关 = 第 4 位 Boss（迫击炮解锁关）。
+  const state = playingAt(64, 1, 12);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  const player = state.tanks.find(isPlayerTank)!;
+  player.invulnTicks = 0;
+  player.x = 160;
+  player.y = 160;
+  state.livesByPlayer[0] = 5;
+
+  // 落点规划：恒为 4 个，引信一致。
+  startBossAttack(state, boss, 'mortar');
+  assert.equal(boss.mortarMarks.length, BOSS_MORTAR_COUNT);
+  for (const mark of boss.mortarMarks) {
+    assert.equal(mark.ticksLeft, BOSS_MORTAR_FUSE_TICKS);
+    assert.ok(mark.x >= 0 && mark.x + BOSS_MORTAR_BLAST <= FIELD_WIDTH, '落点不得越界');
+    assert.ok(mark.y >= 0 && mark.y + BOSS_MORTAR_BLAST <= FIELD_HEIGHT);
+  }
+
+  // 起爆结算走确定性路径：手工装填一个正中玩家的落点，四周铺砖与钢。
+  boss.mortarMarks = [{ x: player.x, y: player.y, ticksLeft: BOSS_MORTAR_FUSE_TICKS }];
+  const brickCells = [
+    [20, 20],
+    [21, 20],
+    [20, 21],
+    [21, 21],
+  ];
+  for (const [col, row] of brickCells) setCell(state.level, col, row, Cell.BRICK);
+  setCell(state.level, 22, 20, Cell.STEEL); // 判定盒外的钢块：不该被波及
+
+  for (let i = 0; i < BOSS_MORTAR_FUSE_TICKS - 1; i++) updateBoss(state);
+  assert.equal(player.alive, true, '引信走完前不伤人');
+  assert.equal(getCell(state.level, 20, 20), Cell.BRICK, '引信走完前不清砖');
+
+  updateBoss(state); // 第 48 帧起爆
+  assert.equal(player.alive, false, '站在标记里的玩家应被击毁');
+  assert.equal(state.livesByPlayer[0], 4);
+  for (const [col, row] of brickCells) {
+    assert.equal(getCell(state.level, col, row), Cell.EMPTY, `砖块 (${col},${row}) 应整格清除`);
+  }
+  assert.equal(getCell(state.level, 22, 20), Cell.STEEL, '钢块不毁');
+  assert.equal(boss.mortarMarks.length, 0);
+  assert.equal(boss.attack, 'none', '炸完回到冷却');
+});
+
+test('召唤援军：两侧各闪现一只小兵，且全场敌军不超过硬上限 6 只', () => {
+  // 第 15 关 = 第 5 位 Boss（召唤解锁关）。
+  const state = playingAt(65, 1, 15);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  state.spawning = state.spawning.filter((s) => isPlayerTank(s.tank));
+  state.tanks = state.tanks.filter(isPlayerTank);
+
+  startBossAttack(state, boss, 'summon');
+  assert.equal(enemiesOnField(state), BOSS_SUMMON_COUNT, '一次召唤放两只');
+  assert.equal(boss.attack, 'none', '即时召唤，随即回到冷却');
+  const summoned = state.spawning.filter((s) => !isPlayerTank(s.tank));
+  assert.equal(summoned.length, BOSS_SUMMON_COUNT);
+  for (const s of summoned) {
+    assert.equal(s.ticksLeft, SPAWN_FLASH_TICKS, '召唤同样走出生闪光');
+    assert.ok(
+      s.tank.kind === 'basic' || s.tank.kind === 'fast',
+      `种类应取当前关小兵池，实得 ${s.tank.kind}`,
+    );
+  }
+  // 硬上限：先把场上塞到 5 只，再召唤只能补进 1 只。
+  const filler = playingAt(66, 1, 15);
+  filler.level = createEmptyLevel();
+  filler.spawning = filler.spawning.filter((s) => isPlayerTank(s.tank));
+  filler.tanks = filler.tanks.filter(isPlayerTank);
+  for (let i = 0; i < BOSS_ENEMY_HARD_CAP - 1; i++) {
+    const dummy = createEnemy('basic', 100 + i, 0);
+    dummy.x = i * 24;
+    dummy.y = 200;
+    filler.tanks.push(dummy);
+  }
+  assert.equal(enemiesOnField(filler), BOSS_ENEMY_HARD_CAP - 1);
+  startBossAttack(filler, filler.boss!, 'summon');
+  assert.equal(enemiesOnField(filler), BOSS_ENEMY_HARD_CAP, '超出硬上限的部分不放');
+});
+
+test('沿途布雷：移动时定时铺雷，武装后触之即死；子弹引爆与到期自爆都不伤人', () => {
+  // 第 18 关 = 第 6 位 Boss（布雷解锁关）。双人局保证 Boss 一阶段就会移动。
+  const state = playingAt(67, 2, 18);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  assert.equal(boss.ordinal, 6);
+  for (const p of state.tanks.filter(isPlayerTank)) {
+    p.x = boss.x;
+    p.y = 208; // 正下方，逼 Boss 一路向下
+  }
+
+  // 铺设：移动状态 + 计时归零 → 车尾（此时在上方）落一枚雷。
+  boss.mineTimer = 0;
+  updateBoss(state);
+  assert.equal(boss.moving, true);
+  assert.equal(state.mines.length, 1, '移动中应铺下一枚雷');
+  const laid = state.mines[0];
+  assert.equal(laid.armTicks, BOSS_MINE_ARM_TICKS);
+  assert.equal(laid.lifeTicks, BOSS_MINE_LIFE_TICKS);
+  assert.equal(boss.mineTimer, BOSS_MINE_INTERVAL_TICKS, '铺完重置为固定间隔');
+
+  // 未解锁的 Boss（序号 <6）永不布雷。
+  const early = playingAt(68, 2, 9); // 第 3 位
+  early.level = createEmptyLevel();
+  for (const p of early.tanks.filter(isPlayerTank)) {
+    p.x = early.boss!.x;
+    p.y = 208;
+  }
+  early.boss!.mineTimer = 0;
+  for (let i = 0; i < 200; i++) updateBoss(early);
+  assert.equal(early.mines.length, 0, '第 3 位 Boss 不该布雷');
+
+  // 武装：60 帧后 armTicks 归零。
+  const arm = playingAt(69, 1, 18);
+  arm.level = createEmptyLevel();
+  arm.mines = [{ id: 1, x: 100, y: 100, armTicks: BOSS_MINE_ARM_TICKS, lifeTicks: BOSS_MINE_LIFE_TICKS }];
+  for (let i = 0; i < BOSS_MINE_ARM_TICKS; i++) updateMines(arm);
+  assert.equal(arm.mines[0].armTicks, 0, '60 帧后武装完毕');
+
+  // 触雷：武装后的雷碰到玩家即爆，玩家阵亡、雷消失。
+  const trip = playingAt(70, 1, 18);
+  trip.level = createEmptyLevel();
+  const victim = trip.tanks.find(isPlayerTank)!;
+  victim.invulnTicks = 0;
+  victim.x = 100;
+  victim.y = 100;
+  trip.livesByPlayer[0] = 5;
+  trip.mines = [{ id: 1, x: 104, y: 104, armTicks: 0, lifeTicks: 100 }];
+  updateMines(trip);
+  assert.equal(victim.alive, false, '踩到武装地雷即毁');
+  assert.equal(trip.livesByPlayer[0], 4);
+  assert.equal(trip.mines.length, 0, '爆炸后地雷消失');
+
+  // 未武装的雷踩上去无害。
+  const safe = playingAt(71, 1, 18);
+  safe.level = createEmptyLevel();
+  const walker = safe.tanks.find(isPlayerTank)!;
+  walker.invulnTicks = 0;
+  walker.x = 100;
+  walker.y = 100;
+  safe.mines = [{ id: 1, x: 104, y: 104, armTicks: 10, lifeTicks: 100 }];
+  updateMines(safe);
+  assert.equal(walker.alive, true, '未武装的地雷不该伤人');
+  assert.equal(safe.mines.length, 1);
+
+  // 子弹引爆（安全排雷）：即便玩家正踩在上面也不受伤，子弹一并消亡。
+  const defuse = playingAt(72, 1, 18);
+  defuse.level = createEmptyLevel();
+  const sapper = defuse.tanks.find(isPlayerTank)!;
+  sapper.invulnTicks = 0;
+  sapper.x = 100;
+  sapper.y = 100;
+  defuse.mines = [{ id: 1, x: 104, y: 104, armTicks: 0, lifeTicks: 100 }];
+  const shot = playerBulletOnBoss(701, 'normal');
+  shot.x = 104;
+  shot.y = 104;
+  defuse.bullets = [shot];
+  updateMines(defuse);
+  assert.equal(defuse.mines.length, 0, '被子弹引爆');
+  assert.equal(shot.alive, false, '引爆的子弹一并消亡');
+  assert.equal(sapper.alive, true, '安全排雷不该炸到自己人');
+
+  // 到期自爆：240 帧后自行消失，不伤人。
+  const expire = playingAt(73, 1, 18);
+  expire.level = createEmptyLevel();
+  const bystander = expire.tanks.find(isPlayerTank)!;
+  bystander.invulnTicks = 0;
+  bystander.x = 200;
+  bystander.y = 200;
+  expire.mines = [{ id: 1, x: 100, y: 100, armTicks: 0, lifeTicks: BOSS_MINE_LIFE_TICKS }];
+  for (let i = 0; i < BOSS_MINE_LIFE_TICKS; i++) updateMines(expire);
+  assert.equal(expire.mines.length, 0, `${BOSS_MINE_LIFE_TICKS} 帧后应自爆消失`);
+  assert.equal(bystander.alive, true);
+
+  // 场上上限：满 6 枚时不再铺设。
+  const full = playingAt(74, 2, 18);
+  full.level = createEmptyLevel();
+  for (const p of full.tanks.filter(isPlayerTank)) {
+    p.x = full.boss!.x;
+    p.y = 208;
+  }
+  full.mines = Array.from({ length: BOSS_MINE_MAX }, (_, i) => ({
+    id: i + 1,
+    x: 8 + i * 16,
+    y: 8,
+    armTicks: BOSS_MINE_ARM_TICKS,
+    lifeTicks: BOSS_MINE_LIFE_TICKS,
+  }));
+  full.boss!.mineTimer = 0;
+  updateBoss(full);
+  assert.equal(full.mines.length, BOSS_MINE_MAX, `上限 ${BOSS_MINE_MAX} 枚，不得超发`);
+  assert.equal(BOSS_MINE_SIZE, 8);
+});
+
+test('磁力牵引：预警 30 帧后把玩家拉向 Boss、每 30 帧一圈弹幕，且绝不穿墙', () => {
+  // 第 21 关 = 第 7 位 Boss（磁力解锁关）。
+  const state = playingAt(75, 1, 21);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  boss.x = 144;
+  boss.y = 96;
+  const player = state.tanks.find(isPlayerTank)!;
+  player.x = 144;
+  player.y = 208; // 远在正下方
+  state.bullets = [];
+
+  startBossAttack(state, boss, 'magnet');
+  assert.equal(boss.windupTicks, BOSS_MAGNET_WARN_TICKS);
+  for (let i = 0; i < BOSS_MAGNET_WARN_TICKS; i++) updateBoss(state);
+  assert.equal(player.y, 208, '预警期间还没有牵引');
+  assert.equal(state.bullets.length, 0, '预警期间不出弹');
+  assert.equal(boss.activeTicks, BOSS_MAGNET_TICKS, '预警结束转入牵引相');
+
+  for (let i = 0; i < BOSS_MAGNET_TICKS; i++) updateBoss(state);
+  assert.ok(player.y < 208 - 15, `玩家应被明显拉近，实得 y=${player.y}`);
+  assert.equal(state.bullets.length, BOSS_MAGNET_BULLETS * 3, '90 帧内放三圈 8 向弹幕');
+  assert.equal(boss.attack, 'none', '牵引结束回到冷却');
+
+  // 不穿墙：玩家与 Boss 之间横一道钢墙时，牵引只能把人贴到墙前。
+  const walled = playingAt(76, 1, 21);
+  walled.level = createEmptyLevel();
+  const wboss = walled.boss!;
+  wboss.x = 144;
+  wboss.y = 96;
+  const wplayer = walled.tanks.find(isPlayerTank)!;
+  wplayer.x = 144;
+  wplayer.y = 208;
+  for (let col = 16; col <= 23; col++) {
+    for (const row of [24, 25]) setCell(walled.level, col, row, Cell.STEEL);
+  }
+  startBossAttack(walled, wboss, 'magnet');
+  for (let i = 0; i < BOSS_MAGNET_WARN_TICKS + BOSS_MAGNET_TICKS; i++) updateBoss(walled);
+  assert.equal(wplayer.y, 208, '钢墙挡住牵引，玩家停在墙前而不是被拖穿');
+});
+
+test('横扫激光：扫过目标列只结算一次，另一半场的玩家全程安全', () => {
+  // 第 24 关 = 第 8 位 Boss（横扫解锁关）。
+  const state = playingAt(77, 2, 24);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  boss.x = 144;
+  boss.y = 48; // 车体中心列 x=160
+  const players = state.tanks.filter(isPlayerTank).sort((a, b) => a.playerIndex - b.playerIndex);
+  players[0].x = 240; // 右半场：会被扫到
+  players[0].y = 200;
+  players[0].invulnTicks = 0;
+  players[1].x = 40; // 左半场：始终安全
+  players[1].y = 200;
+  players[1].invulnTicks = 0;
+  state.livesByPlayer[0] = 5;
+  state.livesByPlayer[1] = 5;
+
+  startBossAttack(state, boss, 'sweepLaser');
+  // 扫向由 rng 选中的目标决定；本用例固定为向右，专测命中与去重。
+  boss.sweepDir = 1;
+  boss.sweepX = 160;
+  boss.laserCols = [boss.sweepX];
+  assert.equal(boss.windupTicks, BOSS_SWEEP_WARN_TICKS);
+
+  for (let i = 0; i < BOSS_SWEEP_WARN_TICKS; i++) updateBoss(state);
+  assert.equal(players[0].alive, true, '预警期间不伤人');
+  assert.ok(boss.activeTicks > 0, '预警结束进入激活相');
+
+  const maxTicks = Math.ceil(FIELD_WIDTH / BOSS_SWEEP_SPEED) + 10;
+  for (let i = 0; i < maxTicks && boss.attack === 'sweepLaser'; i++) updateBoss(state);
+  assert.equal(boss.attack, 'none', '扫完该半场即结束');
+  assert.equal(players[0].alive, false, '右半场的玩家应被扫中');
+  assert.equal(state.livesByPlayer[0], 4, '同一次横扫至多结算一次');
+  assert.equal(players[1].alive, true, '左半场的玩家全程安全');
+  assert.equal(state.livesByPlayer[1], 5);
+  assert.equal(BOSS_LASER_WIDTH, 16);
+});
+
+test('最终战狂暴：第 10 位 Boss 残血 25% 以下提速，其余 Boss 永不狂暴', () => {
+  const state = playingAt(78, 1, BOSS_B_STAGE);
+  const boss = state.boss!;
+  assert.equal(boss.ordinal, 10);
+  state.level = createEmptyLevel();
+
+  boss.hp = Math.floor(boss.maxHp * 0.3); // 30%：尚未狂暴（但已进 phase 2）
+  updateBoss(state);
+  assert.equal(boss.enraged, false);
+  assert.equal(boss.phase, 2);
+
+  boss.hp = Math.floor(boss.maxHp * 0.2); // 20%：进入狂暴
+  updateBoss(state);
+  assert.equal(boss.enraged, true);
+
+  // 攻击间隔缩短：狂暴后的冷却 = bossAttackIntervalTicks(2, 10, true)。
+  state.bullets = [];
+  startBossAttack(state, boss, 'radial'); // 即时齐射后立刻 endAttack
+  assert.equal(boss.attackTimer, bossAttackIntervalTicks(2, 10, true));
+  assert.ok(
+    bossAttackIntervalTicks(2, 10, true) < bossAttackIntervalTicks(2, 10, false),
+    '狂暴后间隔必须更短',
+  );
+  // 弹速 ×1.2。
+  assert.ok(state.bullets.length > 0);
+  for (const b of state.bullets) {
+    assert.ok(Math.abs(b.speed - BOSS_RADIAL_SPEED * 1.2) < 1e-9, `狂暴弹速应 ×1.2，实得 ${b.speed}`);
+  }
+  // 单向：血量被拉满也不回退。
+  boss.hp = boss.maxHp;
+  updateBoss(state);
+  assert.equal(boss.enraged, true);
+
+  // 第 9 位 Boss（第 27 关）残血也不狂暴。
+  const ninth = playingAt(79, 1, 27);
+  ninth.level = createEmptyLevel();
+  ninth.boss!.hp = 1;
+  updateBoss(ninth);
+  assert.equal(ninth.boss!.enraged, false, '只有最后一位 Boss 会狂暴');
 });
 
 // ── 小兵 ──

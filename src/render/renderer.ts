@@ -53,9 +53,25 @@ import {
   COLOR_BOSS_LASER_CORE,
   COLOR_BOSS_LASER_EDGE,
   COLOR_BOSS_FREEZE,
+  COLOR_BOSS_CHARGE_WARN,
+  COLOR_BOSS_MORTAR_MARK,
+  COLOR_BOSS_MAGNET,
+  BOSS_CHARGE_BLINK_TICKS,
+  BOSS_MORTAR_BLAST,
+  BOSS_MORTAR_MARK_BLINK_TICKS,
+  BOSS_MINE_BLINK_TICKS,
+  BOSS_MAGNET_PULSE_TICKS,
   ESCORT_SIZE,
   TICKS_PER_SECOND,
+  DASH_COOLDOWN_TICKS,
+  DASH_RING_RADIUS,
+  DASH_RING_SAMPLES,
+  DASH_READY_BLINK_TICKS,
+  DASH_TRAIL_STEPS,
+  COLOR_DASH_RING,
+  COLOR_DASH_READY,
 } from '../core/constants';
+import type { Direction } from '../core/types';
 import { GameState } from '../game/state';
 import { Cell, LevelState, cellIndex, getCell } from '../game/level';
 import { TankState, EnemyKind, WeaponKind } from '../game/tank';
@@ -77,6 +93,14 @@ import {
   textWidth,
   FONT_ADVANCE,
 } from './sprites';
+
+// 冲刺残影的偏移方向：坦克朝向的反方向（残影落在车尾）。
+const DASH_TRAIL_BACK: Record<Direction, { x: number; y: number }> = {
+  up: { x: 0, y: 1 },
+  down: { x: 0, y: -1 },
+  left: { x: 1, y: 0 },
+  right: { x: -1, y: 0 },
+};
 
 // 把逻辑坐标吸附到最近的“美术像素”（1/ART_SCALE 逻辑像素）。
 // 直接对逻辑坐标取整会把运动量化成 2 美术像素一跳，浪费高清分辨率的平滑度。
@@ -152,14 +176,21 @@ export class Renderer {
     this.drawEscortGoal(state);
     this.drawEscort(state);
     this.drawSpawnStars(state);
+    // Boss 地雷是地表物件：绘于地形之上、坦克之下（不遮挡自己的车）。
+    this.drawBossMines(state);
+    // 冲撞预警带同样是地表警戒标记，压在地形上、实体之下。
+    this.drawBossCharge(state);
     // Boss 车体绘于坦克之下：玩家贴到车体边缘时仍能看清自己的坦克。
     this.drawBoss(state);
+    this.drawBossMagnet(state);
     this.drawTanks(state, playerNames);
     // 护卫位压在坦克轮廓上：玩家就位后仍能看到绿色角标确认已激活。
     this.drawEscortGuardSlots(state);
     this.drawBullets(state);
     // 瞄准线 / 激光绘于坦克之上：前摇与激活相都必须一眼可辨（这是全部躲避判断的依据）。
     this.drawBossBeams(state);
+    // 迫击炮落点十字同理：必须压在坦克之上，站在标记里的人一眼看见。
+    this.drawBossMortarMarks(state);
     this.drawExplosions(state);
 
     // 第二遍：树林（覆盖在实体之上，坦克可藏于其下）
@@ -818,11 +849,37 @@ export class Renderer {
           (playersFrozen ? state.playerFreezeTicks : tank.freezeTicks) /
             FRIENDLY_FREEZE_BLINK_TICKS,
         ) % 2 === 0;
+      // 冲刺残影：在坦克后方（朝向反方向）按 DASH_TRAIL_STEPS 各画一份当前精灵。
+      // 画在车体之下（先绘制），远的更淡，形成拖尾。
+      if (tank.dashTicks > 0) {
+        const back = DASH_TRAIL_BACK[tank.dir];
+        for (const step of DASH_TRAIL_STEPS) {
+          ctx.globalAlpha = step.alpha;
+          drawTile(ctx, sprite, snapArt(px + back.x * step.dist), snapArt(py + back.y * step.dist));
+        }
+        ctx.globalAlpha = 1;
+      }
+
       // 幽灵态（ghost 道具）：整台坦克半透明绘制 —— 与友军冻结的“明灭闪烁”是两种观感，不会混淆。
       const ghosting = tank.ghostTicks > 0;
       if (ghosting) ctx.globalAlpha = GHOST_RENDER_ALPHA;
       if (!freezeBlinkOff) drawTile(ctx, sprite, px, py);
       if (ghosting) ctx.globalAlpha = 1;
+
+      // 冲刺技能的倒计时圆环 / 就绪黄闪：所有存活玩家坦克都画（多人时能看到队友的 CD）。
+      if (tank.kind === 'player') {
+        const cx = px + TANK_SIZE / 2;
+        const cy = py + TANK_SIZE / 2;
+        if (tank.dashCooldown > 0) {
+          // 剩余比例 × 360°，自 12 点方向顺时针。
+          this.drawDashRing(cx, cy, tank.dashCooldown / DASH_COOLDOWN_TICKS, COLOR_DASH_RING);
+        } else if (tank.dashReadyFlashTicks > 0) {
+          // 就绪：满圈黄色，每 DASH_READY_BLINK_TICKS 帧明灭一次（约闪三下后消失）。
+          const on =
+            Math.floor(tank.dashReadyFlashTicks / DASH_READY_BLINK_TICKS) % 2 === 0;
+          if (on) this.drawDashRing(cx, cy, 1, COLOR_DASH_READY);
+        }
+      }
 
       // 出生护盾：每 SHIELD_ANIM_TICKS 帧切换两帧流光，覆盖在坦克之上。
       if (tank.invulnTicks > 0) {
@@ -844,6 +901,34 @@ export class Renderer {
         drawTextOutlined(ctx, atlas, label, lx, ly, color);
       }
     }
+  }
+
+  // 冲刺技能的像素风圆环：以坦克中心为圆心、DASH_RING_RADIUS 为半径，
+  // 自 12 点方向（-90°）起顺时针画「ratio × 360°」的弧段。
+  // 刻意不用 ctx.arc（抗锯齿曲线不合 NES 观感）：沿弧等角采样、逐点画 1 逻辑像素的方点，
+  // 并先用黑色 3×3 垫底，保证在砖 / 钢 / 冰 / 树林任何地形上都读得出来。
+  private drawDashRing(cx: number, cy: number, ratio: number, color: string): void {
+    const { ctx } = this;
+    if (ratio <= 0) return;
+    const steps = Math.max(1, Math.round(DASH_RING_SAMPLES * Math.min(1, ratio)));
+    // 相邻采样点取整后可能落在同一像素，去重避免重复填充（也让垫底一次画完）。
+    const pts: Array<{ x: number; y: number }> = [];
+    const seen = new Set<number>();
+    for (let i = 0; i < steps; i++) {
+      const a = -Math.PI / 2 + (i / DASH_RING_SAMPLES) * Math.PI * 2;
+      const x = Math.round(cx + Math.cos(a) * DASH_RING_RADIUS);
+      const y = Math.round(cy + Math.sin(a) * DASH_RING_RADIUS);
+      const key = x * 4096 + y;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pts.push({ x, y });
+    }
+    ctx.fillStyle = COLOR_FIELD; // 黑色垫底（两趟绘制：垫底不会盖掉相邻的亮点）
+    for (const p of pts) {
+      ctx.fillRect((p.x - 1) * ART_SCALE, (p.y - 1) * ART_SCALE, 3 * ART_SCALE, 3 * ART_SCALE);
+    }
+    ctx.fillStyle = color;
+    for (const p of pts) ctx.fillRect(p.x * ART_SCALE, p.y * ART_SCALE, ART_SCALE, ART_SCALE);
   }
 
   // 智能坦克的高辨识度覆盖标记：青色四角瞄准框，轻微脉冲但不闪灭。
@@ -925,7 +1010,129 @@ export class Renderer {
     }
   }
 
+  // Boss 地雷（8×8）：未武装用银灯帧；武装后按 BOSS_MINE_BLINK_TICKS 周期在两帧间闪红。
+  // 绘于地形之上、坦克之下 —— 玩家能看清它躺在哪，但不会挡住自己的车。
+  private drawBossMines(state: GameState): void {
+    if (state.mines.length === 0) return;
+    const { ctx, atlas } = this;
+    for (const mine of state.mines) {
+      const armed = mine.armTicks <= 0;
+      const blink = Math.floor(state.tick / BOSS_MINE_BLINK_TICKS) % 2 === 0;
+      const frame = armed && blink ? atlas.bossMine[1] : atlas.bossMine[0];
+      drawTile(ctx, frame, snapArt(FIELD_X + mine.x), snapArt(FIELD_Y + mine.y));
+    }
+  }
+
+  // 迫击炮落点：16×16 的闪烁十字标记（外框 + 十字线），引信越短闪得越快 —— 一眼可辨“快炸了”。
+  private drawBossMortarMarks(state: GameState): void {
+    const boss = state.boss;
+    if (!boss || boss.dead || boss.mortarMarks.length === 0) return;
+    const { ctx } = this;
+    const size = BOSS_MORTAR_BLAST;
+    ctx.save();
+    for (const mark of boss.mortarMarks) {
+      // 引信过半后闪烁周期减半，形成“临爆加速”的节奏。
+      const period = mark.ticksLeft <= BOSS_MORTAR_MARK_BLINK_TICKS * 4
+        ? Math.max(1, Math.floor(BOSS_MORTAR_MARK_BLINK_TICKS / 2))
+        : BOSS_MORTAR_MARK_BLINK_TICKS;
+      const bright = Math.floor(mark.ticksLeft / period) % 2 === 0;
+      ctx.globalAlpha = bright ? 0.95 : 0.4;
+      ctx.fillStyle = COLOR_BOSS_MORTAR_MARK;
+      const x = (FIELD_X + mark.x) * ART_SCALE;
+      const y = (FIELD_Y + mark.y) * ART_SCALE;
+      const w = size * ART_SCALE;
+      const t = ART_SCALE; // 1 逻辑像素线宽
+      // 外框
+      ctx.fillRect(x, y, w, t);
+      ctx.fillRect(x, y + w - t, w, t);
+      ctx.fillRect(x, y, t, w);
+      ctx.fillRect(x + w - t, y, t, w);
+      // 十字线
+      ctx.fillRect(x + w / 2 - t / 2, y, t, w);
+      ctx.fillRect(x, y + w / 2 - t / 2, w, t);
+    }
+    ctx.restore();
+  }
+
+  // 蓄力冲撞预警：把整条冲撞路径（Boss 车体宽、直到战场边缘）画成闪烁的黄色警戒带。
+  // 冲锋相则在车体后方拖一条渐隐尾迹，表达“正在高速碾过来”。
+  private drawBossCharge(state: GameState): void {
+    const boss = state.boss;
+    if (!boss || boss.dead || boss.attack !== 'charge') return;
+    const { ctx } = this;
+    const size = boss.size;
+    // 路径矩形：从车体当前位置沿 chargeDir 一直延伸到战场边界。
+    let x = boss.x;
+    let y = boss.y;
+    let w = size;
+    let h = size;
+    switch (boss.chargeDir) {
+      case 'up':
+        y = 0;
+        h = boss.y + size;
+        break;
+      case 'down':
+        h = FIELD_HEIGHT - boss.y;
+        break;
+      case 'left':
+        x = 0;
+        w = boss.x + size;
+        break;
+      default:
+        w = FIELD_WIDTH - boss.x;
+    }
+    ctx.save();
+    if (boss.windupTicks > 0) {
+      const bright = Math.floor(boss.windupTicks / BOSS_CHARGE_BLINK_TICKS) % 2 === 0;
+      ctx.globalAlpha = bright ? 0.42 : 0.16;
+      ctx.fillStyle = COLOR_BOSS_CHARGE_WARN;
+      ctx.fillRect((FIELD_X + x) * ART_SCALE, (FIELD_Y + y) * ART_SCALE, w * ART_SCALE, h * ART_SCALE);
+    } else {
+      // 冲锋拖尾：车体正后方 32px，一段半透明的速度线。
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = COLOR_BOSS_CHARGE_WARN;
+      let tx = boss.x;
+      let ty = boss.y;
+      let tw = size;
+      let th = size;
+      if (boss.chargeDir === 'up') ty = boss.y + size;
+      else if (boss.chargeDir === 'down') ty = boss.y - size;
+      else if (boss.chargeDir === 'left') tx = boss.x + size;
+      else tx = boss.x - size;
+      if (boss.chargeDir === 'up' || boss.chargeDir === 'down') th = size;
+      else tw = size;
+      ctx.fillRect((FIELD_X + tx) * ART_SCALE, (FIELD_Y + ty) * ART_SCALE, tw * ART_SCALE, th * ART_SCALE);
+    }
+    ctx.restore();
+  }
+
+  // 磁力牵引：Boss 周围一圈紫色脉冲环（预警相收缩、牵引相扩张），一眼看出“正在被吸过去”。
+  private drawBossMagnet(state: GameState): void {
+    const boss = state.boss;
+    if (!boss || boss.dead || boss.attack !== 'magnet') return;
+    const { ctx } = this;
+    const cx = FIELD_X + boss.x + boss.size / 2;
+    const cy = FIELD_Y + boss.y + boss.size / 2;
+    const step = Math.floor(state.tick / BOSS_MAGNET_PULSE_TICKS) % 3;
+    const warn = boss.windupTicks > 0;
+    ctx.save();
+    ctx.strokeStyle = COLOR_BOSS_MAGNET;
+    ctx.lineWidth = 2 * ART_SCALE;
+    for (let ring = 0; ring < 3; ring++) {
+      // 预警相由外向内收缩（吸力将至），牵引相由内向外扩张（正在拉扯）。
+      const phase = (ring + step) % 3;
+      const radius = boss.size / 2 + 6 + (warn ? 2 - phase : phase) * 8;
+      ctx.globalAlpha = 0.55 - phase * 0.15;
+      ctx.beginPath();
+      ctx.arc(cx * ART_SCALE, cy * ART_SCALE, radius * ART_SCALE, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   // Boss 激光：前摇期为整列闪烁的半透明红瞄准线（不伤人），激活期为亮白芯 + 青边的粗光柱。
+  // 横扫激光（sweepLaser）复用同一套画法：laserCols 每帧被模拟层写成当前 sweepX，
+  // 预警期另在起始列两侧画一枚朝 sweepDir 的箭头，提示“往哪边扫”。
   private drawBossBeams(state: GameState): void {
     const boss = state.boss;
     if (!boss || boss.dead || boss.laserCols.length === 0) return;
@@ -949,6 +1156,18 @@ export class Renderer {
         const x = (FIELD_X + center - half) * ART_SCALE;
         ctx.fillRect(x, top, ART_SCALE, height);
         ctx.fillRect(x + (BOSS_LASER_WIDTH - 1) * ART_SCALE, top, ART_SCALE, height);
+      }
+      // 横扫预警：在战场中线高度画一排朝 sweepDir 的箭头（三段递减的横条 + 尖角）。
+      if (boss.sweepDir !== 0) {
+        const dir = boss.sweepDir;
+        const baseX = FIELD_X + boss.sweepX;
+        const baseY = FIELD_Y + FIELD_HEIGHT / 2;
+        ctx.globalAlpha = bright ? 1 : 0.45;
+        for (let i = 1; i <= 3; i++) {
+          const ax = (baseX + dir * (half + i * 10)) * ART_SCALE;
+          const w = (4 - i) * 2 * ART_SCALE;
+          ctx.fillRect(ax - (dir > 0 ? 0 : w), (baseY - 1) * ART_SCALE, w, 2 * ART_SCALE);
+        }
       }
       ctx.restore();
       return;

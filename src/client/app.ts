@@ -1389,6 +1389,7 @@ function mergeInput(a: InputState, b: InputState): InputState {
     fire: a.fire || b.fire,
     start: a.start || b.start,
     pause: a.pause || b.pause,
+    dash: a.dash || b.dash,
   };
 }
 
@@ -1400,7 +1401,8 @@ function sameInput(a: InputState, b: InputState): boolean {
     a.right === b.right &&
     a.fire === b.fire &&
     a.start === b.start &&
-    a.pause === b.pause
+    a.pause === b.pause &&
+    a.dash === b.dash // 必须比较：联机只在输入变化时发包，漏比会吞掉整次冲刺按键
   );
 }
 

@@ -20,6 +20,7 @@ import {
   ICE_SLIDE_TICKS,
   BOOTS_SPEED_MULT,
   ESCORT_SIZE,
+  DASH_SPEED,
 } from '../core/constants';
 import {
   Cell,
@@ -73,6 +74,11 @@ export interface TankState {
   hasBoat: boolean; // boat 船：true 时移动碰撞把水面视为可通行（子弹不受影响），死亡即失
   ghostTicks: number; // ghost 幽灵剩余帧：>0 时移动碰撞把砖块视为可通行（钢/水/鹰/边界照旧）
   drill: boolean; // drill 钻头：true 时该坦克**所有武器**的子弹可击穿钢块（鹰巢 / 边界仍不可穿），死亡即失
+  // ── 冲刺技能（玩家专属；敌人三项恒为 0 / 0 / false）──
+  dashTicks: number; // 冲刺剩余帧：>0 时每帧沿当前朝向以 DASH_SPEED 前进并忽略方向输入；撞墙 / 被夹紧（位置未变）立即清零提前结束
+  dashCooldown: number; // 冲刺冷却剩余帧：触发时装填 DASH_COOLDOWN_TICKS，逐帧递减（冻结期间照走），为 0 才能再次冲刺
+  dashReadyFlashTicks: number; // 冷却刚归零后的“就绪黄闪”剩余帧：只由渲染层读取，不影响模拟
+  prevDash: boolean; // 上一帧冲刺键状态（边沿触发用，同 prevFire）
 }
 
 // 判断一台坦克是否为玩家坦克。
@@ -114,6 +120,11 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     hasBoat: false,
     ghostTicks: 0,
     drill: false,
+    // 冲刺状态随 createPlayer 重建而清零（死亡复活 / 跨关重建即冷却归零）。
+    dashTicks: 0,
+    dashCooldown: 0,
+    dashReadyFlashTicks: 0,
+    prevDash: false,
   };
 }
 
@@ -176,6 +187,11 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     hasBoat: false,
     ghostTicks: 0,
     drill: false,
+    // 敌人不使用冲刺（这四项恒为初始值）。
+    dashTicks: 0,
+    dashCooldown: 0,
+    dashReadyFlashTicks: 0,
+    prevDash: false,
   };
 }
 
@@ -334,14 +350,17 @@ export function canTankOccupy(
 
 // 沿当前朝向尽量前进：先按地形紧贴边缘，再对其他坦克做实心夹紧（紧贴其外侧停下）。
 // others 为场上全部坦克（含自身与死者，内部跳过）；单轴移动，垂直轴坐标本帧不变。
+// stepOverride：本帧步长的绝对值覆盖（冲刺用；给定时不再叠加 boots 快靴倍率）。
 function moveTank(
   tank: TankState,
   level: LevelState,
   others: TankState[],
   blocker?: TankBlocker,
+  stepOverride?: number,
 ): void {
   // boots 快靴：本帧步长按倍率放大（不改 tank.speed 基值，到期自然恢复）。
-  const d = tank.speedBoostTicks > 0 ? tank.speed * BOOTS_SPEED_MULT : tank.speed;
+  const d =
+    stepOverride ?? (tank.speedBoostTicks > 0 ? tank.speed * BOOTS_SPEED_MULT : tank.speed);
   const solid = tankSolidTest(tank, level);
   const maxX = level.cols * SUBTILE - TANK_SIZE;
   const maxY = level.rows * SUBTILE - TANK_SIZE;
@@ -457,6 +476,21 @@ export function applyInput(
   tanks: TankState[],
   blocker?: TankBlocker,
 ): void {
+  // 冲刺中：忽略方向 / 转向输入，沿当前朝向以 DASH_SPEED（绝对速度，不叠加 boots）前进。
+  // 每帧步长 ≈ 2.67px 远小于车体，撞墙由既有二分紧贴逻辑兜住，不会穿透。
+  if (tank.dashTicks > 0) {
+    const px = tank.x;
+    const py = tank.y;
+    moveTank(tank, level, tanks, blocker, DASH_SPEED);
+    const blocked = tank.x === px && tank.y === py;
+    tank.dashTicks--;
+    if (blocked) tank.dashTicks = 0; // 撞墙 / 被夹紧即止（提前结束冲刺）
+    tank.moving = true; // 驱动履带动画
+    // 冲刺落在冰面照常装填滑行计时（与普通移动一致）。
+    tank.slideTicks = centerOnIce(tank, level) ? ICE_SLIDE_TICKS : 0;
+    return;
+  }
+
   const desired = desiredDir(input);
   if (desired === null) {
     // 无方向输入：若正处于冰面滑行中（slideTicks>0 且中心仍在冰面），沿当前朝向继续滑行一步；

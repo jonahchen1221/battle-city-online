@@ -4,6 +4,7 @@ import {
   PLAYER_LIVES_START_MP,
   STAGE_COUNT,
   STAGE_ENEMY_MIX,
+  bossOrdinalForStage,
   stageGroup,
   stageKind,
   SPAWN_FLASH_TICKS,
@@ -17,7 +18,7 @@ import { BulletState } from './bullet';
 import { MVP_POWERUP_KINDS, shuffledNeutralQueue } from './powerup';
 import type { PowerupState, PowerupKind } from './powerup';
 import { createBoss } from './boss';
-import type { BossState } from './boss';
+import type { BossState, MineState } from './boss';
 import {
   createEscortLevel,
   createEscortState,
@@ -48,6 +49,7 @@ export type Phase = 'stagestart' | 'playing' | 'gameover' | 'stageclear';
 // 游戏层绝不直接触碰音频。
 export type AudioEvent =
   | 'playerFire' // 玩家开火
+  | 'dash' // 玩家冲刺（技能触发）
   | 'brickHit' // 子弹击中砖块
   | 'steelHit' // 子弹击中钢块 / 鹰巢 / 边界
   | 'explosionSmall' // 子弹互相抵消的小火花
@@ -92,6 +94,10 @@ export interface GameState {
   // Boss 关（每组第 3 关：3 / 6 / … / 30）的 Boss 实体；普通关 / 护送关恒为 null。
   // 纯数据，随快照整体下发；过关条件与败因判定见 phase.ts。
   boss: BossState | null;
+  // Boss 沿途布下的地雷（仅第 6 位起的 Boss 会布雷）：普通关 / 护送关恒为空数组，
+  // 因此对既有关卡零影响。纯数据，随快照整体下发。
+  mines: MineState[];
+  nextMineId: number; // 地雷 id 分配器（联机插值按此稳定匹配）
   phase: Phase; // 当前阶段
   phaseTicks: number; // 进入当前阶段以来的帧数（stagestart 幕布计时 / gameover 滑入动画等据此推算）
   eagleDestroyed: boolean; // 鹰巢（基地）是否已被摧毁
@@ -234,7 +240,10 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     nextBulletId: 1,
     stage,
     // Boss 关：幕布结束后 Boss 即已在位（不走出生闪光）。普通关为 null。
-    boss: bossStage ? createBoss(playerCount) : null,
+    // 第 b 位 Boss（b = 组号）：血量 / 攻击间隔 / 技能池全部按序号取（见 constants）。
+    boss: bossStage ? createBoss(playerCount, bossOrdinalForStage(stage)) : null,
+    mines: [],
+    nextMineId: 1,
     phase: 'stagestart',
     phaseTicks: 0,
     eagleDestroyed: false,
@@ -323,8 +332,10 @@ export function nextStage(state: GameState): void {
         );
   state.escort = nextKind === 'escort' ? createEscortState(state.level, nextStageNum) : null;
   state.enemyQueue = createStageQueue(nextStageNum);
-  // Boss 关重建一台满血 Boss；普通关 / 护送关清空。
-  state.boss = nextKind === 'boss' ? createBoss(state.playerCount) : null;
+  // Boss 关重建一台满血 Boss（按新关号取序号）；普通关 / 护送关清空。地雷一律清场。
+  state.boss =
+    nextKind === 'boss' ? createBoss(state.playerCount, bossOrdinalForStage(nextStageNum)) : null;
+  state.mines = [];
 
   // 每关独立的战斗态一律清空。
   state.tanks = [];

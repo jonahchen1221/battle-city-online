@@ -12,6 +12,9 @@ import { DirOrder, DIRS, Dir } from './dir-order';
 const BTN_A = 0;
 const BTN_B = 1;
 const BTN_X = 2;
+// 肩键（LB / RB）：冲刺技能。任一按下即触发，左右手都顺手。
+const BTN_LB = 4;
+const BTN_RB = 5;
 const BTN_SELECT = 8;
 const BTN_START = 9;
 const BTN_DPAD: Record<number, Dir> = { 12: 'up', 13: 'down', 14: 'left', 15: 'right' };
@@ -47,6 +50,7 @@ export class GamepadInput {
   private prevButtons: boolean[] = [];
   private stickDir: Dir | null = null;
   private fire = false;
+  private dash = false;
   private start = false;
   private pause = false;
   // 累积的按下沿，takeMenuEdges() 取走后清空：消费方跳帧也不会漏掉一次按下。
@@ -101,8 +105,10 @@ export class GamepadInput {
       this.stickDir = dir;
     }
 
-    // ── 电平量（非边沿）：开火 / 开始 / 暂停 ──
+    // ── 电平量（非边沿）：开火 / 冲刺 / 开始 / 暂停 ──
+    // 冲刺的按下沿由游戏层（update.ts prevDash）判定，这里同开火一样只报电平。
     this.fire = FIRE_BUTTONS.some((i) => pressed(buttons[i]));
+    this.dash = pressed(buttons[BTN_LB]) || pressed(buttons[BTN_RB]);
     this.start = pressed(buttons[BTN_START]);
     this.pause = pressed(buttons[BTN_SELECT]);
   }
@@ -113,6 +119,7 @@ export class GamepadInput {
     const latest = this.dirs.latest();
     if (latest !== undefined) snap[latest] = true;
     snap.fire = this.fire;
+    snap.dash = this.dash;
     snap.start = this.start;
     snap.pause = this.pause;
     return snap;
@@ -145,6 +152,7 @@ export class GamepadInput {
     this.prevButtons = [];
     this.stickDir = null;
     this.fire = false;
+    this.dash = false;
     this.start = false;
     this.pause = false;
   }

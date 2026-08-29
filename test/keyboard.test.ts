@@ -71,7 +71,26 @@ test('reset releases directions and action keys after focus loss', () => {
     left: false,
     right: false,
     fire: false,
+    dash: false,
     start: false,
     pause: false,
   });
+});
+
+test('KeyC latches a dash tap for one frame and reports level state while held', () => {
+  const target = new FakeWindow();
+  const keyboard = new Keyboard(target as unknown as Window);
+
+  // 轻点（两次快照之间按下并松开）：动作键锁存，至少生效一帧。
+  target.emit('keydown', 'KeyC');
+  target.emit('keyup', 'KeyC');
+  assert.equal(keyboard.snapshot().dash, true);
+  assert.equal(keyboard.snapshot().dash, false);
+
+  // 按住：逐帧报电平量（按下沿由游戏层 prevDash 判定）。
+  target.emit('keydown', 'KeyC');
+  assert.equal(keyboard.snapshot().dash, true);
+  assert.equal(keyboard.snapshot().dash, true);
+  target.emit('keyup', 'KeyC');
+  assert.equal(keyboard.snapshot().dash, false);
 });
