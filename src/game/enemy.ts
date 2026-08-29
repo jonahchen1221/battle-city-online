@@ -12,6 +12,12 @@ import {
   FIELD_HEIGHT,
   TANK_SIZE,
   SUBTILE,
+  ENEMY_SPAWN_POINTS,
+  spawnClusterXs,
+  ENEMY_BERSERK_SPEED,
+  ENEMY_BERSERK_BULLET_SPEED,
+  ENEMY_BERSERK_FIRE_DENOM,
+  ENEMY_BERSERK_MAX_BULLETS,
 } from '../core/constants';
 import { LevelState } from './level';
 import {
@@ -22,7 +28,7 @@ import {
   isPlayerTank,
   canTankOccupy,
 } from './tank';
-import { hasLiveBullet, spawnBullet } from './bullet';
+import { hasLiveBullet, liveBulletCount, spawnBullet } from './bullet';
 import type { GameState } from './state';
 
 // 敌方 AI + 生成器。纯逻辑：一切随机取自 state.rng，可复现。
@@ -35,7 +41,15 @@ function driveInput(dir: Direction): InputState {
 }
 
 // 加权随机选向：偏向战场下方（基地一侧）。下 40% / 左 20% / 右 20% / 上 20%。
-function pickDirection(rng: Rng): Direction {
+// 狂暴时更执着压向基地：下 60% / 左 20% / 右 10% / 上 10%。
+function pickDirection(rng: Rng, berserk = false): Direction {
+  if (berserk) {
+    const r = rng.int(10);
+    if (r < 6) return 'down';
+    if (r < 8) return 'left';
+    if (r === 8) return 'right';
+    return 'up';
+  }
   const r = rng.int(5); // 0,1→下(40%)  2→左  3→右  4→上
   if (r < 2) return 'down';
   if (r === 2) return 'left';
@@ -82,24 +96,15 @@ function pickSpawnSpot(state: GameState, tank: TankState): { x: number; y: numbe
   return null;
 }
 
-// 生成器：计时归零且场上有空位、队列非空时，取队首出生（进入出生闪光）。
-// 出生点在上半场随机（见 pickSpawnSpot）；找不到可用落点则 SPAWN_RETRY_TICKS 后重试。
-// 所有敌军出生完毕后停止（胜负判定属后续任务）。
-function updateSpawner(state: GameState): void {
-  if (state.enemySpawnTimer > 0) state.enemySpawnTimer--;
-  if (state.enemyQueue.length === 0) return;
-  if (enemyCount(state) >= maxEnemiesOnField(state.playerCount)) return;
-  if (state.enemySpawnTimer > 0) return;
+// 候选落点是否被地形、在场坦克或出生闪光占用。
+function spawnBlocked(state: GameState, tank: TankState, x: number, y: number): boolean {
+  if (!canTankOccupy(tank, x, y, state.level, state.tanks)) return true;
+  return state.spawning.some(
+    (s) => Math.abs(s.tank.x - x) < TANK_SIZE && Math.abs(s.tank.y - y) < TANK_SIZE,
+  );
+}
 
-  // 先用队首种类探点（不出队）：探不到落点时队列原样保留。
-  const tank = createEnemy(state.enemyQueue[0], state.nextEnemyId, 0);
-  const spot = pickSpawnSpot(state, tank);
-  if (!spot) {
-    state.enemySpawnTimer = SPAWN_RETRY_TICKS;
-    return;
-  }
-  tank.x = spot.x;
-  tank.y = spot.y;
+function dequeueIntoFlash(state: GameState, tank: TankState): void {
   state.enemyQueue.shift();
   state.nextEnemyId++;
   // 出队计数（1 起）：第 4/11/18 台为“携带道具”者（红闪，死亡掉落）。按计数标记，不回看队列下标。
@@ -108,7 +113,66 @@ function updateSpawner(state: GameState): void {
     tank.carriesPowerup = true;
   }
   state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
-  state.enemySpawnTimer = ENEMY_SPAWN_INTERVAL_TICKS;
+}
+
+// 生成器：计时归零且场上有空位、队列非空时，四个出生点各齐射最多 5 台（进入出生闪光）。
+// 每点沿顶行横向铺开；首选格被占则退回上半场随机探点。全失败则 SPAWN_RETRY_TICKS 后重试。
+function updateSpawner(state: GameState): void {
+  if (state.enemySpawnTimer > 0) state.enemySpawnTimer--;
+  if (state.enemyQueue.length === 0) return;
+  if (enemyCount(state) >= maxEnemiesOnField(state.playerCount)) return;
+  if (state.enemySpawnTimer > 0) return;
+
+  let spawnedAny = false;
+  for (let spawnIndex = 0; spawnIndex < ENEMY_SPAWN_POINTS.length; spawnIndex++) {
+    const ys = ENEMY_SPAWN_POINTS[spawnIndex].y;
+    for (const x of spawnClusterXs(spawnIndex)) {
+      if (state.enemyQueue.length === 0) break;
+      if (enemyCount(state) >= maxEnemiesOnField(state.playerCount)) break;
+
+      const tank = createEnemy(state.enemyQueue[0], state.nextEnemyId, spawnIndex);
+      let spot: { x: number; y: number } | null = null;
+      if (!spawnBlocked(state, tank, x, ys)) {
+        spot = { x, y: ys };
+      } else {
+        spot = pickSpawnSpot(state, tank);
+      }
+      if (!spot) continue;
+
+      tank.x = spot.x;
+      tank.y = spot.y;
+      dequeueIntoFlash(state, tank);
+      spawnedAny = true;
+    }
+  }
+
+  state.enemySpawnTimer = spawnedAny ? ENEMY_SPAWN_INTERVAL_TICKS : SPAWN_RETRY_TICKS;
+}
+
+// 本关只剩最后一台敌军（队列已空，场上含闪光恰好 1 台）时进入狂暴。
+export function enrageLastEnemy(state: GameState): void {
+  if (state.enemyQueue.length > 0) return;
+  if (enemyCount(state) !== 1) return;
+
+  let last: TankState | null = null;
+  for (const t of state.tanks) {
+    if (t.alive && !isPlayerTank(t)) {
+      last = t;
+      break;
+    }
+  }
+  if (!last) {
+    for (const s of state.spawning) {
+      if (!isPlayerTank(s.tank)) {
+        last = s.tank;
+        break;
+      }
+    }
+  }
+  if (!last || last.berserk) return;
+  last.berserk = true;
+  last.speed = ENEMY_BERSERK_SPEED;
+  last.bulletSpeed = ENEMY_BERSERK_BULLET_SPEED;
 }
 
 // 推进出生闪光：计时归零的坦克实体化（加入 tanks，此后可碰撞/受控）。
@@ -144,18 +208,22 @@ function updateOneEnemy(tank: TankState, state: GameState, level: LevelState): v
 
   if (blocked) {
     // 撞墙/被坦克挡住：立即换向并沿新方向移动一次（上一步没动，不会双倍位移）。
-    const nd = pickDirection(state.rng);
+    const nd = pickDirection(state.rng, tank.berserk);
     tank.aiTicks = resetDecisionTimer(state.rng);
     applyInput(tank, driveInput(nd), level, state.tanks);
   } else if (tank.aiTicks <= 0) {
     // 定时器到点：仅转向（含吸附），下一帧起沿新方向行进。
-    const nd = pickDirection(state.rng);
+    const nd = pickDirection(state.rng, tank.berserk);
     tank.aiTicks = resetDecisionTimer(state.rng);
     turnTank(tank, nd, level, state.tanks);
   }
 
-  // 随机开火：每帧约 1/AI_FIRE_DENOM，且当前无在场子弹。
-  if (state.rng.int(AI_FIRE_DENOM) === 0 && !hasLiveBullet(state.bullets, tank.id)) {
+  // 随机开火：常规每帧约 1/AI_FIRE_DENOM 且场上无己弹；狂暴射速更高且最多两发在场。
+  const fireDenom = tank.berserk ? ENEMY_BERSERK_FIRE_DENOM : AI_FIRE_DENOM;
+  const canFire = tank.berserk
+    ? liveBulletCount(state.bullets, tank.id) < ENEMY_BERSERK_MAX_BULLETS
+    : !hasLiveBullet(state.bullets, tank.id);
+  if (state.rng.int(fireDenom) === 0 && canFire) {
     state.bullets.push(spawnBullet(tank, state.nextBulletId++));
   }
 }
@@ -179,4 +247,5 @@ export function updateEnemies(state: GameState, level: LevelState): void {
   }
 
   updateSpawner(state);
+  enrageLastEnemy(state);
 }

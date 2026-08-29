@@ -61,6 +61,7 @@ export interface TankState {
   invulnTicks: number; // 出生护盾剩余帧：>0 时敌弹穿过、不受伤（敌人恒为 0）
   level: number; // 玩家 star 等级 0..3（敌人恒为 0）：影响弹速 / 双弹 / 破钢；死亡 / 复活归 0
   carriesPowerup: boolean; // 是否为“携带道具”的敌军（第 4/11/18 台出队者）：红色闪烁，死亡掉落道具
+  berserk: boolean; // 本关最后一台敌军进入狂暴：加速 / 连射 / 红闪（见 enemy.ts enrageLastEnemy）
   slideTicks: number; // 冰面滑行剩余帧：在冰面上移动时装填为 ICE_SLIDE_TICKS，松开方向键后据此继续滑行
   freezeTicks: number; // 友军冻结剩余帧：被队友子弹击中后 >0，期间不能移动 / 开火（敌人恒为 0）
   weapon: WeaponKind; // 当前武器：初始 / 死亡复活均为 'cannon'，由武器道具替换（敌人恒为 'cannon'）
@@ -96,6 +97,7 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     invulnTicks: PLAYER_INVULN_TICKS,
     level: 0, // 复活即用 createPlayer 重建 → star 等级自然归 0
     carriesPowerup: false,
+    berserk: false,
     slideTicks: 0,
     freezeTicks: 0, // 复活即用 createPlayer 重建 → 冻结自然解除
     weapon: 'cannon', // 复活即用 createPlayer 重建 → 武器自然归经典炮
@@ -131,7 +133,8 @@ function enemyHp(kind: TankKind): number {
   return kind === 'armor' ? ARMOR_HP : ENEMY_HP_DEFAULT;
 }
 
-// 建立一台敌方坦克：出生于三个出生点之一（0=左 / 1=中 / 2=右），朝下。
+// 建立一台敌方坦克：出生于四个出生点之一（0=左 / 1=中左 / 2=中右 / 3=右），朝下。
+// 实际落点由出生器按该点齐射簇覆盖（见 enemy.ts updateSpawner）。
 export function createEnemy(kind: TankKind, id: number, spawnIndex: number): TankState {
   const p = ENEMY_SPAWN_POINTS[spawnIndex % ENEMY_SPAWN_POINTS.length];
   return {
@@ -151,6 +154,7 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     invulnTicks: 0, // 敌方无出生护盾
     level: 0, // 敌人不使用 star 等级
     carriesPowerup: false, // 由出生器按出队计数标记（见 enemy.ts updateSpawner）
+    berserk: false, // 本关最后一台由 enrageLastEnemy 标记
     slideTicks: 0,
     freezeTicks: 0, // 敌人不受友军冻结影响（敌军冻结由道具 state.enemyFreezeTicks 全局控制）
     weapon: 'cannon', // 敌人不使用武器系统，恒为经典炮

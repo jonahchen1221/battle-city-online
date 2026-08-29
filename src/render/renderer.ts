@@ -33,6 +33,7 @@ import {
   FRIENDLY_FREEZE_BLINK_TICKS,
   PAUSE_BLINK_TICKS,
   CARRIER_FLASH_TICKS,
+  BERSERK_FLASH_TICKS,
   POWERUP_BLINK_VISIBLE_TICKS,
   POWERUP_BLINK_CYCLE_TICKS,
   GHOST_RENDER_ALPHA,
@@ -497,8 +498,9 @@ export class Renderer {
     const { atlas } = this;
     if (tank.kind === 'player') return atlas.playerTank[tank.playerIndex];
 
-    // 携带道具敌军：每 CARRIER_FLASH_TICKS 帧在常态 / 红色变体间交替（红色相优先于装甲受损闪烁）。
-    const flashRed = tank.carriesPowerup && Math.floor(tick / CARRIER_FLASH_TICKS) % 2 === 1;
+    // 携带道具 / 狂暴敌军：红闪（狂暴闪得更快）。红色相优先于装甲受损闪烁。
+    const flashPeriod = tank.berserk ? BERSERK_FLASH_TICKS : CARRIER_FLASH_TICKS;
+    const flashRed = (tank.carriesPowerup || tank.berserk) && Math.floor(tick / flashPeriod) % 2 === 1;
     switch (tank.kind) {
       case 'fast':
         return flashRed ? atlas.enemyTankRed.fast : atlas.enemyTank.fast;

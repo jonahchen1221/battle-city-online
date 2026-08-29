@@ -95,13 +95,16 @@ export const ARMOR_HP = 4;
 // 敌弹速度：威力坦克的子弹更快，其余与玩家一致。
 export const ENEMY_BULLET_SPEED_POWER = 3;
 export const ENEMY_BULLET_SPEED_DEFAULT = 2;
-// 出生点（战场相对坐标，16×16 盒左上角）：顶行四点 左 / 中左 / 中右 / 右，出生朝下，按序轮转。
+// 出生点（战场相对坐标，16×16 盒左上角）：顶行四点 左 / 中左 / 中右 / 右，出生朝下。
+// 每点一次齐射 ENEMIES_PER_SPAWN_POINT 台，沿顶行按点横向铺开（互不重叠，见 spawnClusterXs）。
 export const ENEMY_SPAWN_POINTS: ReadonlyArray<{ x: number; y: number }> = [
   { x: 0, y: 0 }, // 左
   { x: 104, y: 0 }, // 中左
   { x: 200, y: 0 }, // 中右
   { x: 304, y: 0 }, // 右（右缘：304 + 16 = 320 = FIELD_WIDTH）
 ];
+// 每个出生点一次齐射的敌军数。4 点 × 5 = 20，与 STAGE_ENEMY_TOTAL 对齐。
+export const ENEMIES_PER_SPAWN_POINT = 5;
 // 出生闪光（星形）持续帧数，闪光结束后坦克才实体化（可碰撞）。
 export const SPAWN_FLASH_TICKS = 60;
 // 出生星形动画：4 帧，每约 8 帧切换一帧。
@@ -151,12 +154,16 @@ export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; cou
     { kind: 'armor', count: 4 },
   ],
 ];
-// 同屏敌军上限的基数与每多一名玩家的增量。
-export const MAX_ENEMIES_BASE = 4;
-export const MAX_ENEMIES_PER_EXTRA_PLAYER = 2;
-// 同屏敌军上限随人数放大：4 / 6 / 8 / 10（1–4 人）。
-export function maxEnemiesOnField(playerCount: number): number {
-  return MAX_ENEMIES_BASE + MAX_ENEMIES_PER_EXTRA_PLAYER * (playerCount - 1);
+// 同屏敌军上限：每出生点齐射铺满顶行，上限即 4 点 × 每点台数（与人数无关）。
+export function maxEnemiesOnField(_playerCount: number): number {
+  return ENEMY_SPAWN_POINTS.length * ENEMIES_PER_SPAWN_POINT;
+}
+// 某出生点齐射时的横向落点（顶行 y=0，按点从左到右铺 5 台，互不重叠）。
+export function spawnClusterXs(spawnIndex: number): readonly number[] {
+  const start = (spawnIndex % ENEMY_SPAWN_POINTS.length) * TANK_SIZE * ENEMIES_PER_SPAWN_POINT;
+  const xs: number[] = [];
+  for (let i = 0; i < ENEMIES_PER_SPAWN_POINT; i++) xs.push(start + i * TANK_SIZE);
+  return xs;
 }
 // 出生间隔（帧）：计时归零且场上有空位时出生新坦克。
 export const ENEMY_SPAWN_INTERVAL_TICKS = 190;
@@ -220,6 +227,13 @@ export const PAUSE_BLINK_TICKS = 32;
 export const CARRIER_QUEUE_POSITIONS: ReadonlyArray<number> = [4, 11, 18];
 // 携带道具敌军红色闪烁周期（帧）：每约 8 帧在常态 / 红色变体间切换。
 export const CARRIER_FLASH_TICKS = 8;
+// ── 狂暴（本关最后一台敌军）──
+// 队列已空且场上（含闪光）仅剩 1 台时触发：加速、加快射速、红闪。
+export const ENEMY_BERSERK_SPEED = 1.5;
+export const ENEMY_BERSERK_BULLET_SPEED = 4;
+export const ENEMY_BERSERK_FIRE_DENOM = 10;
+export const ENEMY_BERSERK_MAX_BULLETS = 2;
+export const BERSERK_FLASH_TICKS = 4;
 // 拾取任一道具的全局加分。
 export const POWERUP_SCORE = 500;
 // timer 道具：敌军冻结帧数（期间敌人既不移动也不开火，履带动画亦冻结）。

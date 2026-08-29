@@ -11,7 +11,7 @@ import {
   bulletHitsTank,
   makeSmallExplosion,
 } from './bullet';
-import { updateEnemies } from './enemy';
+import { enrageLastEnemy, updateEnemies } from './enemy';
 import { updatePhase, resolveEagleHit, restartGame } from './phase';
 import {
   tryPickupPowerup,
@@ -129,6 +129,8 @@ export function update(state: GameState, inputs: InputState[]): void {
   // 清理死亡子弹（其主人即可再次开火）与死亡坦克。
   state.bullets = state.bullets.filter((b) => b.alive);
   state.tanks = state.tanks.filter((t) => t.alive);
+  // 击杀结算后立刻检查：本关最后一台敌军当场进入狂暴（不等下一帧 AI）。
+  enrageLastEnemy(state);
 
   // 推进爆炸计时，移除播放完毕的特效。
   advanceExplosions(state);
