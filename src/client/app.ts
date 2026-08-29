@@ -11,6 +11,7 @@ import type { LevelState } from '../game/level';
 import { Renderer } from '../render/renderer';
 import { Sfx } from '../audio/sfx';
 import { Keyboard } from '../input/keyboard';
+import { GamepadInput, MenuEdges } from '../input/gamepad';
 import { InputState, emptyInput } from '../core/types';
 import { createRng, Rng } from '../core/rng';
 import { GameEvent } from '../game/state';
@@ -100,6 +101,7 @@ export class App {
   private ctx: CanvasRenderingContext2D;
   private renderer: Renderer;
   private keyboard: Keyboard;
+  private gamepad: GamepadInput;
   private sfx: Sfx;
 
   private screen: ScreenName = 'title';
@@ -134,13 +136,20 @@ export class App {
   private lastSendTime = 0;
   private disconnected = false;
 
-  constructor(canvas: HTMLCanvasElement, renderer: Renderer, keyboard: Keyboard, sfx: Sfx) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    renderer: Renderer,
+    keyboard: Keyboard,
+    gamepad: GamepadInput,
+    sfx: Sfx,
+  ) {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D context unavailable');
     // 与 Renderer 复用同一 2D 上下文（imageSmoothing 已由 Renderer 关闭）。
     this.ctx = ctx;
     this.renderer = renderer;
     this.keyboard = keyboard;
+    this.gamepad = gamepad;
     this.sfx = sfx;
     this.localState = createGameState(20260708, 1);
 
@@ -198,14 +207,52 @@ export class App {
   // ───────────────────────── 循环钩子 ─────────────────────────
 
   tick(): void {
+    // 手柄没有事件，只能逐帧轮询；每帧无条件取走按下沿，当前画面用不到的直接丢弃，
+    // 这样切画面时不会重放上一个画面残留的按下。
+    this.gamepad.poll();
+    const pad = this.gamepad.takeMenuEdges();
+
     if (this.screen === 'localGame') {
-      update(this.localState, [this.keyboard.snapshot()]);
+      update(this.localState, [this.playerInput()]);
       for (const e of this.localState.events) this.sfx.play(e);
       this.localState.events.length = 0;
     } else if (this.screen === 'netGame') {
-      this.tickNet();
+      // 断线覆盖层：键盘走 Enter，手柄走 A / Start。
+      if (this.disconnected) {
+        if (pad.confirm || pad.start) this.resetNetToTitle();
+      } else {
+        this.tickNet();
+      }
+    } else {
+      // 菜单类画面键盘侧为事件驱动，这里只补手柄的按下沿。
+      this.handleMenuPad(pad);
     }
-    // 菜单类画面为事件驱动，逻辑帧无需处理。
+  }
+
+  // 键盘与手柄按位或合并：两者可随时混用，任一按下即生效。
+  private playerInput(): InputState {
+    return mergeInput(this.keyboard.snapshot(), this.gamepad.snapshot());
+  }
+
+  // 手柄菜单操作：与键盘处理走同一批动作方法，避免逻辑分叉。
+  private handleMenuPad(pad: MenuEdges): void {
+    switch (this.screen) {
+      case 'title':
+        if (pad.up) this.moveTitleSel(-1);
+        if (pad.down) this.moveTitleSel(1);
+        if (pad.confirm || pad.start) this.confirmTitle();
+        break;
+      case 'joinCode':
+        // 手柄不做文字输入：房间码仍只能键盘敲或粘贴。
+        if (pad.back) this.cancelJoinCode();
+        else if (pad.confirm || pad.start) this.submitJoinCode();
+        break;
+      case 'lobby':
+        if (pad.back) this.leaveLobby();
+        else if (pad.confirm) this.toggleReady();
+        else if (pad.start) this.hostStartGame();
+        break;
+    }
   }
 
   render(alpha: number): void {
@@ -234,7 +281,7 @@ export class App {
     if (this.disconnected) return;
     // 客户端不做权威模拟：本帧只负责把输入发给服务器（变化即发 + 心跳保活）。
     // 渲染完全由抖动缓冲插值驱动（见 buildNetRenderState）。
-    const input = this.keyboard.snapshot();
+    const input = this.playerInput();
     const now = performance.now();
     const changed = !sameInput(input, this.lastSentInput);
     if (changed || now - this.lastSendTime >= INPUT_HEARTBEAT_MS) {
@@ -422,18 +469,23 @@ export class App {
       case 'ArrowUp':
       case 'KeyW':
         e.preventDefault();
-        this.titleSel = (this.titleSel + TITLE_ITEMS.length - 1) % TITLE_ITEMS.length;
+        this.moveTitleSel(-1);
         break;
       case 'ArrowDown':
       case 'KeyS':
         e.preventDefault();
-        this.titleSel = (this.titleSel + 1) % TITLE_ITEMS.length;
+        this.moveTitleSel(1);
         break;
       case 'Enter':
         e.preventDefault();
         this.confirmTitle();
         break;
     }
+  }
+
+  // 菜单选择上下移动（循环）。delta 为 -1 / +1。
+  private moveTitleSel(delta: number): void {
+    this.titleSel = (this.titleSel + TITLE_ITEMS.length + delta) % TITLE_ITEMS.length;
   }
 
   private confirmTitle(): void {
@@ -459,11 +511,7 @@ export class App {
   private onJoinCodeKey(e: KeyboardEvent): void {
     if (e.code === 'Escape') {
       e.preventDefault();
-      this.net.close();
-      this.pendingAction = null;
-      this.statusMsg = '';
-      this.statusError = '';
-      this.screen = 'title';
+      this.cancelJoinCode();
       return;
     }
     if (e.code === 'Backspace') {
@@ -474,14 +522,7 @@ export class App {
     }
     if (e.code === 'Enter') {
       e.preventDefault();
-      if (this.codeBuffer.length === ROOM_CODE_LENGTH) {
-        this.pendingAction = { t: 'join', code: this.codeBuffer };
-        this.statusMsg = 'CONNECTING';
-        this.statusError = '';
-        this.net.connect();
-      } else {
-        this.statusError = `NEED ${ROOM_CODE_LENGTH} LETTERS`;
-      }
+      this.submitJoinCode();
       return;
     }
     // 字母键：A-Z 直接录入（code 形如 'KeyA'）。
@@ -490,6 +531,25 @@ export class App {
       e.preventDefault();
       this.codeBuffer += m[1];
       this.statusError = '';
+    }
+  }
+
+  private cancelJoinCode(): void {
+    this.net.close();
+    this.pendingAction = null;
+    this.statusMsg = '';
+    this.statusError = '';
+    this.screen = 'title';
+  }
+
+  private submitJoinCode(): void {
+    if (this.codeBuffer.length === ROOM_CODE_LENGTH) {
+      this.pendingAction = { t: 'join', code: this.codeBuffer };
+      this.statusMsg = 'CONNECTING';
+      this.statusError = '';
+      this.net.connect();
+    } else {
+      this.statusError = `NEED ${ROOM_CODE_LENGTH} LETTERS`;
     }
   }
 
@@ -506,23 +566,17 @@ export class App {
   private onLobbyKey(e: KeyboardEvent): void {
     if (e.code === 'Escape') {
       e.preventDefault();
-      this.net.send({ t: 'leave' });
-      this.resetNetToTitle();
+      this.leaveLobby();
       return;
     }
     if (e.code === 'Enter') {
       e.preventDefault();
-      const me = this.players.find((p) => p.playerIndex === this.myPlayerIndex);
-      const nextReady = !(me?.ready ?? false);
-      this.net.send({ t: 'ready', ready: nextReady });
+      this.toggleReady();
       return;
     }
     if (e.code === 'KeyS') {
       e.preventDefault();
-      // 房主（0 号位）在全员 ready 时按 S 开局。
-      if (this.isHost() && this.allReady()) {
-        this.net.send({ t: 'start' });
-      }
+      this.hostStartGame();
       return;
     }
     if (e.code === 'KeyC') {
@@ -530,6 +584,22 @@ export class App {
       this.copyRoomLink();
       return;
     }
+  }
+
+  private leaveLobby(): void {
+    this.net.send({ t: 'leave' });
+    this.resetNetToTitle();
+  }
+
+  private toggleReady(): void {
+    const me = this.players.find((p) => p.playerIndex === this.myPlayerIndex);
+    const nextReady = !(me?.ready ?? false);
+    this.net.send({ t: 'ready', ready: nextReady });
+  }
+
+  // 房主（0 号位）在全员 ready 时开局；非房主 / 未齐时按键无效。
+  private hostStartGame(): void {
+    if (this.isHost() && this.allReady()) this.net.send({ t: 'start' });
   }
 
   // 把完整分享链接（含协议）写进剪贴板。局域网 http 非安全上下文没有 navigator.clipboard，
@@ -843,6 +913,20 @@ function copyViaTextarea(text: string): boolean {
   }
   document.body.removeChild(ta);
   return ok;
+}
+
+// 多输入设备合并：逐字段按位或。方向字段各自只有一个为真（各设备内部已折成唯一方向），
+// 两设备同时推不同方向时会同时为真，交由游戏层的固定优先级裁决。
+function mergeInput(a: InputState, b: InputState): InputState {
+  return {
+    up: a.up || b.up,
+    down: a.down || b.down,
+    left: a.left || b.left,
+    right: a.right || b.right,
+    fire: a.fire || b.fire,
+    start: a.start || b.start,
+    pause: a.pause || b.pause,
+  };
 }
 
 function sameInput(a: InputState, b: InputState): boolean {

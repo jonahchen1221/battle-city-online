@@ -1,6 +1,7 @@
 import { ART_SCALE, NATIVE_WIDTH, NATIVE_HEIGHT } from './core/constants';
 import { startLoop } from './core/loop';
 import { Keyboard } from './input/keyboard';
+import { GamepadInput } from './input/gamepad';
 import { resetGameState } from './game/state';
 import { update } from './game/update';
 import { Renderer } from './render/renderer';
@@ -28,6 +29,7 @@ function fitCanvasToViewport(): void {
 }
 
 const keyboard = new Keyboard();
+const gamepad = new GamepadInput();
 const renderer = new Renderer(canvas);
 fitCanvasToViewport();
 window.addEventListener('resize', fitCanvasToViewport);
@@ -35,9 +37,11 @@ window.addEventListener('resize', fitCanvasToViewport);
 // 音频层（游戏层之外的唯一音频触点）：首次用户手势时解锁 AudioContext。
 const sfx = new Sfx();
 window.addEventListener('keydown', () => sfx.unlock());
+// 手柄按键不算 AudioContext 认可的用户手势，纯手柄玩家需要一次点击/触摸来解锁音频。
+window.addEventListener('pointerdown', () => sfx.unlock());
 
 // 应用状态机：标题 / 房间码 / 大厅 / 本地游戏 / 联机游戏。循环钩子按当前画面分发。
-const app = new App(canvas, renderer, keyboard, sfx);
+const app = new App(canvas, renderer, keyboard, gamepad, sfx);
 
 // 开发模式调试钩子：本地游戏路径沿用原 __state / __step / __newGame（作用于本地局）；
 // 追加 __screen（当前画面名）与 __net（联机客户端）供集成测试。生产构建剔除。

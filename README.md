@@ -13,6 +13,8 @@ npm run lan
 
 键位：方向键 / WASD 移动，Space 或 J 开火，P 暂停，Enter 确认/准备。
 
+手柄：十字键 / 左摇杆移动，A/B/X 开火，Start 开始，Select 暂停；菜单里 A 确认 / B 返回（房间码仍需键盘输入或粘贴）。
+
 ## 开发
 
 ```bash
