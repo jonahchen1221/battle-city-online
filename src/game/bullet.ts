@@ -551,7 +551,8 @@ export function resolveBulletBullet(
   bullets: BulletState[],
   explosions: ExplosionState[],
   events: GameEvent[],
-): void {
+): Set<number> {
+  const interceptedEnemyOwners = new Set<number>();
   for (let i = 0; i < bullets.length; i++) {
     const a = bullets[i];
     if (!a.alive) continue;
@@ -564,6 +565,9 @@ export function resolveBulletBullet(
       }
       const collisionTime = sweptBulletCollisionTime(a, b);
       if (collisionTime === null) continue;
+      if (a.fromEnemy !== b.fromEnemy) {
+        interceptedEnemyOwners.add(a.fromEnemy ? a.ownerId : b.ownerId);
+      }
       a.alive = false;
       b.alive = false;
       const ax = a.prevX + (a.x - a.prevX) * collisionTime;
@@ -577,6 +581,7 @@ export function resolveBulletBullet(
       break;
     }
   }
+  return interceptedEnemyOwners;
 }
 
 // 子弹 vs 坦克命中判定（不含伤害结算）：

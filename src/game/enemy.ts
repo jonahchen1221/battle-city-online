@@ -516,7 +516,10 @@ function smartDodgeDirection(
       (candidate.hitTick === best.hitTick && candidate.distance > best.distance)
     ) best = candidate;
   }
-  return best && best.hitTick > threat.hitTick ? best.dir : null;
+  // 只晚一两帧被击中不算有效闪避：至少要换来一个完整机动窗口，否则留在原地反击。
+  return best && best.hitTick >= threat.hitTick + SMART_AI_DODGE_COMMIT_TICKS
+    ? best.dir
+    : null;
 }
 
 // A* 把其他坦克、Boss 伪坦克与护送车作为本次规划的动态实心占位。追踪目标玩家本身除外，

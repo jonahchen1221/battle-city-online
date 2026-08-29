@@ -170,6 +170,8 @@ export const SMART_AI_STUCK_TICKS = 12;
 export const SMART_AI_ESCAPE_TICKS = 24;
 // 智能坦克的最低射击间隔；避免炮弹在近距离立刻消失时逐帧重新开火。
 export const SMART_AI_FIRE_COOLDOWN_TICKS = 20;
+// 智能坦克炮弹与玩家弹对消后只保留一帧装填；下一逻辑帧即可继续反制连续射击。
+export const SMART_AI_INTERCEPT_RELOAD_TICKS = 1;
 // A* 中进入含砖位置的代价：优先选择短绕路，无路可绕时仍会主动射穿砖墙。
 export const SMART_AI_BRICK_COST = 6;
 // 智能坦克预判玩家弹道的时间窗；36 帧足以让基础速度的智能坦克横移出一条 4px 弹道。

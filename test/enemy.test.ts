@@ -391,6 +391,37 @@ test('smart enemy keeps a minimum cooldown after its previous bullet disappears'
   assert.equal(state.bullets[0].ownerId, smart.id);
 });
 
+test('smart enemy can sustain a close-range duel after its shots intercept player fire', () => {
+  const state = createGameState(124, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  const level = createEmptyLevel();
+  // 把智能坦克夹在一格宽的射击巷中：这里没有安全侧移，只能正面对消玩家炮弹。
+  for (const row of [10, 11]) {
+    setCell(level, 9, row, Cell.STEEL);
+    setCell(level, 12, row, Cell.STEEL);
+  }
+  Object.assign(player, { x: 80, y: 120, dir: 'up' as const, invulnTicks: 0 });
+  Object.assign(smart, { x: 80, y: 80, dir: 'down' as const, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = level;
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  const heldFire = { ...emptyInput(), fire: true };
+
+  for (let tick = 0; tick < 40; tick++) update(state, [heldFire]);
+
+  assert.equal(smart.alive, true, 'smart tank should keep parrying instead of dying during reload');
+  assert.ok(
+    state.nextBulletId >= 12,
+    `expected repeated counter-fire after interceptions, nextBulletId=${state.nextBulletId}`,
+  );
+
+  // 玩家停止补射后，智能坦克应把下一发反击送到目标，而不是仍卡在旧的 20 帧冷却里。
+  for (let tick = 0; tick < 20 && player.alive; tick++) update(state, [emptyInput()]);
+  assert.equal(player.alive, false);
+});
 test('smart enemy detours toward an eligible nearby powerup', () => {
   const state = createGameState(42, 1);
   const player = state.tanks[0];

@@ -32,6 +32,7 @@ import {
   DASH_TICKS,
   DASH_COOLDOWN_TICKS,
   DASH_READY_FLASH_TICKS,
+  SMART_AI_INTERCEPT_RELOAD_TICKS,
 } from '../core/constants';
 
 // 每逻辑帧调用一次。纯函数式推进：只依赖 state 与 inputs，
@@ -142,7 +143,27 @@ export function update(
   advanceBullets(level, state.bullets, state.explosions, state.events);
 
   // 战斗结算：子弹互撞相消、子弹命中鹰巢、子弹命中 Boss、子弹命中坦克。
-  resolveBulletBullet(state.bullets, state.explosions, state.events);
+  const interceptedEnemyOwners = resolveBulletBullet(
+    state.bullets,
+    state.explosions,
+    state.events,
+  );
+  // 近距离对射时，普通 20 帧冷却会让智能坦克成功拦下一发后必吃玩家的下一发。
+  // 对消只缩短智能坦克的装填，不影响传统敌军，也不凭空增加同时在场的弹量。
+  if (interceptedEnemyOwners.size > 0) {
+    for (const tank of state.tanks) {
+      if (
+        tank.alive &&
+        tank.kind === 'smart' &&
+        interceptedEnemyOwners.has(tank.id)
+      ) {
+        tank.fireCooldown = Math.min(
+          tank.fireCooldown,
+          SMART_AI_INTERCEPT_RELOAD_TICKS,
+        );
+      }
+    }
+  }
   resolveEagleHit(state);
   resolveBulletBoss(state);
   // Boss 地雷（仅第 6 位起的 Boss 会布雷）：武装 / 触雷 / 被子弹引爆 / 到期自爆。
