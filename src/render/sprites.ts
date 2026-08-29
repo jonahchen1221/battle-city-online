@@ -423,6 +423,35 @@ function tankPlate(
   }
 }
 
+// 玩家专属圆形炮塔盖：用 2px 黑色阶梯边缘包住圆面，并沿用左上高光 / 右下阴影。
+// 圆形只用于上层炮塔，底盘仍保留箭头形前甲，因此缩到 1× 游戏尺寸时仍能同时读出阵营与朝向。
+function tankRoundPlate(g: TankGrid, cx: number, cy: number, radius: number): void {
+  const innerRadius = radius - 2;
+  const x0 = Math.max(0, Math.floor(cx - radius));
+  const x1 = Math.min(31, Math.ceil(cx + radius));
+  const y0 = Math.max(0, Math.floor(cy - radius));
+  const y1 = Math.min(31, Math.ceil(cy + radius));
+
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const distanceSq = dx * dx + dy * dy;
+      if (distanceSq > radius * radius) continue;
+
+      let ch = 'O';
+      if (distanceSq <= innerRadius * innerRadius) {
+        if (dy <= -3) ch = 'L';
+        else if (dx <= -3) ch = 'S';
+        else if (dy >= 3) ch = 'D';
+        else if (dx >= 3) ch = 'Z';
+        else ch = 'H';
+      }
+      g[y][x] = ch;
+    }
+  }
+}
+
 // 外轮廓保持纯黑；完全包在车体内部的粗黑线改成阵营对应的最深色。
 // 这样炮塔与底盘连成实心装甲，不会在亮色地形上被误读成透明空洞。
 function shadeTankInterior(g: TankGrid): void {
@@ -457,7 +486,8 @@ function makeTankTemplate(kind: TankSilhouette): string[] {
     // 玩家独有的箭头形前翼，形成明显的“向前”轮廓。
     tankRect(g, 7, 12, 9, 18, 'H');
     tankRect(g, 22, 12, 24, 18, 'H');
-    tankPlate(g, 10, 8, 21, 21, 2);
+    // 圆形炮塔盖是全体玩家共享的阵营特征；敌军炮塔统一保持方正 / 棱角造型。
+    tankRoundPlate(g, 15.5, 14.5, 7);
     // 菱形队徽：亮色中心 + 暗色下尖。
     g[13][15] = 'L'; g[13][16] = 'L';
     g[14][14] = 'L'; g[14][17] = 'S';
@@ -491,7 +521,8 @@ function makeTankTemplate(kind: TankSilhouette): string[] {
     tankRect(g, 7, 14, 9, 19, 'L');
     tankRect(g, 22, 13, 25, 20, 'O');
     tankRect(g, 22, 14, 24, 19, 'Z');
-    tankRect(g, 13, 13, 18, 16, 'L');
+    // 绿色只留在中央能量芯，车体其余部分统一使用敌军冷灰钢材。
+    tankRect(g, 13, 13, 18, 16, '@');
   } else if (kind === 'smart') {
     tankTrack(g, 3, 9, 8, 29);
     tankTrack(g, 22, 28, 8, 29);
@@ -503,8 +534,9 @@ function makeTankTemplate(kind: TankSilhouette): string[] {
     tankRect(g, 7, 15, 10, 19, 'S');
     tankRect(g, 21, 14, 25, 20, 'O');
     tankRect(g, 21, 15, 24, 19, 'Z');
-    tankRect(g, 13, 12, 14, 14, 'L');
-    tankRect(g, 17, 12, 18, 14, 'L');
+    // 青色只留在成对传感器眼与炮管芯，避免整车与 P3 青色玩家混淆。
+    tankRect(g, 13, 12, 14, 14, '?');
+    tankRect(g, 17, 12, 18, 14, '?');
     tankRect(g, 14, 18, 17, 19, 'B');
   } else {
     tankTrack(g, 0, 8, 6, 31);
@@ -659,18 +691,19 @@ const MAP_PLAYER3: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'K', S: 'J', Z: 'P', 
 const MAP_PLAYER4: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'W', S: 'V', Z: 'X', L: 'U', D: 'F', O: 'e', K: 'F', B: 'e', R: 'U' };
 // 按 playerIndex 索引的四套玩家配色。
 const MAP_PLAYERS: ColorMap[] = [MAP_PLAYER1, MAP_PLAYER2, MAP_PLAYER3, MAP_PLAYER4];
-// 基础型：银灰车体（高光 c / 过渡 s/v / 主体 b / 阴影 a），炮管浅灰（亮，黑底可见）。
-const MAP_BASIC: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
-// 威力型：银车体 + 绿色高光点缀（L→绿 / 过渡 S→亮绿），炮管仍为亮色。
-const MAP_POWER: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 'j', Z: 'v', L: 'G', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
-// 智能型：高亮青色计算核心 + 白色传感器，与银色敌军和 P3 蓝色坦克一眼区分。
-const MAP_SMART: ColorMap = { T: 'c', t: 'a', E: 'e', H: '8', S: '7', Z: '9', L: '6', D: '9', O: 'e', K: '9', B: 'e', R: '7' };
-// 装甲型（常态）：与基础同为银色，靠更厚履带区分。
-const MAP_ARMOR: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
+// 全体普通敌军共用冷灰钢材；类型差异主要由剪影表达，彩色仅作为小面积功能核心。
+const MAP_ENEMY_STEEL: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
+const MAP_BASIC: ColorMap = MAP_ENEMY_STEEL;
+// 威力型：仅中央能量芯保留绿色。
+const MAP_POWER: ColorMap = { ...MAP_ENEMY_STEEL, '@': 'G' };
+// 智能型：仅传感器眼与炮管芯保留霓虹青；车体与其他敌军使用同一钢材。
+const MAP_SMART: ColorMap = { ...MAP_ENEMY_STEEL, '?': '7', R: '7' };
+// 装甲型（常态）：靠更厚履带和双层堡垒剪影区分。
+const MAP_ARMOR: ColorMap = MAP_ENEMY_STEEL;
 // 装甲型（白闪）：受损时交替使用的高亮白色变体（履带 w/c、分隔灰，车体近全白）。
 const MAP_ARMOR_FLASH: ColorMap = { T: 'w', t: 'c', E: 'b', H: 'w', S: 'w', Z: 'c', L: 'w', D: 'c', O: 'e', K: 'b', B: 'e', R: 'w' };
 // 携带道具敌军红闪变体：红色车体家族（高光 1 / 亮过渡 2 / 主体 3 / 暗过渡 4 / 阴影 5），履带 c/a，炮管亮红。
-const MAP_ENEMY_RED: ColorMap = { T: 'c', t: 'a', E: 'e', H: '3', S: '2', Z: '4', L: '1', D: '5', O: 'e', K: '5', B: 'e', R: '1' };
+const MAP_ENEMY_RED: ColorMap = { T: 'c', t: 'a', E: 'e', H: '3', S: '2', Z: '4', L: '1', D: '5', O: 'e', K: '5', B: 'e', R: '1', '@': '1', '?': '1' };
 // Boss 阶段 1：钢蓝重甲（主体 P 暗蓝 / 高光 J / 阴影 Q），炮管与能量核心亮青 I。
 const MAP_BOSS_P1: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'P', S: 'K', Z: 'Q', L: 'J', D: 'Q', O: 'e', K: 'Q', B: 'e', R: 'I' };
 // Boss 阶段 2：血红暴走（沿用携带者红色家族），能量核心转为高热黄 Y。
