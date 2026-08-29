@@ -437,13 +437,14 @@ export class Renderer {
     drawTextOutlined(ctx, atlas, hint, cx - Math.round(textWidth(hint) / 2), cy + 32, COLOR_STAGE_CLEAR);
   }
 
-  // 出生闪光星：坦克实体化前在出生点循环播放 4 帧星形。
+  // 出生闪光星：坦克实体化前循环播放 4 帧；智能坦克使用专属青蓝动画。
   private drawSpawnStars(state: GameState): void {
     const { ctx, atlas } = this;
     for (const sp of state.spawning) {
       const elapsed = SPAWN_FLASH_TICKS - sp.ticksLeft;
       const frame = Math.floor(elapsed / SPAWN_STAR_ANIM_TICKS) % 4;
-      drawTile(ctx, atlas.spawnStar[frame], snapArt(FIELD_X + sp.tank.x), snapArt(FIELD_Y + sp.tank.y));
+      const frames = sp.tank.kind === 'smart' ? atlas.spawnStarSmart : atlas.spawnStar;
+      drawTile(ctx, frames[frame], snapArt(FIELD_X + sp.tank.x), snapArt(FIELD_Y + sp.tank.y));
     }
   }
 

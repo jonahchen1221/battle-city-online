@@ -807,6 +807,10 @@ const EXPLOSION_BIG_FRAMES_ART: string[][] = [
 
 // 出生星形 4 帧。
 const SPAWN_STAR_FRAMES_ART: string[][] = [starFrame(0), starFrame(1), starFrame(2), starFrame(3)];
+// 智能坦克专属出生闪光：沿用相同轮廓与节奏，把金白色替换为霓虹青 / 青蓝。
+const SMART_SPAWN_STAR_FRAMES_ART: string[][] = SPAWN_STAR_FRAMES_ART.map((rows) =>
+  recolor(rows, { w: '7', Y: '8' }),
+);
 
 // 出生护盾第 f 帧（32×32）：仅在包围盒外缘 4px 环上，白/亮蓝按对角线交替，
 // 两帧相位相反，形成沿边框流动的星光/电弧感。
@@ -1136,6 +1140,7 @@ export interface SpriteAtlas {
   bulletSpiral: Sprite; // 螺旋弹火球（4×4 逻辑）
   bulletLaser: Record<Direction, Sprite>; // 激光细长条（8×8 逻辑，四朝向）
   spawnStar: [Sprite, Sprite, Sprite, Sprite]; // 出生闪光 4 帧（32×32）
+  spawnStarSmart: [Sprite, Sprite, Sprite, Sprite]; // 智能坦克青蓝出生闪光
   shield: [Sprite, Sprite]; // 出生护盾 2 帧（32×32）
   explosionSmall: [Sprite, Sprite, Sprite]; // 小爆炸 3 帧（32×32）
   explosionBig: [Sprite, Sprite]; // 大爆炸 2 帧（64×64）
@@ -1185,6 +1190,7 @@ const Y_SMART = 560;
 const Y_RED_SMART = 592;
 // 道具图标行（POWERUP_KINDS.length 个 32×32，x=0/32/…）。
 const Y_POWERUP = 624;
+const Y_SMART_SPAWN = 656;
 
 // 把一台坦克的朝上两帧铺到某一行：旋转生成其余朝向，
 // 按 up0,up1,down0,down1,left0,left1,right0,right1 排布于 x=0,32,…,224。
@@ -1221,7 +1227,7 @@ export function createSpriteAtlas(): SpriteAtlas {
   // 宽度需容下最宽的一行：道具图标行（POWERUP_KINDS.length 个 32×32 —— 6 经典 + 4 武器 + 5 新道具）。
   // 其余行最宽为坦克行（8 帧 × 32 = 256），故按两者取大。
   const width = Math.max(256, POWERUP_KINDS.length * 32);
-  const height = 656; // + 智能坦克常态/红闪两行 + 1 行道具图标（32）
+  const height = 688; // + 智能坦克常态/红闪、道具图标、智能出生闪光
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -1297,6 +1303,11 @@ export function createSpriteAtlas(): SpriteAtlas {
   paint(ctx, EXPLOSION_SMALL_FRAMES_ART[0], 128, Y_FX);
   paint(ctx, EXPLOSION_SMALL_FRAMES_ART[1], 160, Y_FX);
   paint(ctx, EXPLOSION_SMALL_FRAMES_ART[2], 192, Y_FX);
+  // 智能坦克专属青蓝出生闪光，单独占一行以保留原版金白动画给其他坦克。
+  paint(ctx, SMART_SPAWN_STAR_FRAMES_ART[0], 0, Y_SMART_SPAWN);
+  paint(ctx, SMART_SPAWN_STAR_FRAMES_ART[1], 32, Y_SMART_SPAWN);
+  paint(ctx, SMART_SPAWN_STAR_FRAMES_ART[2], 64, Y_SMART_SPAWN);
+  paint(ctx, SMART_SPAWN_STAR_FRAMES_ART[3], 96, Y_SMART_SPAWN);
   // 大爆炸行（64×64，x 0/64）+ 护盾 2 帧（32×32，x 128/160）
   paint(ctx, EXPLOSION_BIG_FRAMES_ART[0], 0, Y_BIG);
   paint(ctx, EXPLOSION_BIG_FRAMES_ART[1], 64, Y_BIG);
@@ -1348,6 +1359,12 @@ export function createSpriteAtlas(): SpriteAtlas {
       s(32, Y_FX, 32, 32),
       s(64, Y_FX, 32, 32),
       s(96, Y_FX, 32, 32),
+    ],
+    spawnStarSmart: [
+      s(0, Y_SMART_SPAWN, 32, 32),
+      s(32, Y_SMART_SPAWN, 32, 32),
+      s(64, Y_SMART_SPAWN, 32, 32),
+      s(96, Y_SMART_SPAWN, 32, 32),
     ],
     shield: [s(128, Y_BIG, 32, 32), s(160, Y_BIG, 32, 32)],
     explosionSmall: [s(128, Y_FX, 32, 32), s(160, Y_FX, 32, 32), s(192, Y_FX, 32, 32)],
