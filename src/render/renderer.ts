@@ -26,10 +26,8 @@ import {
   BRICK_TR,
   BRICK_BL,
   BRICK_BR,
-  COLOR_GAMEOVER,
   COLOR_STAGE_CLEAR,
   COLOR_HUD_ICON,
-  COLOR_PAUSE,
   GAMEOVER_SLIDE_TICKS,
   SHIELD_ANIM_TICKS,
   FRIENDLY_FREEZE_BLINK_TICKS,
@@ -48,6 +46,8 @@ import {
   drawTile,
   drawQuarter,
   drawText,
+  drawTextOutlined,
+  drawTextScaledOutlined,
   textWidth,
 } from './sprites';
 
@@ -84,11 +84,8 @@ export class Renderer {
   draw(state: GameState, _alpha: number): void {
     const { ctx } = this;
 
-    // 屏幕灰边 + 战场黑底（直接的 ctx 矩形按 ART_SCALE 放大）
-    ctx.fillStyle = COLOR_FRAME;
-    ctx.fillRect(0, 0, NATIVE_WIDTH * ART_SCALE, NATIVE_HEIGHT * ART_SCALE);
-    ctx.fillStyle = COLOR_FIELD;
-    ctx.fillRect(FIELD_X * ART_SCALE, FIELD_Y * ART_SCALE, FIELD_WIDTH * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
+    this.drawCabinetFrame();
+    this.drawFieldBackdrop();
 
     // 第一遍：地形中除树林外的一切（在实体之下）
     this.drawGround(state.level, state.tick, state.eagleDestroyed);
@@ -124,6 +121,60 @@ export class Renderer {
     this.drawStageStart(state);
   }
 
+  // 战场外框改成硬边阶梯明暗，比一整块中灰更容易分辨战场 / HUD，
+  // 且全部边缘落在 ART_SCALE 像素网格上。
+  private drawCabinetFrame(): void {
+    const { ctx } = this;
+    const w = NATIVE_WIDTH * ART_SCALE;
+    const h = NATIVE_HEIGHT * ART_SCALE;
+    ctx.fillStyle = COLOR_FRAME;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#7a807d';
+    ctx.fillRect(0, 0, w, 3 * ART_SCALE);
+    ctx.fillRect(0, 0, 3 * ART_SCALE, h);
+    ctx.fillStyle = '#343937';
+    ctx.fillRect(0, h - 3 * ART_SCALE, w, 3 * ART_SCALE);
+    ctx.fillRect(w - 3 * ART_SCALE, 0, 3 * ART_SCALE, h);
+
+    // 战场的 2px 内凹暗边。
+    ctx.fillStyle = '#202422';
+    ctx.fillRect((FIELD_X - 2) * ART_SCALE, (FIELD_Y - 2) * ART_SCALE, (FIELD_WIDTH + 4) * ART_SCALE, 2 * ART_SCALE);
+    ctx.fillRect((FIELD_X - 2) * ART_SCALE, (FIELD_Y - 2) * ART_SCALE, 2 * ART_SCALE, (FIELD_HEIGHT + 4) * ART_SCALE);
+    ctx.fillStyle = '#8b918e';
+    ctx.fillRect((FIELD_X - 2) * ART_SCALE, (FIELD_Y + FIELD_HEIGHT) * ART_SCALE, (FIELD_WIDTH + 4) * ART_SCALE, 2 * ART_SCALE);
+    ctx.fillRect((FIELD_X + FIELD_WIDTH) * ART_SCALE, (FIELD_Y - 2) * ART_SCALE, 2 * ART_SCALE, (FIELD_HEIGHT + 4) * ART_SCALE);
+  }
+
+  // 不再用完全扁平的黑色：以极暗绿灰稀疏点出 8px 网格节点。对比度很低，
+  // 只为空地提供尺度感，坦克轮廓仍以黑底为主。
+  private drawFieldBackdrop(): void {
+    const { ctx } = this;
+    ctx.fillStyle = COLOR_FIELD;
+    ctx.fillRect(FIELD_X * ART_SCALE, FIELD_Y * ART_SCALE, FIELD_WIDTH * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
+    ctx.fillStyle = '#07100d';
+    for (let y = 0; y < FIELD_HEIGHT; y += SUBTILE) {
+      for (let x = 0; x < FIELD_WIDTH; x += SUBTILE) {
+        if (((x / SUBTILE) + (y / SUBTILE) * 3) % 4 !== 0) continue;
+        ctx.fillRect((FIELD_X + x + 1) * ART_SCALE, (FIELD_Y + y + 1) * ART_SCALE, 1, 1);
+      }
+    }
+  }
+
+  // 复杂地形上的文字统一放进不透明硬边信息牌，避免砖墙/树林穿过字形造成误读。
+  private drawOverlayPlate(x: number, y: number, w: number, h: number, accent = '#6f2720'): void {
+    const { ctx } = this;
+    ctx.fillStyle = '#020303';
+    ctx.fillRect((x + 2) * ART_SCALE, (y + 2) * ART_SCALE, w * ART_SCALE, h * ART_SCALE);
+    ctx.fillStyle = '#0a0e0c';
+    ctx.fillRect(x * ART_SCALE, y * ART_SCALE, w * ART_SCALE, h * ART_SCALE);
+    ctx.fillStyle = accent;
+    ctx.fillRect(x * ART_SCALE, y * ART_SCALE, w * ART_SCALE, ART_SCALE);
+    ctx.fillRect(x * ART_SCALE, y * ART_SCALE, ART_SCALE, h * ART_SCALE);
+    ctx.fillStyle = '#28302c';
+    ctx.fillRect(x * ART_SCALE, (y + h - 1) * ART_SCALE, w * ART_SCALE, ART_SCALE);
+    ctx.fillRect((x + w - 1) * ART_SCALE, y * ART_SCALE, ART_SCALE, h * ART_SCALE);
+  }
+
   // 关卡开场幕布：用灰色（frame gray）铺满战场矩形，居中黑字 "STAGE N"（经典过场观感）。
   private drawStageStart(state: GameState): void {
     if (state.phase !== 'stagestart') return;
@@ -144,32 +195,47 @@ export class Renderer {
     drawText(ctx, atlas, hint, cx - Math.round(textWidth(hint) / 2), cy + 40, COLOR_HUD_ICON);
   }
 
-  // 右侧 32px 灰栏 HUD（x 224..256）：黑色图标/文字，经典 NES 布局。
+  // 右侧 32px 灰栏 HUD：黑色图标/文字，经典 NES 布局。
   private drawHud(state: GameState): void {
     const { ctx, atlas } = this;
-    const hudX = FIELD_X + FIELD_WIDTH; // 224
+    const hudX = FIELD_X + FIELD_WIDTH;
+
+    // HUD 独立内凹面板，与外框分开，小图标在更亮的底色上更清楚。
+    ctx.fillStyle = '#292e2c';
+    ctx.fillRect((hudX + 2) * ART_SCALE, (FIELD_Y - 1) * ART_SCALE, 29 * ART_SCALE, (FIELD_HEIGHT + 2) * ART_SCALE);
+    ctx.fillStyle = '#9aa09c';
+    ctx.fillRect((hudX + 3) * ART_SCALE, FIELD_Y * ART_SCALE, 27 * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
+    ctx.fillStyle = '#c2c6c3';
+    ctx.fillRect((hudX + 3) * ART_SCALE, FIELD_Y * ART_SCALE, 27 * ART_SCALE, ART_SCALE);
+    ctx.fillRect((hudX + 3) * ART_SCALE, FIELD_Y * ART_SCALE, ART_SCALE, FIELD_HEIGHT * ART_SCALE);
+    drawText(ctx, atlas, 'LEFT', hudX + 5, FIELD_Y + 5, '#242826');
 
     // 剩余敌军图标：未出生队列每台一格 8×8，2 个一行，自顶向下。
     for (let i = 0; i < state.enemyQueue.length; i++) {
       const col = i % 2;
       const row = Math.floor(i / 2);
-      drawTile(ctx, atlas.hudEnemy, hudX + 5 + col * 12, FIELD_Y + 8 + row * 10);
+      drawTile(ctx, atlas.hudEnemy, hudX + 5 + col * 12, FIELD_Y + 16 + row * 10);
     }
 
     // 玩家生命：每名在场玩家一行（自上而下堆叠于 32px 栏内）。
     // 每行：'nP' 标签 + 该玩家配色的迷你坦克 + 存量数字（= lives-1，与 NES 一致，不含当前在场）。
-    const livesTop = FIELD_Y + 116;
-    const rowH = 20;
+    const livesTop = FIELD_Y + 124;
+    const rowH = 19;
+    ctx.fillStyle = '#676d69';
+    ctx.fillRect((hudX + 5) * ART_SCALE, (livesTop - 6) * ART_SCALE, 23 * ART_SCALE, ART_SCALE);
     for (let i = 0; i < state.playerCount; i++) {
       const rowY = livesTop + i * rowH;
       drawText(ctx, atlas, `${i + 1}P`, hudX + 6, rowY, COLOR_HUD_ICON);
       const stock = Math.max(0, state.livesByPlayer[i] - 1);
       drawTile(ctx, atlas.hudLifeTank[i], hudX + 3, rowY + 8);
-      drawText(ctx, atlas, String(stock), hudX + 20, rowY + 13, COLOR_HUD_ICON);
+      // 数字与迷你坦克顶对齐；旧版下沉 4px，会和下一段分隔线相撞。
+      drawText(ctx, atlas, String(stock), hudX + 20, rowY + 9, COLOR_HUD_ICON);
     }
 
     // 关卡旗 + 当前关号：置于生命块下方。
     const flagY = livesTop + state.playerCount * rowH + 2;
+    ctx.fillStyle = '#676d69';
+    ctx.fillRect((hudX + 5) * ART_SCALE, (flagY - 4) * ART_SCALE, 23 * ART_SCALE, ART_SCALE);
     drawTile(ctx, atlas.hudFlag, hudX + 7, flagY);
     drawText(ctx, atlas, String(state.stage), hudX + 12, flagY + 20, COLOR_HUD_ICON);
   }
@@ -180,32 +246,48 @@ export class Renderer {
     const { ctx, atlas } = this;
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const cy = FIELD_Y + FIELD_HEIGHT / 2 - 4;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(FIELD_X * ART_SCALE, FIELD_Y * ART_SCALE, FIELD_WIDTH * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
+    ctx.clip();
 
     if (state.phase === 'gameover') {
       const text = 'GAME OVER';
-      const x = cx - Math.round(textWidth(text) / 2);
+      const titleScale = 2;
+      const titleWidth = textWidth(text) * titleScale;
+      const x = cx - Math.round(titleWidth / 2);
       const t = Math.min(state.phaseTicks, GAMEOVER_SLIDE_TICKS) / GAMEOVER_SLIDE_TICKS;
       const startY = FIELD_Y + FIELD_HEIGHT; // 屏幕底部
       const y = Math.round(startY + (cy - startY) * t);
-      drawText(ctx, atlas, text, x, y, COLOR_GAMEOVER);
+      const settled = state.phaseTicks > GAMEOVER_SLIDE_TICKS;
+      let hintY = cy + 24;
+      if (settled && state.playerCount > 1) hintY = cy + 20 + state.playerCount * 12 + 8;
+
+      // 滑入阶段用紧凑牌；停稳后扩大成完整结果牌，把得分和重开提示一并从地形中隔离。
+      if (settled) {
+        const plateW = Math.max(titleWidth + 20, state.playerCount > 1 ? 132 : 118);
+        this.drawOverlayPlate(cx - plateW / 2, cy - 7, plateW, hintY - cy + 23, '#9b3027');
+      } else {
+        this.drawOverlayPlate(x - 8, y - 5, titleWidth + 16, 24, '#9b3027');
+      }
+      drawTextScaledOutlined(ctx, atlas, text, x, y, titleScale, '#ff5b49');
       // 滑入完成后：多人局在 GAME OVER 下方逐行列出各玩家最终得分（各自配色），再提示重开操作。
-      if (state.phaseTicks > GAMEOVER_SLIDE_TICKS) {
-        let hintY = cy + 24;
+      if (settled) {
         if (state.playerCount > 1) {
           let ly = cy + 20;
           for (let i = 0; i < state.playerCount; i++) {
             const line = `${i + 1}P ${state.scoreByPlayer[i]}`;
             const color = PLAYER_LABEL_COLORS[i] ?? COLOR_STAGE_CLEAR;
-            drawText(ctx, atlas, line, cx - Math.round(textWidth(line) / 2), ly, color);
+            drawTextOutlined(ctx, atlas, line, cx - Math.round(textWidth(line) / 2), ly, color);
             ly += 12;
           }
-          hintY = ly + 8;
         }
         this.drawRestartHint(state, hintY);
       }
     } else if (state.phase === 'stageclear') {
       this.drawStageClear(state);
     }
+    ctx.restore();
   }
 
   // 闪烁的 "PRESS ENTER" 重开提示（gameover / stageclear 共用），与 PAUSE 同款闪烁节奏。
@@ -214,7 +296,7 @@ export class Renderer {
     const { ctx, atlas } = this;
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const text = 'PRESS ENTER';
-    drawText(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), y, COLOR_STAGE_CLEAR);
+    drawTextOutlined(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), y, COLOR_STAGE_CLEAR);
   }
 
   // 通关结算画面：标题 + 每名玩家一列的战果表（逐类击毁数 + 累计总分），经典多人战果统计版式。
@@ -223,10 +305,6 @@ export class Renderer {
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const white = COLOR_STAGE_CLEAR;
     const pc = state.playerCount;
-
-    // 标题："STAGE N CLEAR"，居中于战场顶部三分之一处。
-    const title = `STAGE ${state.stage} CLEAR`;
-    drawText(ctx, atlas, title, cx - Math.round(textWidth(title) / 2), FIELD_Y + 40, white);
 
     // 列几何：左侧行标签列（48px）+ 每名玩家一列（56px），整块水平居中于 320px 战场。
     // 4 人时 48 + 4×56 = 272 ≤ 320；人数少时整块更窄、仍居中，观感干净。
@@ -238,12 +316,19 @@ export class Renderer {
     const cellPadR = 8; // 总分右对齐时距列右缘的内边距
     const colLeft = (i: number): number => blockLeft + labelColW + i * playerColW;
 
+    // 整份战报使用一块不透明底板，地图纹理不再穿过表格文字。
+    this.drawOverlayPlate(blockLeft - 8, FIELD_Y + 29, blockWidth + 16, 174, '#456a56');
+
+    // 标题："STAGE N CLEAR"，居中于战场顶部三分之一处。
+    const title = `STAGE ${state.stage} CLEAR`;
+    drawTextOutlined(ctx, atlas, title, cx - Math.round(textWidth(title) / 2), FIELD_Y + 40, white);
+
     // 表头行：每列 "1P".."4P"，用各玩家 PLAYER_LABEL_COLORS 配色。
     const headerY = FIELD_Y + 58;
     for (let i = 0; i < pc; i++) {
       const label = `${i + 1}P`;
       const color = PLAYER_LABEL_COLORS[i] ?? white;
-      drawText(ctx, atlas, label, colLeft(i) + cellPadL, headerY, color);
+      drawTextOutlined(ctx, atlas, label, colLeft(i) + cellPadL, headerY, color);
     }
 
     // 四种敌军行：左侧种类名（白），随后每列该玩家 "X<击毁数>"（白）。
@@ -255,22 +340,22 @@ export class Renderer {
     ];
     let y = FIELD_Y + 76;
     for (const [kind, label] of kinds) {
-      drawText(ctx, atlas, label, blockLeft, y, white);
+      drawTextOutlined(ctx, atlas, label, blockLeft, y, white);
       for (let i = 0; i < pc; i++) {
         const kills = state.killsByPlayer[i][kind];
-        drawText(ctx, atlas, 'X' + kills, colLeft(i) + cellPadL, y, white);
+        drawTextOutlined(ctx, atlas, 'X' + kills, colLeft(i) + cellPadL, y, white);
       }
       y += 16;
     }
 
     // 分隔 + 总分行：每列显示该玩家累计总分（列内右对齐），用玩家配色。
     y += 8;
-    drawText(ctx, atlas, 'TOTAL', blockLeft, y, white);
+    drawTextOutlined(ctx, atlas, 'TOTAL', blockLeft, y, white);
     for (let i = 0; i < pc; i++) {
       const scoreStr = String(state.scoreByPlayer[i]);
       const color = PLAYER_LABEL_COLORS[i] ?? white;
       const rx = colLeft(i) + playerColW - cellPadR - textWidth(scoreStr);
-      drawText(ctx, atlas, scoreStr, rx, y, color);
+      drawTextOutlined(ctx, atlas, scoreStr, rx, y, color);
     }
 
     // 重开提示。
@@ -284,16 +369,25 @@ export class Renderer {
     const { ctx, atlas } = this;
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const cy = FIELD_Y + FIELD_HEIGHT / 2 - 4;
-    drawText(ctx, atlas, 'PAUSE', cx - Math.round(textWidth('PAUSE') / 2), cy, COLOR_PAUSE);
+    this.drawOverlayPlate(cx - 58, cy - 8, 116, 52, '#8e6c28');
+    drawTextScaledOutlined(
+      ctx,
+      atlas,
+      'PAUSE',
+      cx - Math.round(textWidth('PAUSE')),
+      cy,
+      2,
+      '#ffc94d',
+    );
 
     // 多人局显示是谁暂停的（该玩家配色）；单人不显示。均提示 "P = RESUME"。
     if (state.playerCount > 1 && state.pausedBy >= 0) {
       const who = `${state.pausedBy + 1}P PAUSED`;
       const color = PLAYER_LABEL_COLORS[state.pausedBy] ?? COLOR_STAGE_CLEAR;
-      drawText(ctx, atlas, who, cx - Math.round(textWidth(who) / 2), cy + 16, color);
+      drawTextOutlined(ctx, atlas, who, cx - Math.round(textWidth(who) / 2), cy + 16, color);
     }
     const hint = 'P = RESUME';
-    drawText(ctx, atlas, hint, cx - Math.round(textWidth(hint) / 2), cy + 32, COLOR_STAGE_CLEAR);
+    drawTextOutlined(ctx, atlas, hint, cx - Math.round(textWidth(hint) / 2), cy + 32, COLOR_STAGE_CLEAR);
   }
 
   // 出生闪光星：坦克实体化前在出生点循环播放 4 帧星形。
@@ -347,7 +441,7 @@ export class Renderer {
         let ly = py - 9;
         lx = Math.max(FIELD_X, Math.min(lx, FIELD_X + FIELD_WIDTH - w));
         ly = Math.max(FIELD_Y, ly);
-        drawText(ctx, atlas, label, lx, ly, color);
+        drawTextOutlined(ctx, atlas, label, lx, ly, color);
       }
     }
   }

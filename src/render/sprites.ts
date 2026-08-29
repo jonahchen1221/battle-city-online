@@ -228,127 +228,131 @@ function eagleDestroyedTile(): string[] {
 }
 const EAGLE_DESTROYED = eagleDestroyedTile();
 
-// ── 坦克（32×32，朝上基准帧，以“记号”书写，手工授权）──
+// ── 坦克（32×32，朝上基准帧，以“记号”程序化绘制）──
 // 记号：T=履带亮 t=履带暗 E=履带齿分隔(更暗) H=车体 L=车体高光 D=车体阴影
 //       S=高光过渡(L↔H 之间) Z=阴影过渡(H↔D 之间) O=黑轮廓 R=炮管(须亮色) '.'=透明
-// 版式来源：原版 16×16 模板逐像素 2× 展开（每旧像素 → 2×2 块），再做限定性精修：
-//   * 车体轮廓四角各切 1 美术px（45°），轮廓仍为原位 2px 黑框；
-//   * L/D 色域边界的阶梯以 S/Z 过渡带（1–2px）柔化，保持原版“左上高光/右下阴影”平面布局；
-//   * 履带齿：2px 明带 + 2px 暗带、齿间 1px 更暗分隔线（E 不参与 swapTreads，第二帧仍由 T↔t 互换生成）；
-//   * 炮管保持原位、宽 4 美术px（原 2 逻辑px），顶端收 1px。
-// 其余三朝向在构建图集时由像素网格旋转 90° 生成。
-// 注：原版 PLAYER_UP_0/1 与 TANK_STD 为同一版式（仅配色不同），故各玩家坦克 = TANK_STD × MAP_PLAYERS[i]。
+// 统一使用 1–2 美术像素切角、硬轮廓、左上高光与右下暗面；其余三朝向由网格旋转生成。
 
-// 标准车体（玩家 / 基础 / 威力共用）：6px 履带（原 3px），车体 12px 宽。
-// prettier-ignore
-const TANK_STD = assertGrid([
-  '................................',
-  '................................',
-  '...............RR...............',
-  '..............RRRR..............',
-  '..............RRRR..............',
-  '..............RRRR..............',
-  '..TTTTTT......RRRR......TTTTTT..',
-  '..TTTTTT......RRRR......TTTTTT..',
-  '..EEEEEE...OOOOOOOOOO...EEEEEE..',
-  '..tttttt..OOOOOOOOOOOO..tttttt..',
-  '..tttttt..OOLLLLLLSHOO..tttttt..',
-  '..EEEEEE..OOLLLLLSHHOO..EEEEEE..',
-  '..TTTTTT..OOLLSSHHHHOO..TTTTTT..',
-  '..TTTTTT..OOLSSHHHHHOO..TTTTTT..',
-  '..EEEEEE..OOSSHHHHHHOO..EEEEEE..',
-  '..tttttt..OOSHHHHHHHOO..tttttt..',
-  '..tttttt..OOHHHHHHHHOO..tttttt..',
-  '..EEEEEE..OOHHHHHHHHOO..EEEEEE..',
-  '..TTTTTT..OOHHHZDDZHOO..TTTTTT..',
-  '..TTTTTT..OOHHZZDDZHOO..TTTTTT..',
-  '..EEEEEE..OOHZDDDDZHOO..EEEEEE..',
-  '..tttttt..OOHZDDDDZHOO..tttttt..',
-  '..tttttt..OOHZDDDDZHOO..tttttt..',
-  '..EEEEEE..OOHZDDDDZHOO..EEEEEE..',
-  '..TTTTTT..OOHHZZZZHHOO..TTTTTT..',
-  '..TTTTTT..OOHHHHHHHHOO..TTTTTT..',
-  '..EEEEEE..OOOOOOOOOOOO..EEEEEE..',
-  '..tttttt...OOOOOOOOOO...tttttt..',
-  '..tttttt................tttttt..',
-  '..EEEEEE................EEEEEE..',
-  '................................',
-  '................................',
-], 32, 32, 'tankStd');
+// 五套差异化坦克模板：
+// PLAYER = 箭头前甲 + 菱形徽记；BASIC = 方正量产车；FAST = 窄体梭形；
+// POWER = 宽炮塔 + 粗炮管；ARMOR = 满宽履带 + 双层重甲。
+// 即使把所有车体去色为同一灰度，仍能依靠外轮廓和炮塔比例识别阵营/类型。
+type TankGrid = string[][];
+type TankSilhouette = 'player' | 'basic' | 'fast' | 'power' | 'armor';
 
-// 快速车体：4px 纤细履带（原 2px）+ 略矮车体（原版行 4–13），视觉上明显区别于基础型。
-// prettier-ignore
-const TANK_FAST = assertGrid([
-  '................................',
-  '................................',
-  '...............RR...............',
-  '..............RRRR..............',
-  '..............RRRR..............',
-  '..............RRRR..............',
-  '....TTTT......RRRR......TTTT....',
-  '....TTTT......RRRR......TTTT....',
-  '....EEEE...OOOOOOOOOO...EEEE....',
-  '....tttt..OOOOOOOOOOOO..tttt....',
-  '....tttt..OOLLLLLLSHOO..tttt....',
-  '....EEEE..OOLLLLLSHHOO..EEEE....',
-  '....TTTT..OOSSHHHHHHOO..TTTT....',
-  '....TTTT..OOSHHHHHHHOO..TTTT....',
-  '....EEEE..OOHHHHHHHHOO..EEEE....',
-  '....tttt..OOHHHHHHHHOO..tttt....',
-  '....tttt..OOHHHHHHHHOO..tttt....',
-  '....EEEE..OOHHHHHHHHOO..EEEE....',
-  '....TTTT..OOHHHZDDZHOO..TTTT....',
-  '....TTTT..OOHHZZDDZHOO..TTTT....',
-  '....EEEE..OOHZDDDDZHOO..EEEE....',
-  '....tttt..OOHZDDDDZHOO..tttt....',
-  '....tttt..OOHHZZZZHHOO..tttt....',
-  '....EEEE..OOHHHHHHHHOO..EEEE....',
-  '....TTTT..OOOOOOOOOOOO..TTTT....',
-  '....TTTT...OOOOOOOOOO...TTTT....',
-  '....EEEE................EEEE....',
-  '....tttt................tttt....',
-  '................................',
-  '................................',
-  '................................',
-  '................................',
-], 32, 32, 'tankFast');
+function tankBlank(): TankGrid {
+  return Array.from({ length: 32 }, () => new Array<string>(32).fill('.'));
+}
 
-// 装甲车体：8px 厚重履带（原 4px），车体版式同标准。搭配银 / 白闪两套配色供受损闪烁。
-// prettier-ignore
-const TANK_ARMOR = assertGrid([
-  '................................',
-  '................................',
-  '...............RR...............',
-  '..............RRRR..............',
-  '..............RRRR..............',
-  '..............RRRR..............',
-  'TTTTTTTT......RRRR......TTTTTTTT',
-  'TTTTTTTT......RRRR......TTTTTTTT',
-  'EEEEEEEE...OOOOOOOOOO...EEEEEEEE',
-  'tttttttt..OOOOOOOOOOOO..tttttttt',
-  'tttttttt..OOLLLLLLSHOO..tttttttt',
-  'EEEEEEEE..OOLLLLLSHHOO..EEEEEEEE',
-  'TTTTTTTT..OOLLSSHHHHOO..TTTTTTTT',
-  'TTTTTTTT..OOLSSHHHHHOO..TTTTTTTT',
-  'EEEEEEEE..OOSSHHHHHHOO..EEEEEEEE',
-  'tttttttt..OOSHHHHHHHOO..tttttttt',
-  'tttttttt..OOHHHHHHHHOO..tttttttt',
-  'EEEEEEEE..OOHHHHHHHHOO..EEEEEEEE',
-  'TTTTTTTT..OOHHHZDDZHOO..TTTTTTTT',
-  'TTTTTTTT..OOHHZZDDZHOO..TTTTTTTT',
-  'EEEEEEEE..OOHZDDDDZHOO..EEEEEEEE',
-  'tttttttt..OOHZDDDDZHOO..tttttttt',
-  'tttttttt..OOHZDDDDZHOO..tttttttt',
-  'EEEEEEEE..OOHZDDDDZHOO..EEEEEEEE',
-  'TTTTTTTT..OOHHZZZZHHOO..TTTTTTTT',
-  'TTTTTTTT..OOHHHHHHHHOO..TTTTTTTT',
-  'EEEEEEEE..OOOOOOOOOOOO..EEEEEEEE',
-  'tttttttt...OOOOOOOOOO...tttttttt',
-  'tttttttt................tttttttt',
-  'EEEEEEEE................EEEEEEEE',
-  '................................',
-  '................................',
-], 32, 32, 'tankArmor');
+function tankRect(g: TankGrid, x0: number, y0: number, x1: number, y1: number, ch: string): void {
+  for (let y = Math.max(0, y0); y <= Math.min(31, y1); y++) {
+    for (let x = Math.max(0, x0); x <= Math.min(31, x1); x++) g[y][x] = ch;
+  }
+}
+
+function tankTrack(g: TankGrid, x0: number, x1: number, y0: number, y1: number): void {
+  for (let y = y0; y <= y1; y++) {
+    const band = (y - y0) % 6;
+    const ch = band < 2 ? 'T' : band < 4 ? 't' : 'E';
+    tankRect(g, x0, y, x1, y, ch);
+  }
+  // 履带外缘切角，避免每种坦克都像两根矩形柱。
+  g[y0][x0] = '.';
+  g[y0][x1] = '.';
+  g[y1][x0] = '.';
+  g[y1][x1] = '.';
+}
+
+function tankPlate(
+  g: TankGrid,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  chamfer = 1,
+): void {
+  tankRect(g, x0, y0, x1, y1, 'O');
+  tankRect(g, x0 + 2, y0 + 2, x1 - 2, y1 - 2, 'H');
+  tankRect(g, x0 + 2, y0 + 2, x1 - 3, y0 + 3, 'L');
+  tankRect(g, x0 + 2, y0 + 4, x0 + 3, y1 - 3, 'S');
+  tankRect(g, x0 + 3, y1 - 3, x1 - 2, y1 - 2, 'D');
+  tankRect(g, x1 - 3, y0 + 4, x1 - 2, y1 - 4, 'Z');
+  for (let i = 0; i < chamfer; i++) {
+    g[y0 + i][x0 + i] = '.';
+    g[y0 + i][x1 - i] = '.';
+    g[y1 - i][x0 + i] = '.';
+    g[y1 - i][x1 - i] = '.';
+  }
+}
+
+function makeTankTemplate(kind: TankSilhouette): string[] {
+  const g = tankBlank();
+
+  if (kind === 'player') {
+    tankTrack(g, 2, 8, 7, 29);
+    tankTrack(g, 23, 29, 7, 29);
+    tankRect(g, 14, 1, 17, 12, 'R');
+    tankPlate(g, 7, 11, 24, 28, 2);
+    // 玩家独有的箭头形前翼，形成明显的“向前”轮廓。
+    tankRect(g, 7, 12, 9, 18, 'H');
+    tankRect(g, 22, 12, 24, 18, 'H');
+    tankPlate(g, 10, 8, 21, 21, 2);
+    // 菱形队徽：亮色中心 + 暗色下尖。
+    g[13][15] = 'L'; g[13][16] = 'L';
+    g[14][14] = 'L'; g[14][17] = 'S';
+    g[15][15] = 'L'; g[15][16] = 'H';
+    g[16][15] = 'Z'; g[16][16] = 'Z';
+  } else if (kind === 'basic') {
+    tankTrack(g, 2, 8, 9, 29);
+    tankTrack(g, 23, 29, 9, 29);
+    tankRect(g, 14, 3, 17, 13, 'R');
+    tankPlate(g, 9, 12, 22, 28, 1);
+    tankPlate(g, 11, 9, 20, 20, 1);
+    // 量产敌军的横向观察口，强化“方盒子”面相。
+    tankRect(g, 13, 14, 18, 15, 'O');
+  } else if (kind === 'fast') {
+    tankTrack(g, 5, 9, 11, 27);
+    tankTrack(g, 22, 26, 11, 27);
+    tankRect(g, 15, 0, 16, 13, 'R');
+    tankPlate(g, 9, 12, 22, 27, 4);
+    tankPlate(g, 12, 8, 19, 19, 2);
+    // 梭形车鼻与长尾，旋转到任一方向都保持纤细轮廓。
+    tankRect(g, 13, 10, 18, 12, 'L');
+    tankRect(g, 13, 27, 18, 29, 'D');
+  } else if (kind === 'power') {
+    tankTrack(g, 1, 7, 9, 30);
+    tankTrack(g, 24, 30, 9, 30);
+    tankRect(g, 13, 0, 18, 14, 'R');
+    tankPlate(g, 7, 12, 24, 29, 2);
+    tankPlate(g, 8, 8, 23, 22, 3);
+    // 宽炮塔两侧的后坐机构，是威力型最显眼的剪影特征。
+    tankRect(g, 6, 13, 9, 20, 'O');
+    tankRect(g, 7, 14, 9, 19, 'L');
+    tankRect(g, 22, 13, 25, 20, 'O');
+    tankRect(g, 22, 14, 24, 19, 'Z');
+    tankRect(g, 13, 13, 18, 16, 'L');
+  } else {
+    tankTrack(g, 0, 8, 6, 31);
+    tankTrack(g, 23, 31, 6, 31);
+    tankRect(g, 13, 2, 18, 12, 'R');
+    // 先画宽大的外层装甲，再叠内层炮塔，形成双层堡垒感。
+    tankPlate(g, 6, 11, 25, 30, 1);
+    tankPlate(g, 8, 7, 23, 22, 1);
+    tankRect(g, 5, 15, 8, 26, 'H');
+    tankRect(g, 23, 15, 26, 26, 'D');
+    // 四枚铆钉即便缩小时仍会形成可见亮点。
+    g[12][11] = 'L'; g[12][20] = 'L';
+    g[24][10] = 'S'; g[24][21] = 'Z';
+  }
+
+  return assertGrid(g.map((row) => row.join('')), 32, 32, `tank-${kind}`);
+}
+
+const TANK_PLAYER = makeTankTemplate('player');
+const TANK_BASIC = makeTankTemplate('basic');
+const TANK_FAST_HD = makeTankTemplate('fast');
+const TANK_POWER = makeTankTemplate('power');
+const TANK_ARMOR_HD = makeTankTemplate('armor');
 
 // 记号 → 调色板字符 的重着色映射（'.' 与未列出的字符原样透传）。
 type ColorMap = Record<string, string>;
@@ -404,30 +408,50 @@ const BULLET = assertGrid([
   '..cccc..',
 ], 8, 8, 'bullet');
 
-// ── HUD 迷你坦克（16×16，记号 X 重着色为黑 e / 黄 y）──
+// ── HUD 迷你坦克（16×16）──
+// 敌军是方炮塔宽履带，玩家是箭头车鼻窄履带；HUD 中同样不只靠颜色辨认。
 // prettier-ignore
-const MINI_TANK = assertGrid([
+const MINI_ENEMY = assertGrid([
+  '......XXXX......',
+  '......XXXX......',
+  '..XXXX.XX.XXXX..',
+  '.XXXXXXXXXXXXXX.',
+  '.XXXX.XXXX.XXXX.',
+  '.XXXXXXXXXXXXXX.',
+  '.XXXX.XXXX.XXXX.',
+  '.XXXXXXXXXXXXXX.',
+  '.XXXX.XXXX.XXXX.',
+  '.XXXXXXXXXXXXXX.',
+  '.XXXX.XXXX.XXXX.',
+  '.XXXXXXXXXXXXXX.',
+  '..XXXX....XXXX..',
   '................',
+  '................',
+  '................',
+], 16, 16, 'miniEnemy');
+// prettier-ignore
+const MINI_PLAYER = assertGrid([
   '.......XX.......',
-  '.XXX...XX...XXX.',
-  '.XXX.XXXXXX.XXX.',
-  '.XXX.XXXXXX.XXX.',
-  '.XXX.XXXXXX.XXX.',
-  '.XXX.XXXXXX.XXX.',
-  '.XXX.XXXXXX.XXX.',
-  '.XXX.XXXXXX.XXX.',
-  '.XXX.XXXXXX.XXX.',
-  '.XXX.XXXXXX.XXX.',
-  '.XXX........XXX.',
+  '.......XX.......',
+  '.......XX.......',
+  '..XX...XX...XX..',
+  '..XX..XXXX..XX..',
+  '..XXXXXXXXXXXX..',
+  '..XX..XXXX..XX..',
+  '..XX..XXXX..XX..',
+  '..XX...XX...XX..',
+  '..XX..XXXX..XX..',
+  '..XX..XXXX..XX..',
+  '..XX..XXXX..XX..',
+  '...XX......XX...',
   '................',
   '................',
   '................',
-  '................',
-], 16, 16, 'miniTank');
-const HUD_ENEMY = recolor(MINI_TANK, { X: 'e' });
+], 16, 16, 'miniPlayer');
+const HUD_ENEMY = recolor(MINI_ENEMY, { X: 'e' });
 // 每名玩家一套按主体色着色的生命迷你坦克（P1 黄 / P2 绿 / P3 蓝 / P4 粉）。
 const HUD_LIFE_BODY = ['y', 'C', 'K', 'W'];
-const HUD_LIFE_TANKS = HUD_LIFE_BODY.map((c) => recolor(MINI_TANK, { X: c }));
+const HUD_LIFE_TANKS = HUD_LIFE_BODY.map((c) => recolor(MINI_PLAYER, { X: c }));
 
 // ── HUD 关卡旗（32×32）：暗杆 + 白旗红边。旗号由 drawText 另绘。──
 // prettier-ignore
@@ -499,6 +523,7 @@ const FONT: FontGlyphs = {
   Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
   '=': ['.....', '.....', '#####', '.....', '#####', '.....', '.....'],
   '-': ['.....', '.....', '.....', '#####', '.....', '.....', '.....'],
+  '_': ['.....', '.....', '.....', '.....', '.....', '.....', '#####'],
   // 标点（分享地址 / 提示行用）：句点与冒号取 2×2 方点，与粗块像素字观感一致。
   '.': ['.....', '.....', '.....', '.....', '.....', '.##..', '.##..'],
   ':': ['.....', '.##..', '.##..', '.....', '.##..', '.##..', '.....'],
@@ -912,26 +937,26 @@ export function createSpriteAtlas(): SpriteAtlas {
   // 玩家坦克行：四套配色，各占一行（P1 在 Y_PLAYER，P2/P3/P4 在图集底部追加行）。
   for (let i = 0; i < MAP_PLAYERS.length; i++) {
     const map = MAP_PLAYERS[i];
-    paintTankRow(ctx, recolor(TANK_STD, map), recolor(swapTreads(TANK_STD), map), PLAYER_ROW_Y[i]);
+    paintTankRow(ctx, recolor(TANK_PLAYER, map), recolor(swapTreads(TANK_PLAYER), map), PLAYER_ROW_Y[i]);
   }
 
-  // 敌方坦克各行（由记号模板重着色 + 履带第二帧）
-  paintTankRow(ctx, recolor(TANK_STD, MAP_BASIC), recolor(swapTreads(TANK_STD), MAP_BASIC), Y_BASIC);
-  paintTankRow(ctx, recolor(TANK_FAST, MAP_BASIC), recolor(swapTreads(TANK_FAST), MAP_BASIC), Y_FAST);
-  paintTankRow(ctx, recolor(TANK_STD, MAP_POWER), recolor(swapTreads(TANK_STD), MAP_POWER), Y_POWER);
-  paintTankRow(ctx, recolor(TANK_ARMOR, MAP_ARMOR), recolor(swapTreads(TANK_ARMOR), MAP_ARMOR), Y_ARMOR);
+  // 敌方坦克各行：四种独立剪影 + 履带第二帧。
+  paintTankRow(ctx, recolor(TANK_BASIC, MAP_BASIC), recolor(swapTreads(TANK_BASIC), MAP_BASIC), Y_BASIC);
+  paintTankRow(ctx, recolor(TANK_FAST_HD, MAP_BASIC), recolor(swapTreads(TANK_FAST_HD), MAP_BASIC), Y_FAST);
+  paintTankRow(ctx, recolor(TANK_POWER, MAP_POWER), recolor(swapTreads(TANK_POWER), MAP_POWER), Y_POWER);
+  paintTankRow(ctx, recolor(TANK_ARMOR_HD, MAP_ARMOR), recolor(swapTreads(TANK_ARMOR_HD), MAP_ARMOR), Y_ARMOR);
   paintTankRow(
     ctx,
-    recolor(TANK_ARMOR, MAP_ARMOR_FLASH),
-    recolor(swapTreads(TANK_ARMOR), MAP_ARMOR_FLASH),
+    recolor(TANK_ARMOR_HD, MAP_ARMOR_FLASH),
+    recolor(swapTreads(TANK_ARMOR_HD), MAP_ARMOR_FLASH),
     Y_ARMOR_FLASH,
   );
 
   // 携带道具敌军红闪变体：各种类沿用其模板（basic/power=STD，fast=FAST，armor=ARMOR），统一红色映射。
-  paintTankRow(ctx, recolor(TANK_STD, MAP_ENEMY_RED), recolor(swapTreads(TANK_STD), MAP_ENEMY_RED), Y_RED_BASIC);
-  paintTankRow(ctx, recolor(TANK_FAST, MAP_ENEMY_RED), recolor(swapTreads(TANK_FAST), MAP_ENEMY_RED), Y_RED_FAST);
-  paintTankRow(ctx, recolor(TANK_STD, MAP_ENEMY_RED), recolor(swapTreads(TANK_STD), MAP_ENEMY_RED), Y_RED_POWER);
-  paintTankRow(ctx, recolor(TANK_ARMOR, MAP_ENEMY_RED), recolor(swapTreads(TANK_ARMOR), MAP_ENEMY_RED), Y_RED_ARMOR);
+  paintTankRow(ctx, recolor(TANK_BASIC, MAP_ENEMY_RED), recolor(swapTreads(TANK_BASIC), MAP_ENEMY_RED), Y_RED_BASIC);
+  paintTankRow(ctx, recolor(TANK_FAST_HD, MAP_ENEMY_RED), recolor(swapTreads(TANK_FAST_HD), MAP_ENEMY_RED), Y_RED_FAST);
+  paintTankRow(ctx, recolor(TANK_POWER, MAP_ENEMY_RED), recolor(swapTreads(TANK_POWER), MAP_ENEMY_RED), Y_RED_POWER);
+  paintTankRow(ctx, recolor(TANK_ARMOR_HD, MAP_ENEMY_RED), recolor(swapTreads(TANK_ARMOR_HD), MAP_ENEMY_RED), Y_RED_ARMOR);
 
   // 道具图标行：按 POWERUP_KINDS 顺序铺于 x=0,32,…。
   POWERUP_KINDS.forEach((kind, i) => paint(ctx, POWERUP_ICON_ROWS[kind], i * 32, Y_POWERUP));
@@ -1013,12 +1038,26 @@ export function drawText(
   y: number,
   color = '#ffffff',
 ): void {
+  paintText(ctx, atlas, text, x, y, color, 0, 0);
+}
+
+// 在美术像素级偏移下绘制字形。偏移不经过逻辑坐标换算，专供 1 美术像素描边使用。
+function paintText(
+  ctx: CanvasRenderingContext2D,
+  atlas: SpriteAtlas,
+  text: string,
+  x: number,
+  y: number,
+  color: string,
+  artOffsetX: number,
+  artOffsetY: number,
+): void {
   ctx.fillStyle = color;
   for (let i = 0; i < text.length; i++) {
     const glyph = atlas.font[text[i]];
     if (!glyph) continue;
-    const gx0 = (x + i * FONT_ADVANCE) * ART_SCALE;
-    const gy0 = y * ART_SCALE;
+    const gx0 = (x + i * FONT_ADVANCE) * ART_SCALE + artOffsetX;
+    const gy0 = y * ART_SCALE + artOffsetY;
     for (let gy = 0; gy < glyph.length; gy++) {
       const line = glyph[gy];
       for (let gc = 0; gc < line.length; gc++) {
@@ -1026,6 +1065,71 @@ export function drawText(
       }
     }
   }
+}
+
+// 1 美术像素八向硬描边。没有模糊/抗锯齿，专门用于复杂地形上的提示和小字号菜单。
+export function drawTextOutlined(
+  ctx: CanvasRenderingContext2D,
+  atlas: SpriteAtlas,
+  text: string,
+  x: number,
+  y: number,
+  color = '#ffffff',
+  outline = '#050706',
+): void {
+  const offsets: ReadonlyArray<readonly [number, number]> = [
+    [-1, -1], [0, -1], [1, -1],
+    [-1, 0], [1, 0],
+    [-1, 1], [0, 1], [1, 1],
+  ];
+  for (const [dx, dy] of offsets) paintText(ctx, atlas, text, x, y, outline, dx, dy);
+  paintText(ctx, atlas, text, x, y, color, 0, 0);
+}
+
+function paintScaledText(
+  ctx: CanvasRenderingContext2D,
+  atlas: SpriteAtlas,
+  text: string,
+  x: number,
+  y: number,
+  scale: number,
+  color: string,
+  artOffsetX: number,
+  artOffsetY: number,
+): void {
+  const block = ART_SCALE * scale;
+  ctx.fillStyle = color;
+  for (let i = 0; i < text.length; i++) {
+    const glyph = atlas.font[text[i]];
+    if (!glyph) continue;
+    const gx0 = (x + i * FONT_ADVANCE * scale) * ART_SCALE + artOffsetX;
+    const gy0 = y * ART_SCALE + artOffsetY;
+    for (let gy = 0; gy < glyph.length; gy++) {
+      for (let gc = 0; gc < glyph[gy].length; gc++) {
+        if (glyph[gy][gc] === '#') ctx.fillRect(gx0 + gc * block, gy0 + gy * block, block, block);
+      }
+    }
+  }
+}
+
+// 结果/暂停标题使用的倍增描边字。scale 只取整数，所有方块仍严格落在美术像素网格。
+export function drawTextScaledOutlined(
+  ctx: CanvasRenderingContext2D,
+  atlas: SpriteAtlas,
+  text: string,
+  x: number,
+  y: number,
+  scale: number,
+  color = '#ffffff',
+  outline = '#050706',
+): void {
+  const offsets: ReadonlyArray<readonly [number, number]> = [
+    [-1, -1], [0, -1], [1, -1],
+    [-1, 0], [1, 0],
+    [-1, 1], [0, 1], [1, 1],
+  ];
+  for (const [dx, dy] of offsets) paintScaledText(ctx, atlas, text, x, y, scale, outline, dx, dy);
+  paintScaledText(ctx, atlas, text, x, y, scale, color, 0, 0);
 }
 
 // 文本像素宽度（*逻辑* 像素，用于居中）。

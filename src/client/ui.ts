@@ -3,12 +3,46 @@
 // 不修改 sprites.ts：大字通过读取 atlas.font 掩码、以 ART_SCALE×scale 的方块自行绘制。
 
 import { ART_SCALE, NATIVE_WIDTH, NATIVE_HEIGHT } from '../core/constants';
-import { SpriteAtlas, FONT_ADVANCE, drawText, textWidth } from '../render/sprites';
+import { SpriteAtlas, FONT_ADVANCE, drawText, drawTextOutlined, textWidth } from '../render/sprites';
 
 // 用黑色铺满整个画布（标题/大厅/连接界面的底）。
 export function clearScreen(ctx: CanvasRenderingContext2D, color = '#000000'): void {
   ctx.fillStyle = color;
   ctx.fillRect(0, 0, NATIVE_WIDTH * ART_SCALE, NATIVE_HEIGHT * ART_SCALE);
+
+  // 极暗的网格纹理只用 1 个美术像素绘制，让黑场有老式显示器的层次，
+  // 但不使用半透明滤镜，保留锐利像素边缘。
+  ctx.fillStyle = '#090d0c';
+  for (let x = 0; x < NATIVE_WIDTH * ART_SCALE; x += 32) {
+    ctx.fillRect(x, 0, 1, NATIVE_HEIGHT * ART_SCALE);
+  }
+  for (let y = 0; y < NATIVE_HEIGHT * ART_SCALE; y += 32) {
+    ctx.fillRect(0, y, NATIVE_WIDTH * ART_SCALE, 1);
+  }
+}
+
+// 逻辑坐标下的像素面板：1px 硬边高光 + 1px 深色底边，不用模糊阴影。
+export function drawPixelPanel(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fill = '#0d1210',
+  highlight = '#39413d',
+  shadow = '#020303',
+): void {
+  const s = ART_SCALE;
+  ctx.fillStyle = shadow;
+  ctx.fillRect((x + 2) * s, (y + 2) * s, w * s, h * s);
+  ctx.fillStyle = fill;
+  ctx.fillRect(x * s, y * s, w * s, h * s);
+  ctx.fillStyle = highlight;
+  ctx.fillRect(x * s, y * s, w * s, s);
+  ctx.fillRect(x * s, y * s, s, h * s);
+  ctx.fillStyle = '#1d2421';
+  ctx.fillRect(x * s, (y + h - 1) * s, w * s, s);
+  ctx.fillRect((x + w - 1) * s, y * s, s, h * s);
 }
 
 // 放大后的字体行宽（逻辑像素）：与 textWidth 同口径，再乘 scale。
@@ -57,7 +91,7 @@ export function drawTextCentered(
   color = '#ffffff',
 ): number {
   const x = cx - Math.round(textWidth(text) / 2);
-  drawText(ctx, atlas, text, x, y, color);
+  drawTextOutlined(ctx, atlas, text, x, y, color);
   return x;
 }
 
@@ -73,4 +107,48 @@ export function drawBigTextCentered(
 ): void {
   const x = cx - Math.round(bigTextWidth(text, scale) / 2);
   drawBigText(ctx, atlas, text, x, y, scale, color);
+}
+
+// 标题专用的“金属砖字”：每个字体点仍是完整方块，只叠加像素级高光/暗面。
+// 这比 Canvas shadowBlur 更清楚，也不会破坏像素风。
+export function drawLogoTextCentered(
+  ctx: CanvasRenderingContext2D,
+  atlas: SpriteAtlas,
+  text: string,
+  cx: number,
+  y: number,
+  scale: number,
+  base = '#e64635',
+  light = '#ff8a43',
+  dark = '#7b1e18',
+): void {
+  const x = cx - Math.round(bigTextWidth(text, scale) / 2);
+  const block = ART_SCALE * scale;
+  const edge = ART_SCALE;
+
+  // 整字硬阴影，偏移一个逻辑像素。
+  drawBigText(ctx, atlas, text, x + 2, y + 2, scale, '#260908');
+
+  for (let i = 0; i < text.length; i++) {
+    const glyph = atlas.font[text[i]];
+    if (!glyph) continue;
+    const gx0 = (x + i * FONT_ADVANCE * scale) * ART_SCALE;
+    const gy0 = y * ART_SCALE;
+    for (let gy = 0; gy < glyph.length; gy++) {
+      const line = glyph[gy];
+      for (let gc = 0; gc < line.length; gc++) {
+        if (line[gc] !== '#') continue;
+        const px = gx0 + gc * block;
+        const py = gy0 + gy * block;
+        ctx.fillStyle = base;
+        ctx.fillRect(px, py, block, block);
+        ctx.fillStyle = light;
+        ctx.fillRect(px, py, block, edge);
+        ctx.fillRect(px, py, edge, block);
+        ctx.fillStyle = dark;
+        ctx.fillRect(px, py + block - edge, block, edge);
+        ctx.fillRect(px + block - edge, py, edge, block);
+      }
+    }
+  }
 }

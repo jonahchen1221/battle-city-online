@@ -9,15 +9,20 @@ import { App } from './client/app';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 
-// 画布内部分辨率固定为 736×512（原生 × 美术倍数）；显示尺寸取能放进视口的最大 CSS 倍率。
+// 画布内部分辨率固定为 736×512（原生 × 美术倍数）；显示尺寸取能放进视口的最大半整数 CSS 倍率。
 const CANVAS_W = NATIVE_WIDTH * ART_SCALE; // 736
 const CANVAS_H = NATIVE_HEIGHT * ART_SCALE; // 512
 function fitCanvasToViewport(): void {
-  // 半整数步长（1, 1.5, 2, 2.5, …，最小 1）取能放进视口的最大倍率。
-  // 放大后的画布（736×512）较大，纯整数步长在常见笔记本上会掉到 1× 而显得比旧版更小；
-  // 允许 0.5 步长可用上更多屏幕空间，且在 2× 视网膜屏上半步仍落在物理整数像素、保持清晰。
-  const raw = Math.min((window.innerWidth - 32) / CANVAS_W, (window.innerHeight - 32) / CANVAS_H);
-  const k = Math.max(1, Math.floor(raw * 2) / 2);
+  // 为街机外框预留宽高；半整数缩放保证常见 2× DPR 屏幕上每个美术像素
+  // 落在物理整数像素上。极小窗口允许 0.5×，不再强制溢出视口。
+  const compact = window.innerHeight <= 620 || window.innerWidth <= 780;
+  const chromeW = compact ? 28 : 52;
+  const chromeH = compact ? 44 : 104;
+  const raw = Math.min(
+    (window.innerWidth - chromeW) / CANVAS_W,
+    (window.innerHeight - chromeH) / CANVAS_H,
+  );
+  const k = Math.max(0.5, Math.floor(raw * 2) / 2);
   canvas.style.width = `${CANVAS_W * k}px`;
   canvas.style.height = `${CANVAS_H * k}px`;
 }

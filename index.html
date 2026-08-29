@@ -4,13 +4,163 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Battle City Online</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Crect width='16' height='16' fill='%23090c0b'/%3E%3Cpath d='M2 3h3v10H2zm9 0h3v10h-3zM5 5h6v8H5zm2-4h2v7H7z' fill='%23ef4939'/%3E%3Crect x='6' y='6' width='4' height='3' fill='%23ffb43b'/%3E%3C/svg%3E" />
   <style>
-    html, body { margin: 0; height: 100%; background: #111; display: grid; place-items: center; }
-    canvas { image-rendering: pixelated; }
+    :root {
+      color-scheme: dark;
+      --cabinet-ink: #070a09;
+      --cabinet-edge: #323936;
+      --cabinet-light: #626a66;
+      --signal: #ef4939;
+      --signal-hot: #ffb43b;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { margin: 0; height: 100%; }
+
+    body {
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px) 0 0 / 16px 16px,
+        linear-gradient(rgba(255,255,255,.014) 1px, transparent 1px) 0 0 / 16px 16px,
+        #090c0b;
+      color: #cbd2ce;
+      font-family: Menlo, Monaco, "Cascadia Mono", monospace;
+    }
+
+    .arcade-shell {
+      position: relative;
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      background: #171c1a;
+      border: 2px solid var(--cabinet-edge);
+      box-shadow:
+        0 0 0 2px var(--cabinet-ink),
+        0 0 0 4px #444c48,
+        14px 18px 0 rgba(0,0,0,.38),
+        0 24px 70px rgba(0,0,0,.62);
+    }
+
+    .arcade-shell::before,
+    .arcade-shell::after {
+      content: "";
+      position: absolute;
+      width: 4px;
+      height: 4px;
+      background: #080a09;
+      box-shadow: inset 1px 1px 0 #4d5551;
+    }
+
+    .arcade-shell::before { top: 6px; left: 6px; }
+    .arcade-shell::after { right: 6px; bottom: 6px; }
+
+    .cabinet-bar {
+      min-height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 0 8px;
+      color: #7e8883;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      user-select: none;
+    }
+
+    .cabinet-title {
+      color: #cbd2ce;
+    }
+
+    .cabinet-title::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 8px;
+      background: var(--signal);
+      box-shadow: 0 0 0 2px #541913, 0 0 12px rgba(239,73,57,.72);
+      vertical-align: 1px;
+    }
+
+    .cabinet-mode { color: #a6752b; }
+
+    .screen-bezel {
+      padding: 8px;
+      background: var(--cabinet-ink);
+      border-top: 3px solid #050706;
+      border-left: 3px solid #050706;
+      border-right: 3px solid var(--cabinet-light);
+      border-bottom: 3px solid var(--cabinet-light);
+      box-shadow: inset 0 0 0 2px #000;
+    }
+
+    canvas {
+      display: block;
+      background: #000;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+      image-rendering: pixelated;
+      outline: 1px solid #1f2522;
+    }
+
+    .cabinet-help {
+      justify-content: center;
+      min-height: 16px;
+      color: #66706b;
+      letter-spacing: .12em;
+    }
+
+    .cabinet-help b {
+      color: var(--signal-hot);
+      font: inherit;
+    }
+
+    @media (max-height: 620px), (max-width: 780px) {
+      .arcade-shell { gap: 4px; padding: 6px; }
+      .cabinet-bar { min-height: 12px; font-size: 7px; }
+      .screen-bezel { padding: 4px; }
+      .cabinet-help { display: none; }
+    }
+
+    @media (max-width: 420px) {
+      .arcade-shell { padding: 2px; border-width: 1px; }
+      .screen-bezel { padding: 2px; border-width: 1px; }
+      .cabinet-bar { gap: 8px; padding: 0 3px; font-size: 6px; }
+      .cabinet-title::before { width: 4px; height: 4px; margin-right: 5px; }
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .cabinet-title::before { animation: signal-pulse 2.4s steps(2, end) infinite; }
+    }
+
+    @keyframes signal-pulse {
+      0%, 82% { opacity: 1; }
+      83%, 91% { opacity: .36; }
+      92%, 100% { opacity: 1; }
+    }
   </style>
 </head>
 <body>
-  <canvas id="game"></canvas>
+  <main class="arcade-shell" aria-label="Battle City Online arcade cabinet">
+    <header class="cabinet-bar">
+      <span class="cabinet-title">Battle City</span>
+      <span class="cabinet-mode">Online co-op system</span>
+    </header>
+    <div class="screen-bezel">
+      <canvas id="game" aria-label="Battle City Online game screen"></canvas>
+    </div>
+    <footer class="cabinet-bar cabinet-help">
+      <span><b>WASD / ARROWS</b> move</span>
+      <span><b>SPACE</b> fire</span>
+      <span><b>P</b> pause</span>
+    </footer>
+  </main>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

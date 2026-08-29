@@ -23,7 +23,7 @@ import {
   FIELD_WIDTH,
   FIELD_HEIGHT,
 } from '../core/constants';
-import { drawText, textWidth, drawTile } from '../render/sprites';
+import { drawTextOutlined, textWidth, drawTile } from '../render/sprites';
 import {
   Snapshot,
   ServerMessage,
@@ -34,7 +34,13 @@ import {
   ROOM_CODE_LENGTH,
 } from '../net/protocol';
 import { NetClient } from './net';
-import { clearScreen, drawBigTextCentered, drawTextCentered } from './ui';
+import {
+  clearScreen,
+  drawBigTextCentered,
+  drawLogoTextCentered,
+  drawPixelPanel,
+  drawTextCentered,
+} from './ui';
 
 export type ScreenName = 'title' | 'joinCode' | 'lobby' | 'localGame' | 'netGame';
 
@@ -65,12 +71,12 @@ const INTERP_DELAY_MAX = 250; // 自适应上限（ms）
 const INTERP_DELAY_EASE = 0.01; // 每渲染帧向目标缓动的比例（约 1%/帧，避免可见的时间扭曲）
 
 // 主体色（复用调色板取色，避免魔法散落太多）。
-const COLOR_TITLE = '#e44437'; // 砖红标题
+const COLOR_TITLE = '#e64635'; // 砖红标题
 const COLOR_MENU = '#ffffff';
-const COLOR_MENU_DIM = '#9c9c9c';
-const COLOR_HIGHLIGHT = '#e0a030'; // 自己所在行 / 光标黄
-const COLOR_ERROR = '#e44437';
-const COLOR_OK = '#58c840';
+const COLOR_MENU_DIM = '#89918d';
+const COLOR_HIGHLIGHT = '#ffc14a'; // 自己所在行 / 光标黄
+const COLOR_ERROR = '#ff5947';
+const COLOR_OK = '#70dc58';
 
 // 服务器错误码 → 可读英文短句（用像素字体，只用大写字母 / 数字，故全大写无标点）。
 const ERROR_TEXT: Record<ServerErrorCode, string> = {
@@ -541,28 +547,42 @@ export class App {
     clearScreen(ctx);
     const cx = NATIVE_WIDTH / 2;
 
-    // 大字标题“BATTLE / CITY”，砖红，两行居中。
-    drawBigTextCentered(ctx, atlas, 'BATTLE', cx, 34, 4, COLOR_TITLE);
-    drawBigTextCentered(ctx, atlas, 'CITY', cx, 74, 4, COLOR_TITLE);
+    // 砖块金属高光的两行主标：仍是 5×7 点阵，但比纯色大字更有层次。
+    drawLogoTextCentered(ctx, atlas, 'BATTLE', cx, 24, 4, COLOR_TITLE);
+    drawLogoTextCentered(ctx, atlas, 'CITY', cx, 62, 4, COLOR_TITLE);
+    drawTextCentered(ctx, atlas, 'ONLINE CO-OP', cx, 99, '#d08b32');
+
+    // 两台对向坦克做成小徽标，同时说明“合作对战”的核心主题。
+    drawTile(ctx, atlas.playerTank[0].right[0], cx - 76, 95);
+    drawTile(ctx, atlas.enemyTank.basic.left[0], cx + 60, 95);
+
+    drawPixelPanel(ctx, cx - 86, 116, 172, 70);
 
     // 菜单项 + 黄色迷你坦克光标。
-    const menuTop = 130;
-    const rowH = 20;
+    const menuTop = 126;
+    const rowH = 18;
     for (let i = 0; i < TITLE_ITEMS.length; i++) {
       const y = menuTop + i * rowH;
       const selected = i === this.titleSel;
       const label = TITLE_ITEMS[i];
       const labelX = cx - Math.round(textWidth(label) / 2);
-      drawText(ctx, atlas, label, labelX, y, selected ? COLOR_MENU : COLOR_MENU_DIM);
+      if (selected) {
+        ctx.fillStyle = '#3b160c';
+        ctx.fillRect((cx - 72) * ART_SCALE, (y - 4) * ART_SCALE, 144 * ART_SCALE, 15 * ART_SCALE);
+        ctx.fillStyle = '#b83424';
+        ctx.fillRect((cx - 72) * ART_SCALE, (y - 4) * ART_SCALE, 2 * ART_SCALE, 15 * ART_SCALE);
+      }
+      drawTextOutlined(ctx, atlas, label, labelX, y, selected ? COLOR_MENU : COLOR_MENU_DIM);
       if (selected) {
         // 光标：复用 HUD 生命迷你坦克（P1 黄），置于文字左侧、与文字垂直居中对齐。
         // 文字 7px 高、视觉中心在 y+3.5；迷你坦克车体只占格子上部、内容中心在格顶 +3；
         // 令两中心相等 → 格顶 = y+0.5（×ART_SCALE 后为整数美术像素，保持清晰）。
-        drawTile(ctx, atlas.hudLifeTank[0], labelX - 22, y + 0.5);
+        drawTile(ctx, atlas.hudLifeTank[0], labelX - 20, y + 0.5);
       }
     }
 
-    this.drawStatusLines(200);
+    drawTextCentered(ctx, atlas, 'ARROWS SELECT   ENTER CONFIRM', cx, 203, '#606966');
+    this.drawStatusLines(221);
   }
 
   // ───────────────────────── 绘制：房间码输入 ─────────────────────────
@@ -573,15 +593,16 @@ export class App {
     clearScreen(ctx);
     const cx = NATIVE_WIDTH / 2;
 
-    drawBigTextCentered(ctx, atlas, 'JOIN', cx, 40, 3, COLOR_TITLE);
-    drawTextCentered(ctx, atlas, 'ENTER ROOM CODE', cx, 90, COLOR_MENU);
+    drawLogoTextCentered(ctx, atlas, 'JOIN', cx, 30, 3, COLOR_TITLE);
+    drawTextCentered(ctx, atlas, 'ENTER ROOM CODE', cx, 79, COLOR_MENU);
+    drawPixelPanel(ctx, cx - 66, 103, 132, 48);
 
     // 4 个字符槽：已输入的字母或下划线，等宽居中。
     const slotScale = 3;
     const slotAdvance = 24; // 每槽逻辑宽（含间隙）
     const totalW = ROOM_CODE_LENGTH * slotAdvance;
     let sx = cx - Math.round(totalW / 2) + 6;
-    const slotY = 120;
+    const slotY = 113;
     for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
       const ch = this.codeBuffer[i] ?? '';
       const filled = i < this.codeBuffer.length;
@@ -592,9 +613,9 @@ export class App {
       sx += slotAdvance;
     }
 
-    drawTextCentered(ctx, atlas, 'TYPE A-Z OR PASTE   ENTER TO JOIN', cx, 170, COLOR_MENU_DIM);
-    drawTextCentered(ctx, atlas, 'ESC TO CANCEL', cx, 184, COLOR_MENU_DIM);
-    this.drawStatusLines(200);
+    drawTextCentered(ctx, atlas, 'TYPE A-Z OR PASTE', cx, 169, COLOR_MENU_DIM);
+    drawTextCentered(ctx, atlas, 'ENTER TO JOIN   ESC TO CANCEL', cx, 185, COLOR_MENU_DIM);
+    this.drawStatusLines(207);
   }
 
   // ───────────────────────── 绘制：大厅 ─────────────────────────
@@ -605,19 +626,21 @@ export class App {
     clearScreen(ctx);
     const cx = NATIVE_WIDTH / 2;
 
-    drawTextCentered(ctx, atlas, 'ROOM CODE', cx, 20, COLOR_MENU);
+    drawTextCentered(ctx, atlas, 'ROOM CODE', cx, 16, COLOR_MENU);
     // 房间码大字（房主可念给同伴）。
-    drawBigTextCentered(ctx, atlas, this.roomCode || '----', cx, 34, 4, COLOR_HIGHLIGHT);
+    drawLogoTextCentered(ctx, atlas, this.roomCode || '----', cx, 30, 4, '#d89a31', '#ffe083', '#74501a');
 
     // 分享地址：同伴直接打开即自动加入。可能超出画面宽度，故左边界钳到 0（宁可贴边不换行）。
     if (this.roomCode) {
       const link = this.shareUrlText();
       const linkX = Math.max(0, cx - Math.round(textWidth(link) / 2));
-      drawText(ctx, atlas, link, linkX, 76, COLOR_MENU_DIM);
+      drawTextOutlined(ctx, atlas, link, linkX, 72, COLOR_MENU_DIM);
     }
 
+    drawPixelPanel(ctx, cx - 82, 86, 164, 82);
+
     // 玩家列表：4 行 1P..4P。
-    const listTop = 96;
+    const listTop = 94;
     const rowH = 18;
     for (let i = 0; i < MAX_PLAYERS; i++) {
       const y = listTop + i * rowH;
@@ -639,8 +662,8 @@ export class App {
       }
       if (mine) color = COLOR_HIGHLIGHT;
       const x = cx - 60;
-      drawText(ctx, atlas, text, x, y, color);
-      if (mine) drawText(ctx, atlas, '<', x - 12, y, COLOR_HIGHLIGHT);
+      drawTextOutlined(ctx, atlas, text, x, y, color);
+      if (mine) drawTextOutlined(ctx, atlas, '<', x - 12, y, COLOR_HIGHLIGHT);
     }
 
     // 操作提示（4 行等距；比原先多一行 COPY LINK，故整体上提 6px 给底部状态行留位）。
