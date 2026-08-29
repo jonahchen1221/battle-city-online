@@ -38,6 +38,7 @@ import {
   STAGE_START_TICKS,
   FRIENDLY_FREEZE_TICKS,
   MACHINE_FIRE_INTERVAL_TICKS,
+  PLAYER_FIRE_INTERVAL_TICKS,
   FIRE_BUFFER_TICKS,
   DASH_TICKS,
   DASH_COOLDOWN_TICKS,
@@ -272,22 +273,28 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
       applyInput(tank, input, level, obstacles, state.escort ?? undefined);
     }
 
-    // 所有武器都支持按住连发，并受各自的在场子弹上限约束；弹位一释放就自动补发。
-    // 机枪额外由 fireCooldown 节流为每 MACHINE_FIRE_INTERVAL_TICKS 帧一发。
+    // 所有武器都支持按住连发，并同时受“在场子弹上限 + 最短开火间隔”约束。
+    // 前者保留远距离的经典弹位手感，后者防止贴脸时子弹瞬间消失导致射速逐帧上升。
+    // 机枪使用自己的更长间隔，但允许更多子弹同时在场。
     // 同时保留短输入缓冲：轻点按下沿装填 FIRE_BUFFER_TICKS 帧，在弹位占满时提前点按也不会被吞掉。
     const firePressed = input.fire && !tank.prevFire;
     tank.prevFire = input.fire;
     if (tank.fireBufferTicks > 0) tank.fireBufferTicks--;
     if (firePressed) tank.fireBufferTicks = FIRE_BUFFER_TICKS;
-    const heldFire =
-      input.fire && (tank.weapon !== 'machine' || tank.fireCooldown === 0);
+    const heldFire = input.fire;
     const bufferedFire = tank.weapon !== 'machine' && tank.fireBufferTicks > 0;
     const wantFire = heldFire || bufferedFire;
-    if (wantFire && liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)) {
+    if (
+      wantFire &&
+      tank.fireCooldown === 0 &&
+      liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)
+    ) {
       const spawned = spawnWeaponBullets(tank, state.nextBulletId, state.level);
       state.nextBulletId += spawned.length;
       for (const b of spawned) state.bullets.push(b);
-      if (tank.weapon === 'machine') tank.fireCooldown = MACHINE_FIRE_INTERVAL_TICKS;
+      tank.fireCooldown = tank.weapon === 'machine'
+        ? Math.max(PLAYER_FIRE_INTERVAL_TICKS, MACHINE_FIRE_INTERVAL_TICKS)
+        : PLAYER_FIRE_INTERVAL_TICKS;
       tank.fireBufferTicks = 0; // 缓冲已兑现，避免同一次按键连发两发
       state.events.push('playerFire'); // 仅玩家开火发声（敌弹静音，从简）
     }

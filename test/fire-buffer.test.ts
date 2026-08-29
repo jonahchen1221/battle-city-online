@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createGameState } from '../src/game/state';
 import { update } from '../src/game/update';
 import { emptyInput, InputState } from '../src/core/types';
-import { FIRE_BUFFER_TICKS } from '../src/core/constants';
+import { FIRE_BUFFER_TICKS, PLAYER_FIRE_INTERVAL_TICKS } from '../src/core/constants';
 
 function fireInput(): InputState {
   const input = emptyInput();
@@ -26,22 +26,35 @@ test('a fire press while the bullet slot is full is buffered and fires when it f
   update(state, [fireInput()]); // 在场子弹未消：本次按下沿被缓冲而非丢弃
   assert.equal(liveBullets(state), 1);
 
-  // 子弹消亡后，缓冲窗口内无需再按即自动补发。
+  // 子弹消亡后，缓冲会等待最短开火间隔走完，然后无需再按即自动补发。
   for (const b of state.bullets) b.alive = false;
+  for (let i = 1; i < PLAYER_FIRE_INTERVAL_TICKS - 2; i++) {
+    update(state, [emptyInput()]);
+    assert.equal(liveBullets(state), 0);
+  }
   update(state, [emptyInput()]);
   assert.equal(liveBullets(state), 1);
 });
 
-test('holding fire shoots again as soon as the bullet slot frees', () => {
+test('holding fire cannot exceed the minimum fire interval after a close-range bullet reset', () => {
   const state = createGameState(1, 1, 1);
   state.phase = 'playing';
 
   update(state, [fireInput()]);
   assert.equal(liveBullets(state), 1);
+  const nextBulletId = state.nextBulletId;
 
-  // 无需松开再按；弹位释放后的下一帧自动补发。
+  // 模拟贴脸命中：开火当帧后子弹立即消亡，但长按不能在下一帧补发。
   for (const b of state.bullets) b.alive = false;
+  for (let i = 1; i < PLAYER_FIRE_INTERVAL_TICKS; i++) {
+    update(state, [fireInput()]);
+    assert.equal(state.nextBulletId, nextBulletId);
+    assert.equal(liveBullets(state), 0);
+  }
+
+  // 从上一次开火起恰好间隔 PLAYER_FIRE_INTERVAL_TICKS 帧后才允许补发。
   update(state, [fireInput()]);
+  assert.equal(state.nextBulletId, nextBulletId + 1);
   assert.equal(liveBullets(state), 1);
 });
 

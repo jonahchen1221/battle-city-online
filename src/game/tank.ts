@@ -75,7 +75,7 @@ export interface TankState {
   slideTicks: number; // 冰面滑行剩余帧：在冰面上移动时装填为 ICE_SLIDE_TICKS，松开方向键后据此继续滑行
   freezeTicks: number; // 友军冻结剩余帧：被队友子弹击中后 >0，期间不能移动 / 开火（敌人恒为 0）
   weapon: WeaponKind; // 当前武器：初始 / 死亡复活均为 'cannon'，由武器道具替换
-  fireCooldown: number; // 连发冷却剩余帧（机枪与智能坦克使用：>0 时不能再射，逐帧递减）
+  fireCooldown: number; // 开火冷却剩余帧（玩家射速上限 / 机枪 / 智能坦克共用；>0 时不能再射）
   fireBufferTicks: number; // 轻点开火缓冲剩余帧：按下沿装填，在弹位释放后的窗口内自动补发（敌人恒为 0）
   speedBoostTicks: number; // boots 快靴剩余帧：>0 时移动速度 ×BOOTS_SPEED_MULT（speed 基值不变）
   hasBoat: boolean; // boat 船：true 时移动碰撞把水面视为可通行（子弹不受影响），死亡即失
