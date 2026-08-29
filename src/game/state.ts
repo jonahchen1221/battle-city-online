@@ -156,7 +156,8 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
 
 // 通关后进入下一关（就地修改同一 state 对象）。
 // 关号 +1（通关第 STAGE_COUNT 关后回卷到第 1 关），载入新关卡地形与出生队列，进入 'stagestart' 幕布。
-// 保留（跨关累积）：scoreByPlayer、livesByPlayer、每名玩家 star 等级 level、playerCount、rng（继续推进）。
+// 保留（跨关累积）：scoreByPlayer、每名玩家 star 等级 level、playerCount、rng（继续推进）；
+// livesByPlayer 单人跨关累积，多人则每关恢复初始值（团队一起进新关，见下）。
 // 重置（每关独立）：killsByPlayer、道具/冻结/铲子计时、bullets/explosions/spawning、eagleDestroyed、
 //                  出队计数 enemiesDequeued / 出生计时 / 出生点、paused / pendingResult。
 export function nextStage(state: GameState): void {
@@ -196,6 +197,12 @@ export function nextStage(state: GameState): void {
   state.paused = false;
   state.pausedBy = -1;
   state.prevPause = false;
+
+  // 多人合作：团队过关 = 全队一起进下一关 —— 新关卡全员生命恢复到初始值，阵亡者重新入场
+  //（star 等级不保留，从 0 开始）。单人保持 NES 原版规则：生命跨关累积。
+  if (state.playerCount > 1) {
+    state.livesByPlayer.fill(PLAYER_LIVES_START);
+  }
 
   // 尚有生命的玩家在各自出生点复活（经出生闪光入场），并沿用其 star 等级。
   for (let i = 0; i < state.playerCount; i++) {
