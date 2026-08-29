@@ -171,61 +171,185 @@ function iceTile(): string[] {
 }
 const ICE = iceTile();
 
-// ── 鹰巢徽记（32×32，透明底白鹰）──
-// 左半 16 列手绘，镜像成 32 列以保证左右对称。'c' 为羽翼阴影点缀。
-function mirrorRows(half: string[]): string[] {
-  return half.map((h) => h + [...h].reverse().join(''));
-}
-// prettier-ignore
-const EAGLE_LEFT = assertGrid([
-  '...............w',
-  '...............w',
-  '..............ww',
-  '..............ww',
-  '.............www',
-  '.............www',
-  '............wwww',
-  '...........wwwww',
-  '..........wwwwww',
-  '.........wwwwwww',
-  '.......wwwwwwwww',
-  '....wwwwwwwwwwww',
-  'wwwwwwwwwwwwwwww',
-  'wwwwwwwwwwwwwwww',
-  'wwwc...wwwwwwwww',
-  'wwc....wwwwwwwww',
-  '.......wwwwwwwww',
-  '.......wwwwwwwww',
-  '........wwwwwwww',
-  '........wwwwcwww',
-  '........wwwwwwww',
-  '.........wwwwwww',
-  '......wwwwwwwwww',
-  '.......wwwwwwwww',
-  '........wwwwwwww',
-  '.........wwwwwww',
-  '.........wwwwwww',
-  '........wwww.www',
-  '.......wwww..www',
-  '......wwww...www',
-  '......www....www',
-  '................',
-], 16, 32, 'eagleLeft');
-const EAGLE = assertGrid(mirrorRows(EAGLE_LEFT), 32, 32, 'eagle');
-
-// 被摧毁的鹰巢（32×32）：暗灰废墟 + 深缝裂痕 + 零星红色碎砖 + 亮灰碎块（程序生成的哈希噪声）。
-function eagleDestroyedTile(): string[] {
-  const rows: string[] = [];
-  for (let y = 0; y < 32; y++) {
-    let line = '';
-    for (let x = 0; x < 32; x++) {
-      const v = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-      const hsh = v - Math.floor(v);
-      line += hsh < 0.12 ? 'r' : hsh < 0.4 ? 'k' : hsh < 0.75 ? 'a' : 'b';
+// ── 鹰巢徽记（32×32，透明底金属鹰）──
+// 正面展翼的徽章式轮廓：金色尖嘴明确指向左侧，双翼横向撑开基地门洞，
+// 三组羽翼缝与三片尾羽保证缩小后仍能与胸腹分离。金属体用左上白色高光、
+// 浅银主体、右下中灰硬边塑形，避免旧版大面积白色连成一团。
+function eagleTile(): string[] {
+  const size = 32;
+  const mask = Array.from({ length: size }, () => new Array<string>(size).fill('.'));
+  const fill = (x0: number, y0: number, x1: number, y1: number, mark = 'B'): void => {
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) mask[y][x] = mark;
     }
-    rows.push(line);
+  };
+
+  // 头部朝左：桂冠、额头、金色阶梯尖嘴和颈部。
+  fill(15, 1, 19, 1);
+  fill(13, 2, 20, 2);
+  fill(12, 3, 20, 5);
+  fill(10, 4, 13, 5, 'O');
+  fill(8, 5, 12, 6, 'O');
+  fill(14, 6, 19, 9);
+  fill(13, 8, 20, 11);
+
+  // 展翼的水平扇面：先快速展宽，再逐行向下收拢。
+  const wingSpans: Array<[y: number, inset: number]> = [
+    [7, 11], [8, 7], [9, 4], [10, 2], [11, 1], [12, 1], [13, 1],
+    [14, 2], [15, 3], [16, 4], [17, 5], [18, 6], [19, 7], [20, 8],
+  ];
+  for (const [y, inset] of wingSpans) {
+    fill(inset, y, 13, y);
+    fill(18, y, size - 1 - inset, y);
   }
-  return assertGrid(rows, 32, 32, 'eagleDestroyed');
+
+  // 紧凑胸腹：上宽下窄，避免中轴变成一根等宽柱子。
+  for (let y = 10; y <= 24; y++) {
+    const half = y < 15 ? 4 : y < 21 ? 3 : 2;
+    fill(16 - half, y, 16 + half, y);
+  }
+
+  // 三组左翼羽缝同步镜像到右翼，用透明负形保持轮廓干净。
+  for (const [startX, startY, length] of [
+    [3, 13, 5],
+    [6, 14, 6],
+    [9, 15, 6],
+  ]) {
+    for (let d = 0; d < length; d++) {
+      const x = startX + Math.floor(d * 0.35);
+      mask[startY + d][x] = '.';
+      mask[startY + d][size - 1 - x] = '.';
+    }
+  }
+
+  // 三片逐级收尖的尾羽：中羽最长，两侧羽外扩后快速收拢。
+  // 从 y=25 开始留出两道稳定的黑色羽缝，避免底部读成方正的脚架。
+  fill(13, 22, 19, 22);
+  fill(12, 23, 20, 23);
+  fill(11, 24, 21, 24);
+  for (let y = 25; y <= 29; y++) {
+    const taper = Math.floor((y - 25) / 2);
+    fill(10 + taper, y, 13, y);
+    fill(15, y, 17, y);
+    fill(19, y, 22 - taper, y);
+  }
+  fill(15, 30, 17, 30);
+
+  const isBody = (x: number, y: number): boolean => mask[y]?.[x] === 'B';
+  const rows = mask.map((row, y) => row.map((mark, x) => {
+    if (mark === 'O') return 'Y';
+    if (mark !== 'B') return '.';
+    const topOrLeftEdge = !isBody(x, y - 1) || !isBody(x - 1, y);
+    const bottomOrRightEdge = !isBody(x, y + 1) || !isBody(x + 1, y);
+    return topOrLeftEdge ? 'w' : bottomOrRightEdge ? 'b' : 'c';
+  }));
+
+  // 眼睛复用边缘中灰，不额外扩张单张精灵的色数。
+  if (rows[3][14] !== '.') {
+    rows[3][14] = 'b';
+  }
+  return assertGrid(rows.map((row) => row.join('')), size, size, 'eagle');
+}
+const EAGLE = eagleTile();
+
+// 被摧毁的鹰巢（32×32）：断裂的鹰徽金属片 + 焦黑瓦砾堆 + 少量余烬。
+// 所有残片都有明确轮廓，门洞上半重新露出黑底，避免随机噪点读成方形电视雪花。
+function eagleDestroyedTile(): string[] {
+  const size = 32;
+  const grid = Array.from({ length: size }, () => new Array<string>(size).fill('.'));
+  type RowSpan = [y: number, x0: number, x1: number];
+
+  const span = (y: number, x0: number, x1: number, color: string): void => {
+    for (let x = x0; x <= x1; x++) grid[y][x] = color;
+  };
+
+  // 先铺不对称的焦黑残骸：中腹鼓起、两端留黑，底边稍微回收。
+  const rubbleBed: RowSpan[] = [
+    [20, 7, 24], [21, 4, 28], [22, 2, 30], [23, 1, 30],
+    [24, 1, 30], [25, 2, 29], [26, 1, 30], [27, 1, 30],
+    [28, 2, 29], [29, 3, 28], [30, 4, 27], [31, 6, 25],
+  ];
+  for (const [y, x0, x1] of rubbleBed) span(y, x0, x1, 'a');
+
+  // 瓦砾堆内部的灰烬层：只用几段成组色带，不再用逐像素随机噪声。
+  for (const [y, x0, x1] of [
+    [21, 5, 9], [21, 22, 26], [23, 9, 13], [24, 18, 22],
+    [26, 2, 5], [27, 23, 28], [29, 5, 11], [30, 17, 23],
+  ] as RowSpan[]) {
+    span(y, x0, x1, 'v');
+  }
+
+  // 给一块独立残片加硬边高光/阴影。每块先建自己的 mask，
+  // 因此即使它们在瓦砾中相邻，轮廓也不会糊成一块。
+  const paintFragment = (
+    rows: RowSpan[],
+    highlight = 'c',
+    body = 'b',
+    shadow = 'v',
+  ): void => {
+    const cells = new Set<number>();
+    for (const [y, x0, x1] of rows) {
+      for (let x = x0; x <= x1; x++) cells.add(y * size + x);
+    }
+    const has = (x: number, y: number): boolean => cells.has(y * size + x);
+    for (const key of cells) {
+      const x = key % size;
+      const y = Math.floor(key / size);
+      const topOrLeftEdge = !has(x, y - 1) || !has(x - 1, y);
+      const bottomOrRightEdge = !has(x, y + 1) || !has(x + 1, y);
+      grid[y][x] = topOrLeftEdge ? highlight : bottomOrRightEdge ? shadow : body;
+    }
+  };
+
+  // 主胸甲、左右断翼与一块尾羽：保留“原来是鹰徽”的上下文。
+  paintFragment([
+    [12, 16, 18], [13, 14, 19], [14, 12, 20], [15, 12, 20],
+    [16, 13, 20], [17, 12, 18], [18, 11, 17], [19, 12, 16], [20, 13, 17],
+  ]);
+  paintFragment([
+    [16, 6, 8], [17, 4, 10], [18, 4, 11],
+    [19, 6, 12], [20, 8, 12], [21, 9, 11],
+  ]);
+  paintFragment([
+    [14, 23, 25], [15, 21, 27], [16, 20, 28], [17, 20, 27],
+    [18, 19, 26], [19, 18, 23], [20, 18, 21],
+  ]);
+  paintFragment([[22, 14, 19], [23, 13, 20], [24, 14, 18]], 's', 'b', 'v');
+
+  // 两块被抛到上方的银色碎片，保留爆炸方向感，但数量足够克制。
+  paintFragment([[8, 7, 8], [9, 6, 9], [10, 7, 9]], 's', 'b', 'v');
+  paintFragment([[7, 24, 25], [8, 23, 26], [9, 24, 26]], 's', 'b', 'v');
+
+  // 底部独立石块：大小、高度交错，不重复平铺整齐方格。
+  for (const rock of [
+    [[23, 3, 7], [24, 2, 8], [25, 4, 8]],
+    [[24, 9, 13], [25, 8, 14], [26, 9, 12]],
+    [[25, 16, 20], [26, 15, 21], [27, 16, 19]],
+    [[22, 24, 27], [23, 22, 28], [24, 23, 27]],
+    [[27, 3, 8], [28, 2, 9], [29, 4, 8]],
+    [[28, 10, 15], [29, 9, 16], [30, 11, 15]],
+    [[28, 20, 26], [29, 18, 27], [30, 20, 25]],
+  ] as RowSpan[][]) {
+    paintFragment(rock, 's', 'b', 'v');
+  }
+
+  // 斜向裂缝把主胸甲切成两片，黑底直接透过裂口露出。
+  for (const [x, y] of [[16, 14], [15, 15], [15, 16], [14, 17], [13, 18]]) {
+    grid[y][x] = '.';
+  }
+
+  // 红砖残片与少量余烬：热色只作点睛，不再铺满整张精灵。
+  paintFragment([[13, 2, 3], [14, 1, 4], [15, 2, 4]], 'o', 'r', 'x');
+  paintFragment([[10, 28, 29], [11, 27, 30], [12, 28, 30]], 'o', 'r', 'x');
+  paintFragment([[25, 5, 7], [26, 4, 7], [27, 5, 6]], 'o', 'r', 'x');
+  paintFragment([[24, 25, 27], [25, 24, 28], [26, 26, 28]], 'o', 'r', 'x');
+  for (const [x, y, color] of [
+    [17, 21, 'o'], [18, 22, 'r'], [15, 24, 'o'], [20, 27, 'r'],
+  ] as Array<[number, number, string]>) {
+    grid[y][x] = color;
+  }
+
+  return assertGrid(grid.map((row) => row.join('')), size, size, 'eagleDestroyed');
 }
 const EAGLE_DESTROYED = eagleDestroyedTile();
 
