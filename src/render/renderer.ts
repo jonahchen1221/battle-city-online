@@ -13,6 +13,9 @@ import {
   COLOR_FRAME,
   COLOR_FIELD,
   WATER_ANIM_TICKS,
+  WATER_FOAM_ANIM_TICKS,
+  COLOR_WATER_EDGE,
+  COLOR_WATER_FOAM,
   TRACK_ANIM_TICKS,
   SPAWN_STAR_ANIM_TICKS,
   SPAWN_FLASH_TICKS,
@@ -1418,11 +1421,11 @@ export class Renderer {
     }
   }
 
-  // 除 TREES 外的所有地形。砖块按存活象限渲染，水面按 tick 播放两帧。
+  // 除 TREES 外的所有地形。砖块按存活象限渲染，水面按 tick 播放四帧行进波。
   // eagleDestroyed 为真时鹰巢画成废墟精灵。
   private drawGround(level: LevelState, tick: number, eagleDestroyed: boolean): void {
     const { ctx, atlas } = this;
-    const waterFrame = Math.floor(tick / WATER_ANIM_TICKS) % 2;
+    const waterFrame = Math.floor(tick / WATER_ANIM_TICKS) % atlas.water.length;
 
     for (let row = 0; row < level.rows; row++) {
       for (let col = 0; col < level.cols; col++) {
@@ -1442,6 +1445,7 @@ export class Renderer {
             break;
           case Cell.WATER:
             drawTile(ctx, atlas.water[waterFrame], px, py);
+            this.drawWaterFoam(level, col, row, px, py, tick);
             break;
           case Cell.ICE:
             drawTile(ctx, atlas.ice, px, py);
@@ -1455,6 +1459,72 @@ export class Renderer {
           default:
             break;
         }
+      }
+    }
+  }
+
+  // 只在水陆交界处画 1 美术像素宽的青色水线与流动白沫。连续水格之间不描边，
+  // 因此大面积海面仍保持一整片；浪花相位按世界坐标错开，避免整条岸线同步闪烁。
+  private drawWaterFoam(
+    level: LevelState,
+    col: number,
+    row: number,
+    px: number,
+    py: number,
+    tick: number,
+  ): void {
+    const artX = px * ART_SCALE;
+    const artY = py * ART_SCALE;
+    const span = SUBTILE * ART_SCALE;
+    const phase = Math.floor(tick / WATER_FOAM_ANIM_TICKS);
+    const seed = col * 3 + row * 5;
+
+    if (getCell(level, col, row - 1) !== Cell.WATER) {
+      this.drawWaterFoamLine(artX, artY, 1, 0, 0, 1, span, phase + seed);
+    }
+    if (getCell(level, col + 1, row) !== Cell.WATER) {
+      this.drawWaterFoamLine(artX + span - 1, artY, 0, 1, -1, 0, span, phase + seed + 2);
+    }
+    if (getCell(level, col, row + 1) !== Cell.WATER) {
+      this.drawWaterFoamLine(artX, artY + span - 1, 1, 0, 0, -1, span, -phase + seed);
+    }
+    if (getCell(level, col - 1, row) !== Cell.WATER) {
+      this.drawWaterFoamLine(artX, artY, 0, 1, 1, 0, span, -phase + seed + 2);
+    }
+  }
+
+  // (dx,dy) 是岸线方向，(innerX,innerY) 指向水域内部。每 7 美术像素一段 3px 浪花，
+  // 并隔段向内溅一个亮点；全部用整数 fillRect，镜头移动时也不会产生抗锯齿。
+  private drawWaterFoamLine(
+    x: number,
+    y: number,
+    dx: number,
+    dy: number,
+    innerX: number,
+    innerY: number,
+    length: number,
+    phase: number,
+  ): void {
+    const { ctx } = this;
+    ctx.fillStyle = COLOR_WATER_EDGE;
+    ctx.fillRect(x, y, dx === 0 ? 1 : length, dy === 0 ? 1 : length);
+
+    const cycle = 7;
+    const shift = ((phase * 2) % cycle + cycle) % cycle;
+    ctx.fillStyle = COLOR_WATER_FOAM;
+    for (let start = -shift; start < length; start += cycle) {
+      const clippedStart = Math.max(0, start);
+      const dashLength = Math.min(3 - Math.max(0, -start), length - clippedStart);
+      if (dashLength <= 0) continue;
+      ctx.fillRect(
+        x + dx * clippedStart,
+        y + dy * clippedStart,
+        dx === 0 ? 1 : dashLength,
+        dy === 0 ? 1 : dashLength,
+      );
+      if (((phase + Math.floor(start / cycle)) & 1) === 0) {
+        const sparkle = Math.min(length - 1, clippedStart + 1);
+        ctx.fillRect(x + dx * sparkle + innerX, y + dy * sparkle + innerY, 1, 1);
       }
     }
   }

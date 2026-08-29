@@ -64,8 +64,12 @@ export const BRICK_BR = 0b1000; // 右下
 export const BRICK_FULL = 0b1111; // 完整砖块
 export const QUARTER = 4; // 象限边长（子格 8px 的一半）
 
-// 水面动画：每约 32 逻辑帧切换一帧
-export const WATER_ANIM_TICKS = 32;
+// 水面动画：四帧波纹每 10 逻辑帧推进一次（约 6 FPS），保留低帧像素感同时避免静态跳变。
+export const WATER_ANIM_TICKS = 10;
+// 水陆交界浪花的虚线流动节奏（独立于水面主波纹，形成轻微视差）。
+export const WATER_FOAM_ANIM_TICKS = 6;
+export const COLOR_WATER_EDGE = '#4c9cf4';
+export const COLOR_WATER_FOAM = '#b8ecff';
 
 // 坦克尺寸（= 一个大格）
 export const TANK_SIZE = TILE; // 16
@@ -439,12 +443,13 @@ export const BOOTS_SPEED_MULT = 1.5;
 export const GHOST_TICKS = 10 * TICKS_PER_SECOND; // 600 帧 = 10 秒
 // 幽灵态坦克的渲染透明度（半透明，与友军冻结的明灭闪烁明显区分）。
 export const GHOST_RENDER_ALPHA = 0.45;
-// 智能坦克只会主动争夺附近的温和强化，并使用更短持续时间 / 更低上限控制强度。
+// 智能坦克只会主动争夺附近的温和强化；限时效果与耐久仍使用更保守的数值，
+// star 则可走完整的三级火炮升级路线（弹速 → 双弹 → 破钢）。
 export const SMART_POWERUP_SEEK_RADIUS = 80;
 export const SMART_HELMET_TICKS = 4 * TICKS_PER_SECOND;
 export const SMART_BOOTS_TICKS = 8 * TICKS_PER_SECOND;
 export const SMART_GHOST_TICKS = 5 * TICKS_PER_SECOND;
-export const SMART_MAX_LEVEL = 1;
+export const SMART_MAX_LEVEL = PLAYER_MAX_LEVEL;
 export const SMART_MAX_HP = 2;
 // hourglass 沙漏：敌军半速持续帧数（期间敌军仅在偶数 tick 行动；enemyFreezeTicks 全冻结优先）。
 export const ENEMY_SLOW_TICKS = 12 * TICKS_PER_SECOND; // 720 帧 = 12 秒

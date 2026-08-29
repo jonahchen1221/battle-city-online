@@ -236,7 +236,7 @@ export function hasLiveBullet(bullets: BulletState[], ownerId: number): boolean 
   return bullets.some((b) => b.alive && b.ownerId === ownerId);
 }
 
-// 该坦克当前在场子弹数（玩家 star 等级 ≥2 时可双弹，故需计数而非布尔）。
+// 该坦克当前在场子弹数（敌我 star 等级 ≥2 时可双弹，故需计数而非布尔）。
 export function liveBulletCount(bullets: BulletState[], ownerId: number): number {
   let n = 0;
   for (const b of bullets) if (b.alive && b.ownerId === ownerId) n++;
@@ -244,7 +244,7 @@ export function liveBulletCount(bullets: BulletState[], ownerId: number): number
 }
 
 // 该坦克同屏可存在的子弹上限：
-// cannon 沿用 star 规则（等级 ≥2 为 PLAYER_MAX_BULLETS_UPGRADED，否则 1）；
+// cannon 沿用 star 规则（敌我等级 ≥2 均为 PLAYER_MAX_BULLETS_UPGRADED，否则 1）；
 // 特殊武器各有自己的上限（散弹的“1”指一轮齐射 —— 三发全灭前不能再射）。
 export function maxBulletsFor(tank: TankState): number {
   switch (tank.weapon) {

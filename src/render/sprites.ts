@@ -24,11 +24,11 @@ const PALETTE: Record<string, string> = {
   b: '#7c7c7c',
   v: '#5c5c5c', // 暗银过渡（新增：银车体 H→D 之间的暗分色带）
   a: '#3c3c3c',
-  // 水：深蓝底 + 中蓝 + 亮蓝波 + 浪尖泡沫
-  u: '#0c2c8c',
-  i: '#2038ec',
-  l: '#6890f8',
-  f: '#a8c0fc', // 浪尖泡沫（新增：波峰更亮的水色）
+  // 水：深海蓝底 + 中蓝 + 青蓝波峰 + 冷白浪尖
+  u: '#071f68',
+  i: '#1250b8',
+  l: '#3c98f4',
+  f: '#a8dcfc',
   // 树林：暗绿孔洞 + 中绿 + 亮绿 + 高光叶尖
   g: '#00681c',
   G: '#38a028',
@@ -128,21 +128,28 @@ const STEEL = assertGrid([
   'aaaaaaaaaaaaaaaa',
 ], 16, 16, 'steel');
 
-// 水：整格行进波（sin 相位），四色分带（深 u → 中 i → 亮 l → 泡沫 f）。两帧相位相反做动画。
-function waterFrame(phase: number): string[] {
+// 水：两组不同方向的可平铺行进波叠加，四色分带（深 u → 中 i → 亮 l → 泡沫 f）。
+// x/y 周期均严格落在 16px 内，连续水格拼接时不会出现硬接缝；四个相位构成完整循环。
+function waterFrame(frame: number): string[] {
+  const phase = (frame / 4) * Math.PI * 2;
   const rows: string[] = [];
   for (let y = 0; y < 16; y++) {
     let line = '';
     for (let x = 0; x < 16; x++) {
-      const wv = Math.sin((y / 16) * Math.PI * 3 + (x / 16) * Math.PI * 2 + phase);
-      line += wv > 0.82 ? 'f' : wv > 0.35 ? 'l' : wv > -0.25 ? 'i' : 'u';
+      // y 方向双波带构成横向涌浪，x 方向相位只负责把波峰轻轻掰弯，不形成满屏斜纹。
+      const bend = Math.sin((x / 16) * Math.PI * 2 + phase) * 0.58;
+      const swell = Math.sin((y / 16) * Math.PI * 4 - phase + bend);
+      const undertow = Math.sin((y / 16) * Math.PI * 2 + phase + (x / 16) * Math.PI * 2) * 0.26;
+      const wave = swell + undertow;
+      // 浪尖故意断成短段：避免整行白边，也让四帧切换时有泡沫向前滚动的错觉。
+      const brokenCrest = ((x + frame * 3 + y * 5) % 11 + 11) % 11 < 4;
+      line += wave > 0.92 && brokenCrest ? 'f' : wave > 0.34 ? 'l' : wave > -0.62 ? 'i' : 'u';
     }
     rows.push(line);
   }
   return assertGrid(rows, 16, 16, 'water');
 }
-const WATER_0 = waterFrame(0);
-const WATER_1 = waterFrame(Math.PI);
+const WATER_FRAMES = [0, 1, 2, 3].map(waterFrame) as [string[], string[], string[], string[]];
 
 // 树林：交叠叶簇（中绿/亮绿/高光尖 + 暗绿孔洞），程序生成保证密实自然。
 function treesTile(): string[] {
@@ -1345,7 +1352,7 @@ export interface SpriteAtlas {
   canvas: HTMLCanvasElement;
   brick: Sprite;
   steel: Sprite;
-  water: [Sprite, Sprite]; // 两帧动画
+  water: [Sprite, Sprite, Sprite, Sprite]; // 四帧可平铺行进波
   trees: Sprite;
   ice: Sprite;
   eagle: Sprite;
@@ -1507,14 +1514,13 @@ export function createSpriteAtlas(): SpriteAtlas {
   // 地形行（16×16）
   paint(ctx, BRICK, 0, Y_TERRAIN);
   paint(ctx, STEEL, 16, Y_TERRAIN);
-  paint(ctx, WATER_0, 32, Y_TERRAIN);
-  paint(ctx, WATER_1, 48, Y_TERRAIN);
-  paint(ctx, TREES, 64, Y_TERRAIN);
-  paint(ctx, ICE, 80, Y_TERRAIN);
-  paint(ctx, HUD_ENEMY, 96, Y_TERRAIN);
-  // 四套玩家生命迷你坦克：x=112/128/144/160。
+  for (let i = 0; i < WATER_FRAMES.length; i++) paint(ctx, WATER_FRAMES[i], 32 + i * 16, Y_TERRAIN);
+  paint(ctx, TREES, 96, Y_TERRAIN);
+  paint(ctx, ICE, 112, Y_TERRAIN);
+  paint(ctx, HUD_ENEMY, 128, Y_TERRAIN);
+  // 四套玩家生命迷你坦克：x=144/160/176/192。
   for (let i = 0; i < HUD_LIFE_TANKS.length; i++) {
-    paint(ctx, HUD_LIFE_TANKS[i], 112 + i * 16, Y_TERRAIN);
+    paint(ctx, HUD_LIFE_TANKS[i], 144 + i * 16, Y_TERRAIN);
   }
 
   // 鹰巢行（32×32）+ 子弹（8×8）+ 炎爆火球（8×8）+ 激光四朝向（各 16×16）
@@ -1610,9 +1616,14 @@ export function createSpriteAtlas(): SpriteAtlas {
     canvas,
     brick: s(0, Y_TERRAIN, 16, 16),
     steel: s(16, Y_TERRAIN, 16, 16),
-    water: [s(32, Y_TERRAIN, 16, 16), s(48, Y_TERRAIN, 16, 16)],
-    trees: s(64, Y_TERRAIN, 16, 16),
-    ice: s(80, Y_TERRAIN, 16, 16),
+    water: [0, 1, 2, 3].map((i) => s(32 + i * 16, Y_TERRAIN, 16, 16)) as [
+      Sprite,
+      Sprite,
+      Sprite,
+      Sprite,
+    ],
+    trees: s(96, Y_TERRAIN, 16, 16),
+    ice: s(112, Y_TERRAIN, 16, 16),
     eagle: s(0, Y_EAGLE, 32, 32),
     eagleDestroyed: s(32, Y_EAGLE, 32, 32),
     playerTank: PLAYER_LEVEL_ROW_Y.map((rows) => rows.map((y) => tankFramesAt(canvas, y))),
@@ -1665,8 +1676,8 @@ export function createSpriteAtlas(): SpriteAtlas {
     boss: [bossFramesAt(canvas, Y_BOSS_P1), bossFramesAt(canvas, Y_BOSS_P2)],
     bossFlash: bossFramesAt(canvas, Y_BOSS_FLASH),
     bossMine: [s(176, Y_EAGLE, 16, 16), s(192, Y_EAGLE, 16, 16)],
-    hudEnemy: s(96, Y_TERRAIN, 16, 16),
-    hudLifeTank: HUD_LIFE_TANKS.map((_, i) => s(112 + i * 16, Y_TERRAIN, 16, 16)),
+    hudEnemy: s(128, Y_TERRAIN, 16, 16),
+    hudLifeTank: HUD_LIFE_TANKS.map((_, i) => s(144 + i * 16, Y_TERRAIN, 16, 16)),
     hudFlag: s(64, Y_EAGLE, 32, 32),
     font: FONT,
   };

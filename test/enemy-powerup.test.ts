@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bulletCanHit, spawnBullet } from '../src/game/bullet';
+import { bulletCanHit, maxBulletsFor, spawnBullet } from '../src/game/bullet';
 import { tryPickupPowerup } from '../src/game/powerup';
 import { createGameState } from '../src/game/state';
 import { createEnemy } from '../src/game/tank';
-import { PLAYER_FREEZE_TICKS } from '../src/core/constants';
+import {
+  PLAYER_FREEZE_TICKS,
+  SMART_MAX_LEVEL,
+  STAR_BULLET_SPEED,
+} from '../src/core/constants';
 import { update } from '../src/game/update';
 import { emptyInput } from '../src/core/types';
 
@@ -57,6 +61,36 @@ test('enemy clock freezes the player faction', () => {
   input.right = true;
   update(state, [input]);
   assert.equal(player.x, xBefore);
+});
+
+test('smart tank consumes stars through the full cannon upgrade route', () => {
+  const state = createGameState(43, 1);
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(smart, { x: 32, y: 32 });
+  state.tanks.push(smart);
+
+  const giveStar = (): void => {
+    state.powerups.push({ kind: 'star', x: smart.x, y: smart.y });
+    tryPickupPowerup(state, 'enemy');
+  };
+
+  giveStar();
+  assert.equal(smart.level, 1);
+  assert.equal(spawnBullet(smart, 1).speed, STAR_BULLET_SPEED);
+
+  giveStar();
+  assert.equal(smart.level, 2);
+  assert.equal(maxBulletsFor(smart), 2);
+  assert.equal(spawnBullet(smart, 2).steelPiercing, false);
+
+  giveStar();
+  assert.equal(smart.level, SMART_MAX_LEVEL);
+  assert.equal(spawnBullet(smart, 3).steelPiercing, true);
+
+  // 满级智能坦克不会吃掉无法继续生效的星星。
+  giveStar();
+  assert.equal(smart.level, SMART_MAX_LEVEL);
+  assert.deepEqual(state.powerups, [{ kind: 'star', x: smart.x, y: smart.y }]);
 });
 
 test('enemy grenade destroys players through the normal life and respawn flow', () => {

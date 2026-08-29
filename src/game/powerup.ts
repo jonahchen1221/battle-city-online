@@ -351,7 +351,7 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
         // 满级时不再升级；若 3 级的一次性外层护甲已损失，则补回这一层。
         if (!upgradePlayerTank(collector) && collector.armor === 0) collector.armor = 1;
       } else {
-        // 智能坦克只升到 1 级（提升弹速，不开放双弹 / 破钢）；其他敌军仍封顶 3。
+        // 智能坦克与其他敌军都走完整火炮路线：1 级提速、2 级双弹、3 级破钢。
         collector.level = Math.min(
           collector.kind === 'smart' ? SMART_MAX_LEVEL : PLAYER_MAX_LEVEL,
           collector.level + 1,
