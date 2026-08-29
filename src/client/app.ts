@@ -33,6 +33,8 @@ import {
   FIELD_HEIGHT,
   TICKS_PER_SECOND,
   PLAYER_LABEL_COLORS,
+  STAGE_COUNT,
+  stageKind,
 } from '../core/constants';
 import { drawTextOutlined, textWidth, drawTile } from '../render/sprites';
 import {
@@ -62,7 +64,7 @@ import {
   powerupTickerText,
 } from './ui';
 
-export type ScreenName = 'title' | 'joinCode' | 'lobby' | 'localGame' | 'netGame';
+export type ScreenName = 'title' | 'createRoom' | 'joinCode' | 'lobby' | 'localGame' | 'netGame';
 
 // 标题菜单项。局域网（本机 / 私网 IP / .local）额外露出 LOCAL GAME，点进去即加入固定房间。
 type TitleItem = 'NAME' | '1 PLAYER' | 'LOCAL GAME' | 'CREATE ROOM' | 'JOIN ROOM';
@@ -109,6 +111,13 @@ const COLOR_HIGHLIGHT = '#ffc14a'; // 自己所在行 / 光标黄
 const COLOR_ENEMY = '#f85838'; // 敌方拾取道具跑马灯
 const COLOR_ERROR = '#ff5947';
 const COLOR_OK = '#70dc58';
+
+const STAGE_KIND_TEXT = {
+  normal: 'NORMAL',
+  escort: 'ESCORT',
+  boss: 'BOSS',
+  versus: 'VERSUS',
+} as const;
 
 // 机台顶栏中的跑马灯。以 CSS 像素匀速移动，并吸附到整数像素保持街机字样清晰。
 const TICKER_SPEED_PX_PER_MS = 0.075; // 75 CSS px / sec
@@ -158,19 +167,25 @@ export class App {
   private nameBuffer = DEFAULT_PLAYER_NAME;
   private nameEditing = false;
 
+  // ── 建房配置 ──
+  private createStartingStage = 1;
+  // 键盘直接输入关号时暂存 1–2 位数字；方向键调整后清空并回到选择值。
+  private createStageBuffer = '';
+
   // ── 房间码输入 ──
   private codeBuffer = '';
 
   // ── 联机 ──
   private net: NetClient;
   private roomCode = '';
+  private roomStartingStage = 1;
   private myPlayerIndex = 0;
   private players: LobbyPlayer[] = [];
   private gamePlayerNames: string[] = [];
   private statusMsg = ''; // 普通状态行（如 CONNECTING）
   private statusError = ''; // 红色错误行
   private pendingAction:
-    | { t: 'create' }
+    | { t: 'create'; startingStage: number }
     | { t: 'join'; code: string; resumeToken?: string }
     | null = null;
   private linkCopiedUntil = 0; // 复制成功提示的截止时刻（performance.now() 口径，0 = 无提示）
@@ -337,6 +352,12 @@ export class App {
         if (pad.down) this.moveTitleSel(1);
         if (pad.confirm || pad.start) this.confirmTitle();
         break;
+      case 'createRoom':
+        if (pad.back) this.cancelCreateRoom();
+        else if (pad.left || pad.down) this.adjustCreateStage(-1);
+        else if (pad.right || pad.up) this.adjustCreateStage(1);
+        else if (pad.confirm || pad.start) this.submitCreateRoom();
+        break;
       case 'joinCode':
         // 手柄不做文字输入：房间码仍只能键盘敲或粘贴。
         if (pad.back) this.cancelJoinCode();
@@ -344,6 +365,8 @@ export class App {
         break;
       case 'lobby':
         if (pad.back) this.leaveLobby();
+        else if (isLocalRoomCode(this.roomCode) && (pad.left || pad.down)) this.adjustLobbyStage(-1);
+        else if (isLocalRoomCode(this.roomCode) && (pad.right || pad.up)) this.adjustLobbyStage(1);
         else if (pad.confirm) this.toggleReady();
         else if (pad.start) this.hostStartGame();
         break;
@@ -354,6 +377,9 @@ export class App {
     switch (this.screen) {
       case 'title':
         this.drawTitle();
+        break;
+      case 'createRoom':
+        this.drawCreateRoom();
         break;
       case 'joinCode':
         this.drawJoinCode();
@@ -403,7 +429,11 @@ export class App {
   private onNetOpen(): void {
     this.statusError = '';
     if (this.pendingAction?.t === 'create') {
-      this.net.send({ t: 'create', name: this.playerName });
+      this.net.send({
+        t: 'create',
+        name: this.playerName,
+        startingStage: this.pendingAction.startingStage,
+      });
       this.statusMsg = 'CREATING ROOM';
     } else if (this.pendingAction?.t === 'join') {
       this.net.send({
@@ -422,6 +452,7 @@ export class App {
         const wasReconnecting = this.screen === 'netGame' && this.disconnected;
         this.cancelReconnectTimer();
         this.roomCode = msg.code;
+        this.roomStartingStage = msg.startingStage ?? 1;
         this.resumeToken = msg.resumeToken;
         saveResumeToken(msg.code, msg.resumeToken);
         this.myPlayerIndex = msg.playerIndex;
@@ -438,6 +469,7 @@ export class App {
       }
       case 'lobby':
         this.players = msg.players;
+        this.roomStartingStage = msg.startingStage ?? this.roomStartingStage;
         break;
       case 'started':
         // 大厅座位存在空洞时，服务端会在开局时压紧为连续的对局序号。
@@ -534,6 +566,7 @@ export class App {
     this.statusMsg = '';
     this.players = [];
     this.roomCode = '';
+    this.roomStartingStage = 1;
     this.resumeToken = '';
     this.disconnected = false;
     this.reconnecting = false;
@@ -646,12 +679,25 @@ export class App {
       return;
     }
     // 仅菜单画面响应，避免与游戏 Keyboard 抢键。
-    if (this.screen !== 'title' && this.screen !== 'joinCode' && this.screen !== 'lobby') return;
-    if (e.repeat) return; // 边沿触发：忽略按住的自动重复
+    if (
+      this.screen !== 'title' &&
+      this.screen !== 'createRoom' &&
+      this.screen !== 'joinCode' &&
+      this.screen !== 'lobby'
+    ) return;
+    // 建房配置和 LOCAL 大厅的关卡选择允许按住方向键连续调整；其余菜单严格按边沿触发。
+    const localStageRepeat =
+      this.screen === 'lobby' &&
+      isLocalRoomCode(this.roomCode) &&
+      ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'].includes(e.code);
+    if (e.repeat && this.screen !== 'createRoom' && !localStageRepeat) return;
 
     switch (this.screen) {
       case 'title':
         this.onTitleKey(e);
+        break;
+      case 'createRoom':
+        this.onCreateRoomKey(e);
         break;
       case 'joinCode':
         this.onJoinCodeKey(e);
@@ -710,9 +756,9 @@ export class App {
         this.joinLocalGame();
         break;
       case 'CREATE ROOM':
-        this.pendingAction = { t: 'create' };
-        this.statusMsg = 'CONNECTING';
-        this.net.connect();
+        this.createStageBuffer = '';
+        this.statusMsg = '';
+        this.screen = 'createRoom';
         break;
       case 'JOIN ROOM':
         this.codeBuffer = '';
@@ -768,6 +814,100 @@ export class App {
     const saved = savePlayerName(name);
     this.statusMsg = saved ? 'NAME SAVED' : '';
     this.statusError = saved ? '' : 'STORAGE UNAVAILABLE';
+  }
+
+  private onCreateRoomKey(e: KeyboardEvent): void {
+    if (e.code === 'Escape' && !e.repeat) {
+      e.preventDefault();
+      this.cancelCreateRoom();
+      return;
+    }
+    if (e.code === 'Enter' && !e.repeat) {
+      e.preventDefault();
+      this.submitCreateRoom();
+      return;
+    }
+    if (e.code === 'Backspace' && !e.repeat) {
+      e.preventDefault();
+      this.createStageBuffer = this.createStageBuffer.slice(0, -1);
+      this.statusError = '';
+      return;
+    }
+
+    let delta = 0;
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowDown') delta = -1;
+    if (e.code === 'ArrowRight' || e.code === 'ArrowUp') delta = 1;
+    if (e.code === 'PageDown') delta = -5;
+    if (e.code === 'PageUp') delta = 5;
+    if (delta !== 0) {
+      e.preventDefault();
+      this.adjustCreateStage(delta);
+      return;
+    }
+    if (e.code === 'Home') {
+      e.preventDefault();
+      this.setCreateStage(1);
+      return;
+    }
+    if (e.code === 'End') {
+      e.preventDefault();
+      this.setCreateStage(STAGE_COUNT);
+      return;
+    }
+
+    const digit = /^(?:Digit|Numpad)([0-9])$/.exec(e.code)?.[1];
+    if (!digit || e.repeat) return;
+    e.preventDefault();
+    const next = this.createStageBuffer.length < 2 ? this.createStageBuffer + digit : digit;
+    this.createStageBuffer = next;
+    const stage = this.createStageValue();
+    if (stage === null) {
+      this.statusError = `STAGE 1 TO ${STAGE_COUNT}`;
+    } else {
+      this.createStartingStage = stage;
+      this.statusError = '';
+    }
+  }
+
+  private createStageValue(): number | null {
+    if (!this.createStageBuffer) return this.createStartingStage;
+    const stage = Number(this.createStageBuffer);
+    return Number.isInteger(stage) && stage >= 1 && stage <= STAGE_COUNT ? stage : null;
+  }
+
+  private setCreateStage(stage: number): void {
+    this.createStartingStage = stage;
+    this.createStageBuffer = '';
+    this.statusError = '';
+  }
+
+  private adjustCreateStage(delta: number): void {
+    const current = this.createStageValue() ?? this.createStartingStage;
+    const stage = ((current - 1 + delta) % STAGE_COUNT + STAGE_COUNT) % STAGE_COUNT + 1;
+    this.setCreateStage(stage);
+  }
+
+  private cancelCreateRoom(): void {
+    this.net.close();
+    this.pendingAction = null;
+    this.createStageBuffer = '';
+    this.statusMsg = '';
+    this.statusError = '';
+    this.screen = 'title';
+  }
+
+  private submitCreateRoom(): void {
+    const stage = this.createStageValue();
+    if (stage === null) {
+      this.statusError = `STAGE 1 TO ${STAGE_COUNT}`;
+      return;
+    }
+    this.createStartingStage = stage;
+    this.createStageBuffer = '';
+    this.pendingAction = { t: 'create', startingStage: stage };
+    this.statusMsg = 'CONNECTING';
+    this.statusError = '';
+    this.net.connect();
   }
 
   private onJoinCodeKey(e: KeyboardEvent): void {
@@ -846,6 +986,30 @@ export class App {
   }
 
   private onLobbyKey(e: KeyboardEvent): void {
+    if (isLocalRoomCode(this.roomCode)) {
+      let delta = 0;
+      if (e.code === 'ArrowLeft' || e.code === 'ArrowDown') delta = -1;
+      if (e.code === 'ArrowRight' || e.code === 'ArrowUp') delta = 1;
+      if (e.code === 'PageDown') delta = -5;
+      if (e.code === 'PageUp') delta = 5;
+      if (delta !== 0) {
+        e.preventDefault();
+        this.adjustLobbyStage(delta);
+        return;
+      }
+      if (e.code === 'Home') {
+        e.preventDefault();
+        this.setLobbyStage(1);
+        return;
+      }
+      if (e.code === 'End') {
+        e.preventDefault();
+        this.setLobbyStage(STAGE_COUNT);
+        return;
+      }
+    }
+    // LOCAL 大厅放开了方向键自动重复；动作键仍只认按下沿，避免按住 Enter 反复切换准备。
+    if (e.repeat) return;
     if (e.code === 'Escape') {
       e.preventDefault();
       this.leaveLobby();
@@ -866,6 +1030,20 @@ export class App {
       this.copyRoomLink();
       return;
     }
+  }
+
+  private adjustLobbyStage(delta: number): void {
+    const next =
+      ((this.roomStartingStage - 1 + delta) % STAGE_COUNT + STAGE_COUNT) % STAGE_COUNT + 1;
+    this.setLobbyStage(next);
+  }
+
+  private setLobbyStage(stage: number): void {
+    if (!isLocalRoomCode(this.roomCode)) return;
+    // 先本地更新，消除局域网往返造成的按键迟滞；权威广播随后会让所有人收敛到最终值。
+    this.roomStartingStage = stage;
+    this.statusError = '';
+    this.net.send({ t: 'stage', stage });
   }
 
   private leaveLobby(): void {
@@ -991,6 +1169,40 @@ export class App {
     this.drawStatusLines(225);
   }
 
+  // ───────────────────────── 绘制：建房配置 ─────────────────────────
+
+  private drawCreateRoom(): void {
+    const { ctx } = this;
+    const atlas = this.renderer.spriteAtlas;
+    clearScreen(ctx);
+    const cx = NATIVE_WIDTH / 2;
+
+    drawLogoTextCentered(ctx, atlas, 'CREATE ROOM', cx, 28, 3, COLOR_TITLE);
+    drawTextCentered(ctx, atlas, 'SELECT STARTING STAGE', cx, 78, COLOR_MENU);
+    drawPixelPanel(ctx, cx - 72, 97, 144, 62);
+
+    const stage = this.createStageValue();
+    const display = this.createStageBuffer || String(this.createStartingStage);
+    drawBigTextCentered(ctx, atlas, '<', cx - 48, 113, 2, COLOR_MENU_DIM);
+    drawBigTextCentered(
+      ctx,
+      atlas,
+      display.padStart(2, '0'),
+      cx,
+      106,
+      4,
+      stage === null ? COLOR_ERROR : COLOR_HIGHLIGHT,
+    );
+    drawBigTextCentered(ctx, atlas, '>', cx + 48, 113, 2, COLOR_MENU_DIM);
+
+    if (stage !== null) {
+      drawTextCentered(ctx, atlas, STAGE_KIND_TEXT[stageKind(stage)], cx, 170, COLOR_OK);
+    }
+    drawTextCentered(ctx, atlas, `ARROWS CHANGE   TYPE 1 TO ${STAGE_COUNT}`, cx, 194, COLOR_MENU_DIM);
+    drawTextCentered(ctx, atlas, 'ENTER CREATE   ESC CANCEL', cx, 210, COLOR_MENU_DIM);
+    this.drawStatusLines(227);
+  }
+
   // ───────────────────────── 绘制：房间码输入 ─────────────────────────
 
   private drawJoinCode(): void {
@@ -1050,8 +1262,17 @@ export class App {
     if (this.roomCode) {
       const link = this.shareUrlText();
       const linkX = Math.max(0, cx - Math.round(textWidth(link) / 2));
-      drawTextOutlined(ctx, atlas, link, linkX, 72, COLOR_MENU_DIM);
+      drawTextOutlined(ctx, atlas, link, linkX, 63, COLOR_MENU_DIM);
     }
+
+    drawTextCentered(
+      ctx,
+      atlas,
+      `START STAGE ${String(this.roomStartingStage).padStart(2, '0')}`,
+      cx,
+      75,
+      COLOR_HIGHLIGHT,
+    );
 
     drawPixelPanel(ctx, cx - 82, 86, 164, 82);
 
@@ -1082,10 +1303,17 @@ export class App {
       if (mine) drawTextOutlined(ctx, atlas, '<', x - 12, y, COLOR_HIGHLIGHT);
     }
 
-    // 操作提示（4 行等距；比原先多一行 COPY LINK，故整体上提 6px 给底部状态行留位）。
-    const hintRowH = 14;
+    // LOCAL 多一行全员可操作的关卡选择；压紧到 12px 行距后仍给底部状态行留足空间。
+    const localStageSelect = isLocalRoomCode(this.roomCode);
+    const hintRowH = localStageSelect ? 12 : 14;
     const hintY = listTop + MAX_PLAYERS * rowH + 6;
-    drawTextCentered(ctx, atlas, 'ENTER = READY', cx, hintY, COLOR_MENU);
+    let hintRow = 0;
+    if (localStageSelect) {
+      drawTextCentered(ctx, atlas, 'ARROWS = SELECT STAGE', cx, hintY, COLOR_HIGHLIGHT);
+      hintRow++;
+    }
+    drawTextCentered(ctx, atlas, 'ENTER = READY', cx, hintY + hintRowH * hintRow, COLOR_MENU);
+    hintRow++;
     if (this.isHost()) {
       const allReady = this.allReady();
       drawTextCentered(
@@ -1093,13 +1321,15 @@ export class App {
         atlas,
         allReady ? 'S = START' : 'WAIT ALL READY',
         cx,
-        hintY + hintRowH,
+        hintY + hintRowH * hintRow,
         allReady ? COLOR_OK : COLOR_MENU_DIM,
       );
     } else {
-      drawTextCentered(ctx, atlas, 'WAIT FOR HOST', cx, hintY + hintRowH, COLOR_MENU_DIM);
+      drawTextCentered(ctx, atlas, 'WAIT FOR HOST', cx, hintY + hintRowH * hintRow, COLOR_MENU_DIM);
     }
-    drawTextCentered(ctx, atlas, 'ESC = LEAVE', cx, hintY + hintRowH * 2, COLOR_MENU_DIM);
+    hintRow++;
+    drawTextCentered(ctx, atlas, 'ESC = LEAVE', cx, hintY + hintRowH * hintRow, COLOR_MENU_DIM);
+    hintRow++;
     // 复制提示态：菜单每帧重绘，时间戳过期即自然复原为默认行。
     const copied = performance.now() < this.linkCopiedUntil;
     drawTextCentered(
@@ -1107,11 +1337,12 @@ export class App {
       atlas,
       copied ? 'LINK COPIED' : 'C = COPY LINK',
       cx,
-      hintY + hintRowH * 3,
+      hintY + hintRowH * hintRow,
       copied ? COLOR_OK : COLOR_MENU_DIM,
     );
+    hintRow++;
 
-    this.drawStatusLines(hintY + hintRowH * 4 + 2);
+    this.drawStatusLines(hintY + hintRowH * hintRow + 2);
   }
 
   // ───────────────────────── 绘制：联机游戏 ─────────────────────────

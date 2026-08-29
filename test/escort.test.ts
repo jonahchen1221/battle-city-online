@@ -122,7 +122,7 @@ test('disconnected tanks neither count as guards nor keep the multiplayer guard 
   assert.ok(escort.y < beforeY);
 });
 
-test('guard slots scale from one required two-cell strip to two simultaneously occupied strips', () => {
+test('guard slots scale from one full-speed strip to two independently contributing strips', () => {
   for (const playerCount of [1, 2]) {
     const state = createGameState(300 + playerCount, playerCount, 2);
     const escort = state.escort!;
@@ -148,15 +148,24 @@ test('guard slots scale from one required two-cell strip to two simultaneously o
     }
 
     Object.assign(state.tanks[0], { x: slots[0].x, y: slots[0].y });
-    assert.equal(escortHasGuard(state), false);
-    const stoppedAt = escort.y;
+    assert.equal(escortHasGuard(state), true);
+    const oneGuardAt = escort.y;
     updateEscort(state);
-    assert.equal(escort.y, stoppedAt, `${playerCount}P convoy should wait for the second guard`);
+    assert.equal(
+      oneGuardAt - escort.y,
+      escort.speed / 2,
+      `${playerCount}P convoy should move at half speed with one guard`,
+    );
 
     Object.assign(state.tanks[1], { x: slots[1].x, y: slots[1].y });
     assert.equal(escortHasGuard(state), true);
+    const bothGuardsAt = escort.y;
     updateEscort(state);
-    assert.ok(escort.y < stoppedAt, `${playerCount}P convoy should move with both guards`);
+    assert.equal(
+      bothGuardsAt - escort.y,
+      escort.speed,
+      `${playerCount}P convoy should move at full speed with both guards`,
+    );
   }
 });
 

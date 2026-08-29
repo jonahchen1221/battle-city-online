@@ -23,6 +23,7 @@ import {
   type ServerErrorCode,
 } from '../net/protocol';
 import { InputState } from '../core/types';
+import { STAGE_COUNT } from '../core/constants';
 import { Room, RoomManager } from './room';
 
 // 端口：默认 8080，可用 PORT 环境变量覆盖。
@@ -264,11 +265,23 @@ export function createServer(
               sendError(ws, 'bad_message', 'name 必须为 2 位字母或数字');
               return;
             }
+            // 兼容旧客户端：省略 startingStage 时仍从第 1 关开始；一旦显式提供则严格限制为
+            // 1..STAGE_COUNT 的整数，避免异常关号进入权威状态。
+            const startingStage = msg.startingStage ?? 1;
+            if (
+              typeof startingStage !== 'number' ||
+              !Number.isInteger(startingStage) ||
+              startingStage < 1 ||
+              startingStage > STAGE_COUNT
+            ) {
+              sendError(ws, 'bad_message', `startingStage 必须为 1 到 ${STAGE_COUNT} 的整数`);
+              return;
+            }
             if (manager.size >= MAX_ROOMS) {
               sendError(ws, 'server_busy', '房间数量已达上限');
               return;
             }
-            const room = manager.createRoom();
+            const room = manager.createRoom(startingStage);
             const idx = room.addHost(ws, name);
             contexts.set(ws, { room, playerIndex: idx });
             joined = true;
@@ -322,6 +335,21 @@ export function createServer(
               return;
             }
             ctx.room.setReady(ctx.playerIndex, msg.ready);
+            break;
+          }
+
+          case 'stage': {
+            if (!ctx) return;
+            if (
+              typeof msg.stage !== 'number' ||
+              !Number.isInteger(msg.stage) ||
+              msg.stage < 1 ||
+              msg.stage > STAGE_COUNT
+            ) {
+              sendError(ws, 'bad_message', `stage 必须为 1 到 ${STAGE_COUNT} 的整数`);
+              return;
+            }
+            ctx.room.setStartingStage(ctx.playerIndex, msg.stage);
             break;
           }
 

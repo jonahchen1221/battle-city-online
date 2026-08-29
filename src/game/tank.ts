@@ -18,6 +18,7 @@ import {
   ENEMY_BULLET_SPEED_DEFAULT,
   ENEMY_SPAWN_POINTS,
   AI_DECISION_MIN_TICKS,
+  SMART_AI_TURN_FIRE_DELAY_TICKS,
   PLAYER_INVULN_TICKS,
   ICE_SLIDE_TICKS,
   BOOTS_SPEED_MULT,
@@ -68,6 +69,7 @@ export interface TankState {
   smartEscapeTicks: number; // 智能坦克保持当前脱困或闪避方向的剩余帧数
   smartGoalX: number; // 智能坦克当前战术射击位 x；无目标时为 -1
   smartGoalY: number; // 智能坦克当前战术射击位 y；无目标时为 -1
+  smartTurnFireTicks: number; // 智能坦克转向后允许开火前的剩余等待帧数
   escortFarTicks: number; // 护送关普通敌军落在车后且不在玩家视野内的连续帧数；其他情况恒为 0
   invulnTicks: number; // 护盾剩余帧：>0 时对方子弹穿过、不受伤
   level: number; // star 等级 0..3；玩家路线见 upgradePlayerTank，死亡 / 复活归 0
@@ -153,6 +155,7 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     smartEscapeTicks: 0,
     smartGoalX: -1,
     smartGoalY: -1,
+    smartTurnFireTicks: 0,
     escortFarTicks: 0,
     // 实体化即获无敌：开局直接入场、复活经出生闪光后入场，两条路径都从此值起算。
     invulnTicks: PLAYER_INVULN_TICKS,
@@ -227,6 +230,7 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     smartEscapeTicks: 0,
     smartGoalX: -1,
     smartGoalY: -1,
+    smartTurnFireTicks: 0,
     escortFarTicks: 0,
     invulnTicks: 0, // 敌方无出生护盾，但可拾取 helmet 获得护盾
     level: 0,
@@ -518,6 +522,9 @@ export function turnTank(
       tank.x = nx;
       tank.y = ny;
     }
+  }
+  if (tank.kind === 'smart') {
+    tank.smartTurnFireTicks = SMART_AI_TURN_FIRE_DELAY_TICKS;
   }
   tank.dir = desired;
 }

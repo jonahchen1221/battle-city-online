@@ -79,10 +79,12 @@ export interface LobbyPlayer {
 
 // ── 客户端 → 服务器 ──
 export type ClientMessage =
-  | { t: 'create'; name: string } // 建房；成功后收到 joined（自己为 0 号位/房主）
+  // startingStage 省略时按第 1 关处理，兼容未升级的旧客户端。
+  | { t: 'create'; name: string; startingStage?: number } // 建房；成功后收到 joined（自己为 0 号位/房主）
   // resumeToken 由服务器在 joined 中签发；带 token 时恢复原座位，不带时仅可加入尚未开局的房间。
   | { t: 'join'; code: string; name: string; resumeToken?: string }
   | { t: 'ready'; ready: boolean } // 大厅内切换准备状态
+  | { t: 'stage'; stage: number } // LOCAL 大厅内选择起始关卡（所有在线玩家均可操作）
   | { t: 'start' } // 房主开局（要求全员 ready）
   // 输入快照；状态变化时发送，服务器保留每人最新值逐帧应用。
   | { t: 'input'; input: InputState }
@@ -91,8 +93,15 @@ export type ClientMessage =
 // ── 服务器 → 客户端 ──
 export type ServerMessage =
   // resumeToken 是座位凭证：客户端只保存在当前浏览器会话中，不展示或分享。
-  | { t: 'joined'; code: string; playerIndex: number; players: LobbyPlayer[]; resumeToken: string }
-  | { t: 'lobby'; players: LobbyPlayer[] } // 大厅状态变更广播
+  | {
+      t: 'joined';
+      code: string;
+      playerIndex: number;
+      players: LobbyPlayer[];
+      resumeToken: string;
+      startingStage: number;
+    }
+  | { t: 'lobby'; players: LobbyPlayer[]; startingStage: number } // 大厅状态变更广播
   // playerIndex 是紧凑后的对局内序号；大厅座位有空洞时可能与 joined 中的序号不同。
   | { t: 'started'; playerCount: number; playerIndex: number } // 开局；随后开始收 snapshot
   | { t: 'snapshot'; snap: Snapshot; events: GameEvent[] } // 权威快照 + 自上次快照以来累积的音效 / UI 事件

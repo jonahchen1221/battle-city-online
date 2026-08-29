@@ -19,6 +19,7 @@ import {
   type ServerErrorCode,
 } from '../net/protocol';
 import { InputState, emptyInput } from '../core/types';
+import { STAGE_COUNT } from '../core/constants';
 import { GameState, GameEvent, createGameState } from '../game/state';
 import { update } from '../game/update';
 
@@ -62,6 +63,7 @@ export type RoomPhase = 'lobby' | 'in-game';
 export class Room {
   readonly code: string;
   readonly persistent: boolean;
+  private startingStage: number;
   phase: RoomPhase = 'lobby';
   private readonly slots = new Map<number, Slot>(); // key = playerIndex
   // 对局 playerIndex → 大厅 Slot。只在开局时建立，之后即使断线也保持稳定供重连复用。
@@ -80,10 +82,15 @@ export class Room {
   constructor(
     code: string,
     private readonly onDestroy: (code: string) => void,
-    options: { persistent?: boolean } = {},
+    options: { persistent?: boolean; startingStage?: number } = {},
   ) {
+    const startingStage = options.startingStage ?? 1;
+    if (!Number.isInteger(startingStage) || startingStage < 1 || startingStage > STAGE_COUNT) {
+      throw new RangeError(`startingStage must be an integer from 1 to ${STAGE_COUNT}`);
+    }
     this.code = code;
     this.persistent = options.persistent === true;
+    this.startingStage = startingStage;
   }
 
   // ── 查询 ──
@@ -129,7 +136,11 @@ export class Room {
   }
 
   private broadcastLobby(): void {
-    this.broadcast({ t: 'lobby', players: this.toLobbyPlayers() });
+    this.broadcast({
+      t: 'lobby',
+      players: this.toLobbyPlayers(),
+      startingStage: this.startingStage,
+    });
   }
 
   // 座位号 → 该座位的 WebSocket（供 server.ts 反查连接归属）。
@@ -181,6 +192,7 @@ export class Room {
       playerIndex: 0,
       players: this.toLobbyPlayers(),
       resumeToken: slot.resumeToken,
+      startingStage: this.startingStage,
     });
     return 0;
   }
@@ -201,6 +213,7 @@ export class Room {
         playerIndex: resumed.playerIndex,
         players: this.toLobbyPlayers(),
         resumeToken: resumed.resumeToken,
+        startingStage: this.startingStage,
       });
       if (this.phase === 'in-game') {
         const gamePlayerIndex = this.gameSlots.indexOf(resumed);
@@ -244,6 +257,7 @@ export class Room {
       playerIndex: idx,
       players: this.toLobbyPlayers(),
       resumeToken: slot.resumeToken,
+      startingStage: this.startingStage,
     });
     this.broadcastLobby();
     return idx;
@@ -255,6 +269,17 @@ export class Room {
     const slot = this.slots.get(playerIndex);
     if (!slot) return;
     slot.ready = ready;
+    this.broadcastLobby();
+  }
+
+  // LOCAL 是常驻共享大厅，没有独立的“建房”步骤，因此允许任意在线玩家选择起始关卡。
+  // 普通随机码房的起始关卡在创建时锁定，收到此消息时安全忽略。
+  setStartingStage(playerIndex: number, startingStage: number): void {
+    if (this.phase !== 'lobby' || !this.persistent) return;
+    const slot = this.slots.get(playerIndex);
+    if (!slot?.connected) return;
+    if (!Number.isInteger(startingStage) || startingStage < 1 || startingStage > STAGE_COUNT) return;
+    this.startingStage = startingStage;
     this.broadcastLobby();
   }
 
@@ -303,6 +328,7 @@ export class Room {
       }
       if (this.slotCount() === 0) {
         if (!this.persistent) this.destroyNow(); // 大厅空房：立即销毁；常驻房留着等人
+        else this.startingStage = 1;
       } else {
         this.broadcastLobby();
       }
@@ -328,7 +354,7 @@ export class Room {
 
     // 游戏种子来自 crypto（对局外，不影响“注入 Rng 后确定性”这一铁律）。
     const seed = randomInt(0, 0x7fffffff);
-    this.game = createGameState(seed, playerCount);
+    this.game = createGameState(seed, playerCount, this.startingStage);
     this.eventAccumulator = [];
     this.phase = 'in-game';
 
@@ -453,6 +479,7 @@ export class Room {
     this.eventAccumulator = [];
     this.phase = 'lobby';
     this.lastTickTime = 0;
+    this.startingStage = 1;
   }
 
   private cancelDestroyTimer(): void {
@@ -495,9 +522,9 @@ export class RoomManager {
     }
   }
 
-  createRoom(): Room {
+  createRoom(startingStage = 1): Room {
     const code = this.genCode();
-    const room = new Room(code, (c) => this.rooms.delete(c));
+    const room = new Room(code, (c) => this.rooms.delete(c), { startingStage });
     this.rooms.set(code, room);
     return room;
   }

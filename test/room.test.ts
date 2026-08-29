@@ -91,6 +91,26 @@ test('lobby seat holes are compacted instead of creating phantom players', () =>
   internal.destroyNow();
 });
 
+test('a room advertises and starts at its configured stage', () => {
+  const room = new Room('STAG', () => {}, { startingStage: 27 });
+  const host = new FakeWebSocket();
+  room.addHost(asWebSocket(host), 'H1');
+
+  assert.equal(host.latest('joined')?.startingStage, 27);
+  room.setStartingStage(0, 18);
+  room.setReady(0, true);
+  room.start(0);
+  assert.equal(internals(room).game?.stage, 27, 'a coded room keeps the stage chosen at creation');
+
+  internals(room).destroyNow();
+});
+
+test('a room rejects a starting stage outside the campaign', () => {
+  assert.throws(() => new Room('LOW0', () => {}, { startingStage: 0 }), RangeError);
+  assert.throws(() => new Room('HIGH', () => {}, { startingStage: 41 }), RangeError);
+  assert.throws(() => new Room('FRAC', () => {}, { startingStage: 1.5 }), RangeError);
+});
+
 test('action presses survive a press and release before the next server tick', () => {
   const room = new Room('EDGE', () => {});
   const host = new FakeWebSocket();
@@ -262,6 +282,14 @@ test('persistent lan room stays after the last lobby player leaves', () => {
   assert.equal(room.join(asWebSocket(host), 'H1'), 0);
   assert.equal(host.latest('joined')?.players[0]?.isHost, true);
 
+  const peer = new FakeWebSocket();
+  assert.equal(room.join(asWebSocket(peer), 'P2'), 1);
+  room.setStartingStage(1, 18);
+  assert.equal(host.latest('lobby')?.startingStage, 18);
+  assert.equal(peer.latest('lobby')?.startingStage, 18);
+
+  room.handleDisconnect(1);
+
   room.handleDisconnect(0);
   assert.equal(destroyed, false);
 
@@ -269,6 +297,7 @@ test('persistent lan room stays after the last lobby player leaves', () => {
   assert.equal(room.join(asWebSocket(next), 'N1'), 0);
   assert.equal(next.latest('joined')?.playerIndex, 0);
   assert.equal(next.latest('joined')?.players[0]?.isHost, true);
+  assert.equal(next.latest('joined')?.startingStage, 1);
 
   internals(room).destroyNow();
 });

@@ -81,6 +81,31 @@ test('a connection exceeding the message rate limit is closed', async () => {
   });
 });
 
+test('create validates the starting stage and uses it for the first snapshot', async () => {
+  await withServer({}, async (url) => {
+    const ws = new WebSocket(url);
+    await once(ws, 'open');
+
+    const invalidPromise = waitForMessage(ws, 'error');
+    ws.send(JSON.stringify({ t: 'create', name: 'H1', startingStage: 41 }));
+    const invalid = await invalidPromise;
+    assert.equal(invalid.code, 'bad_message');
+
+    const joinedPromise = waitForMessage(ws, 'joined');
+    ws.send(JSON.stringify({ t: 'create', name: 'H1', startingStage: 27 }));
+    const joined = await joinedPromise;
+    assert.equal(joined.startingStage, 27);
+
+    ws.send(JSON.stringify({ t: 'ready', ready: true }));
+    const startedPromise = waitForMessage(ws, 'started');
+    const snapshotPromise = waitForMessage(ws, 'snapshot', (message) => message.snap.stage === 27);
+    ws.send(JSON.stringify({ t: 'start' }));
+    await startedPromise;
+    const snapshot = await snapshotPromise;
+    assert.equal(snapshot.snap.stage, 27);
+  });
+});
+
 test('the websocket protocol resumes the credentialed player at the same game index', async () => {
   await withServer({}, async (url) => {
     const host = new WebSocket(url);
@@ -148,5 +173,25 @@ test('lan clients join the same local room without a created code', async () => 
     assert.equal(secondJoined.playerIndex, 1);
     assert.equal(secondJoined.players.find((p) => p.playerIndex === 0)?.isHost, true);
     assert.equal(secondJoined.players.find((p) => p.playerIndex === 1)?.isHost, false);
+
+    // LOCAL 大厅不限定房主：第二位玩家选择关卡后，全员收到同一个权威配置。
+    const stageChangedPromise = waitForMessage(first, 'lobby', (message) => message.startingStage === 18);
+    second.send(JSON.stringify({ t: 'stage', stage: 18 }));
+    const stageChanged = await stageChangedPromise;
+    assert.equal(stageChanged.startingStage, 18);
+
+    const allReadyPromise = waitForMessage(first, 'lobby', (message) =>
+      message.players.every((entry) => entry.ready),
+    );
+    first.send(JSON.stringify({ t: 'ready', ready: true }));
+    second.send(JSON.stringify({ t: 'ready', ready: true }));
+    await allReadyPromise;
+
+    const firstStartedPromise = waitForMessage(first, 'started');
+    const secondStartedPromise = waitForMessage(second, 'started');
+    const snapshotPromise = waitForMessage(first, 'snapshot', (message) => message.snap.stage === 18);
+    first.send(JSON.stringify({ t: 'start' }));
+    await Promise.all([firstStartedPromise, secondStartedPromise]);
+    assert.equal((await snapshotPromise).snap.stage, 18);
   });
 });

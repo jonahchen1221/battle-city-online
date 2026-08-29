@@ -143,7 +143,18 @@ export function escortHasGuard(
   activePlayers?: readonly boolean[],
 ): boolean {
   const occupied = escortGuardOccupancy(state, activePlayers);
-  return occupied.length > 0 && occupied.every(Boolean);
+  return occupied.some(Boolean);
+}
+
+// 推进速度按已占据护卫位的比例缩放：1–2 人局只有一个护卫位，站上即为全速；
+// 3–4 人局有两个护卫位，只占一侧也能以半速推车，两侧齐备时恢复全速。
+function escortGuardSpeedScale(
+  state: GameState,
+  activePlayers?: readonly boolean[],
+): number {
+  const occupied = escortGuardOccupancy(state, activePlayers);
+  if (occupied.length === 0) return 0;
+  return occupied.filter(Boolean).length / occupied.length;
 }
 
 // 十条护送路线，每个护送关独占一条；后期路线通过折返、环绕与反向钩形改变交战方向。
@@ -632,7 +643,7 @@ function overlaps(
   return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
-// 1–2 人需占据唯一护卫位；3–4 人需同时占据左右两位。满足后车队才沿路线前进。
+// 只要至少一个护卫位有人，车队就沿路线前进；3–4 人局只占一侧时为半速，两侧齐备为全速。
 export function updateEscort(state: GameState, activePlayers?: readonly boolean[]): void {
   const escort = state.escort;
   if (!escort || escort.timeExpired || escort.arrived) return;
@@ -648,7 +659,8 @@ export function updateEscort(state: GameState, activePlayers?: readonly boolean[
     }
   }
 
-  if (!escortHasGuard(state, activePlayers)) {
+  const guardSpeedScale = escortGuardSpeedScale(state, activePlayers);
+  if (guardSpeedScale === 0) {
     escort.moving = false;
     return;
   }
@@ -662,8 +674,9 @@ export function updateEscort(state: GameState, activePlayers?: readonly boolean[
   escort.dir = routeDirection(escort, target);
   const dx = target.x - escort.x;
   const dy = target.y - escort.y;
-  const nextX = escort.x + Math.sign(dx) * Math.min(Math.abs(dx), escort.speed);
-  const nextY = escort.y + Math.sign(dy) * Math.min(Math.abs(dy), escort.speed);
+  const step = escort.speed * guardSpeedScale;
+  const nextX = escort.x + Math.sign(dx) * Math.min(Math.abs(dx), step);
+  const nextY = escort.y + Math.sign(dy) * Math.min(Math.abs(dy), step);
   let blocked = rectHitsSolid(state.level, nextX, nextY, ESCORT_SIZE);
   if (!blocked) {
     blocked = state.tanks.some(

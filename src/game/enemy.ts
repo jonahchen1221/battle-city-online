@@ -1129,7 +1129,8 @@ function fireSmartTank(
   state: GameState,
   targetPath?: SmartShotPath,
 ): boolean {
-  const canFire = tank.fireCooldown === 0 &&
+  const canFire = tank.smartTurnFireTicks === 0 &&
+    tank.fireCooldown === 0 &&
     liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
   if (
     !canFire ||
@@ -1385,6 +1386,7 @@ function recycleEscapedEscortEnemies(state: GameState): void {
     tank.smartEscapeTicks = 0;
     tank.smartGoalX = -1;
     tank.smartGoalY = -1;
+    tank.smartTurnFireTicks = 0;
     tank.escortFarTicks = 0;
     tank.slideTicks = 0;
     state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
@@ -1507,6 +1509,8 @@ function updateSmartEnemy(
   level: LevelState,
   obstacles: TankState[],
 ): void {
+  if (tank.smartTurnFireTicks > 0) tank.smartTurnFireTicks--;
+
   const bulletThreat = imminentSmartBulletThreat(tank, state);
   if (bulletThreat) {
     const dodge = smartDodgeDirection(tank, bulletThreat, state, level, obstacles);
@@ -1565,15 +1569,17 @@ function updateSmartEnemy(
       const targetPath = smartShotPath(tank, target, aim, state);
       if (targetPath !== 'hard') {
         const atFiringGoal = !powerupTarget && smartFiringGoalReached(tank);
-        const readyToFire = tank.fireCooldown === 0 &&
+        const weaponReady = tank.fireCooldown === 0 &&
           liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
+        const waitingAfterAimTurn = tank.dir === aim && tank.smartTurnFireTicks > 0;
         // 路过火力线但尚未装填好时不反复转头，否则横向吸附会把每帧侧移重置成 0.75px。
-        if (readyToFire || atFiringGoal) {
+        if (weaponReady || atFiringGoal || waitingAfterAimTurn) {
           tank.moving = false;
           tank.smartStuckTicks = 0;
           tank.smartEscapeTicks = 0;
-          // 转向必然生效（吸附不可用时原地转车头，见 tank.ts turnTank），转完即可开火压制。
+          // 转向必然生效（吸附不可用时原地转车头，见 tank.ts turnTank）；新朝向需稳定约 150ms 后再开火。
           turnTank(tank, aim, level, obstacles, state.escort ?? undefined);
+          if (tank.smartTurnFireTicks > 0) return;
           if (fireSmartTank(tank, state, targetPath)) {
             // 路过的射线只打一发就继续包抄；抵达选定射击位后才稳定压制。
             if (!atFiringGoal) tank.aiTicks = 0;

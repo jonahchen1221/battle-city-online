@@ -14,6 +14,7 @@ import {
   ESCORT_ENEMY_RECYCLE_TICKS,
   ESCORT_STOPPED_SPAWN_DIVISOR,
   SMART_AI_FIRE_COOLDOWN_TICKS,
+  SMART_AI_TURN_FIRE_DELAY_TICKS,
   STAGE_ENEMY_TOTAL,
   SUBTILE,
   SMART_AI_STUCK_TICKS,
@@ -317,7 +318,7 @@ test('smart enemy turns a blocked corner into a reachable firing position', () =
   assert.ok(state.bullets.some((bullet) => bullet.ownerId === smart.id));
 });
 
-test('smart enemy aims and fires immediately when a player enters its firing lane', () => {
+test('smart enemy waits about 150ms between turning to aim and firing', () => {
   const state = createGameState(42, 1);
   const player = state.tanks[0];
   const smart = createEnemy('smart', 2, 0);
@@ -332,6 +333,17 @@ test('smart enemy aims and fires immediately when a player enters its firing lan
   updateEnemies(state, state.level);
 
   assert.equal(smart.dir, 'down');
+  assert.equal(smart.smartTurnFireTicks, SMART_AI_TURN_FIRE_DELAY_TICKS);
+  assert.equal(state.bullets.length, 0);
+
+  for (let ticksLeft = SMART_AI_TURN_FIRE_DELAY_TICKS - 1; ticksLeft > 0; ticksLeft--) {
+    updateEnemies(state, state.level);
+    assert.equal(smart.smartTurnFireTicks, ticksLeft);
+    assert.equal(state.bullets.length, 0);
+  }
+
+  updateEnemies(state, state.level);
+  assert.equal(smart.smartTurnFireTicks, 0);
   assert.equal(state.bullets.length, 1);
   assert.equal(state.bullets[0].ownerId, smart.id);
   assert.equal(state.bullets[0].attacksEagle, false);
@@ -475,9 +487,11 @@ test('smart enemy can sustain a close-range duel after its shots intercept playe
     `expected repeated fire from both sides, player=${playerShots}, smart=${smartShots}`,
   );
 
-  // 玩家停止补射后，智能坦克会先绕开最后一发来弹，再从规划好的火力位完成反击。
-  for (let tick = 0; tick < 120 && player.alive; tick++) update(state, [emptyInput()]);
-  assert.equal(player.alive, false);
+  // 玩家停止补射后，智能坦克仍会继续机动；转向后的短暂瞄准等待不应把 AI 锁死。
+  const stoppedAt = { x: smart.x, y: smart.y };
+  for (let tick = 0; tick < 120; tick++) update(state, [emptyInput()]);
+  assert.equal(smart.alive, true);
+  assert.notDeepEqual({ x: smart.x, y: smart.y }, stoppedAt);
 });
 test('smart enemy detours toward an eligible nearby powerup', () => {
   const state = createGameState(42, 1);
