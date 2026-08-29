@@ -167,7 +167,7 @@ function advanceTankPowerupTimers(state: GameState): void {
   }
 }
 
-// 玩家坦克：输入驱动移动 + 边沿触发开火。
+// 玩家坦克：输入驱动移动 + 按住连续开火。
 // 输入按 playerIndex 映射（inputs[tank.playerIndex]）：某玩家阵亡后其坦克缺席，
 // 其余玩家的输入不会因数组塌缩而错位。
 function updatePlayers(state: GameState, inputs: InputState[]): void {
@@ -188,7 +188,7 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     if (globallyFrozen || slowedSkip) {
       tank.moving = false;
       tank.slideTicks = 0;
-      tank.prevFire = input.fire; // 仍记录开火键状态：解冻那帧不会因一直按住而被判为边沿
+      tank.prevFire = input.fire; // 仍记录开火键状态，供轻点缓冲的按下沿检测使用
       continue;
     }
 
@@ -200,17 +200,17 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
       applyInput(tank, input, level, obstacles, state.escort ?? undefined);
     }
 
-    // 开火触发方式按武器区分：
-    // - 机枪：按住连发（非边沿），由 fireCooldown 节流为每 MACHINE_FIRE_INTERVAL_TICKS 帧一发；
-    // - 其余武器（含 cannon）：边沿触发 + 短输入缓冲 —— 按下沿装填 FIRE_BUFFER_TICKS 帧，
-    //   在场子弹达到上限时这次按键不被吞掉，窗口内一旦腾出弹位立即补发（提前按开火也能出弹）。
-    // 两者都还需满足在场子弹数低于该坦克上限（见 maxBulletsFor：star 双弹 / 各武器自有上限）。
+    // 所有武器都支持按住连发，并受各自的在场子弹上限约束；弹位一释放就自动补发。
+    // 机枪额外由 fireCooldown 节流为每 MACHINE_FIRE_INTERVAL_TICKS 帧一发。
+    // 同时保留短输入缓冲：轻点按下沿装填 FIRE_BUFFER_TICKS 帧，在弹位占满时提前点按也不会被吞掉。
     const firePressed = input.fire && !tank.prevFire;
     tank.prevFire = input.fire;
     if (tank.fireBufferTicks > 0) tank.fireBufferTicks--;
     if (firePressed) tank.fireBufferTicks = FIRE_BUFFER_TICKS;
-    const wantFire =
-      tank.weapon === 'machine' ? input.fire && tank.fireCooldown === 0 : tank.fireBufferTicks > 0;
+    const heldFire =
+      input.fire && (tank.weapon !== 'machine' || tank.fireCooldown === 0);
+    const bufferedFire = tank.weapon !== 'machine' && tank.fireBufferTicks > 0;
+    const wantFire = heldFire || bufferedFire;
     if (wantFire && liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)) {
       const spawned = spawnWeaponBullets(tank, state.nextBulletId, state.level);
       state.nextBulletId += spawned.length;

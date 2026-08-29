@@ -32,22 +32,34 @@ test('a fire press while the bullet slot is full is buffered and fires when it f
   assert.equal(liveBullets(state), 1);
 });
 
-test('a buffered press expires after FIRE_BUFFER_TICKS', () => {
+test('holding fire shoots again as soon as the bullet slot frees', () => {
+  const state = createGameState(1, 1, 1);
+  state.phase = 'playing';
+
+  update(state, [fireInput()]);
+  assert.equal(liveBullets(state), 1);
+
+  // 无需松开再按；弹位释放后的下一帧自动补发。
+  for (const b of state.bullets) b.alive = false;
+  update(state, [fireInput()]);
+  assert.equal(liveBullets(state), 1);
+});
+
+test('a released buffered press expires after FIRE_BUFFER_TICKS', () => {
   const state = createGameState(1, 1, 1);
   state.phase = 'playing';
 
   update(state, [fireInput()]);
   assert.equal(liveBullets(state), 1);
   update(state, [emptyInput()]);
-  update(state, [fireInput()]); // 缓冲装填
+  update(state, [fireInput()]); // 弹位占满时再次轻点，装填缓冲
 
-  // 让缓冲完整流逝（期间弹位一直被占）。
-  for (let i = 0; i < FIRE_BUFFER_TICKS; i++) update(state, [fireInput()]); // 按住不产生新边沿
+  // 松开开火键，让轻点缓冲在弹位持续占用期间完整流逝。
+  for (let i = 0; i < FIRE_BUFFER_TICKS; i++) update(state, [emptyInput()]);
   for (const b of state.bullets) b.alive = false;
-  update(state, [fireInput()]); // 仍按住：无边沿、缓冲已过期 → 不开火
+  update(state, [emptyInput()]);
   assert.equal(liveBullets(state), 0);
 
-  update(state, [emptyInput()]);
-  update(state, [fireInput()]); // 松开再按：新边沿正常开火
+  update(state, [fireInput()]); // 松开再按：新按下沿正常开火
   assert.equal(liveBullets(state), 1);
 });

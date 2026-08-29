@@ -19,7 +19,7 @@ const POWERUP_TICKER_COPY: Record<PowerupKind, { name: string; effect: string }>
   wpnSpread: { name: '散射炮', effect: '三向射击' },
   wpnSpiral: { name: '螺旋炮', effect: '波浪弹道' },
   wpnLaser: { name: '激光炮', effect: '穿透射击' },
-  wpnMachine: { name: '机关枪', effect: '按住开火键连续射击' },
+  wpnMachine: { name: '机关枪', effect: '高速连射，最多 3 弹在场' },
   boots: { name: '战靴', effect: '加速 20 秒' },
   boat: { name: '船', effect: '阵亡前可以渡水' },
   ghost: { name: '幽灵', effect: '穿越砖墙 10 秒' },

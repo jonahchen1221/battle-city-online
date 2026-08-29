@@ -11,7 +11,7 @@ npm run lan
 
 启动后终端会打印局域网地址（如 `http://192.168.1.87:8080`）和固定本地局链接 `http://192.168.1.87:8080/?local`。同一 WiFi 的朋友打开这个 `?local` 链接、或在首页选 LOCAL GAME，不用房间码就能进同一间房。也仍可用 CREATE ROOM / JOIN ROOM 开独立房间。全员 Enter 准备，房主 S 开局。
 
-键位：方向键 / WASD 移动，Space 或 J 开火，P 暂停，Enter 确认/准备。
+键位：方向键 / WASD 移动，Space 或 J 开火（长按连发），P 暂停，Enter 确认/准备。
 
 手柄：十字键 / 左摇杆移动，A/B/X 开火，Start 开始，Select 暂停；菜单里 A 确认 / B 返回（房间码仍需键盘输入或粘贴）。
 

@@ -54,7 +54,7 @@ export interface TankState {
   moving: boolean; // 本帧是否有方向输入（用于履带动画；撞墙不动时仍为 true）
   speed: number; // px/tick
   bulletSpeed: number; // 该坦克子弹速度（px/tick）
-  prevFire: boolean; // 上一帧开火键状态（边沿触发用）
+  prevFire: boolean; // 上一帧开火键状态（轻点输入缓冲的按下沿检测用）
   alive: boolean;
   hp: number; // 剩余血量：常规 1，装甲 4；≤0 即毁
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
@@ -68,7 +68,7 @@ export interface TankState {
   freezeTicks: number; // 友军冻结剩余帧：被队友子弹击中后 >0，期间不能移动 / 开火（敌人恒为 0）
   weapon: WeaponKind; // 当前武器：初始 / 死亡复活均为 'cannon'，由武器道具替换
   fireCooldown: number; // 连发冷却剩余帧（机枪与智能坦克使用：>0 时不能再射，逐帧递减）
-  fireBufferTicks: number; // 开火输入缓冲剩余帧：按下沿装填，在场子弹清空后的窗口内自动补发（敌人恒为 0）
+  fireBufferTicks: number; // 轻点开火缓冲剩余帧：按下沿装填，在弹位释放后的窗口内自动补发（敌人恒为 0）
   speedBoostTicks: number; // boots 快靴剩余帧：>0 时移动速度 ×BOOTS_SPEED_MULT（speed 基值不变）
   hasBoat: boolean; // boat 船：true 时移动碰撞把水面视为可通行（子弹不受影响），死亡即失
   ghostTicks: number; // ghost 幽灵剩余帧：>0 时移动碰撞把砖块视为可通行（钢/水/鹰/边界照旧）
