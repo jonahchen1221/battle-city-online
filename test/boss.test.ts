@@ -27,6 +27,7 @@ import {
   isBossStage,
   stageKind,
   bossMaxHp,
+  bossSkillsFor,
   BOSS_WALL_SPACING,
   BOSS_WALL_GAP_SLOTS,
   BOSS_CHARGE_WARN_TICKS,
@@ -61,6 +62,7 @@ import { tryPickupPowerup, BOSS_NEUTRAL_WEAPONS, NEUTRAL_POWERUP_KINDS, type Pow
 import { createEnemy, isPlayerTank } from '../src/game/tank';
 import type { BulletState } from '../src/game/bullet';
 import { Cell, createEmptyLevel, getCell, setCell } from '../src/game/level';
+import { BOSS_ARENA_CONFIGS } from '../src/game/levels';
 
 // 四段循环下的代表关号：Boss A = 第 3 关（组 1）、Boss B / 最终战 = 第 39 关（组 10）。
 const BOSS_A_STAGE = 3;
@@ -204,6 +206,82 @@ test('Boss 只在 Boss 关生成，血量随人数与序号放大', () => {
   // 第 10 位 Boss、双人局：100 + 10×9 + 60 = 250。
   assert.equal(state.boss?.ordinal, 10);
   assert.equal(state.boss?.maxHp, 250);
+});
+
+test('每座 Boss 竞技场使用配置的 Boss 与玩家入场点', () => {
+  for (let ordinal = 1; ordinal <= BOSS_ARENA_CONFIGS.length; ordinal++) {
+    const stage = ordinal * 4 - 1;
+    const config = BOSS_ARENA_CONFIGS[ordinal - 1];
+    const state = createGameState(ordinal, 4, stage);
+    assert.equal(state.boss?.x, config.bossSpawn.x, `Boss ${ordinal} x`);
+    assert.equal(state.boss?.y, config.bossSpawn.y, `Boss ${ordinal} y`);
+    for (let playerIndex = 0; playerIndex < 4; playerIndex++) {
+      const player = state.tanks.find(
+        (tank) => isPlayerTank(tank) && tank.playerIndex === playerIndex,
+      );
+      assert.ok(player);
+      assert.equal(player.x, config.playerSpawns[playerIndex].x);
+      assert.equal(player.y, config.playerSpawns[playerIndex].y);
+    }
+  }
+});
+
+test('Boss 招牌技能在对应阶段拥有三份权重', () => {
+  const signatures = [
+    { ordinal: 2, phase: 'p1' as const, attack: 'bulletWall' },
+    { ordinal: 3, phase: 'p2' as const, attack: 'charge' },
+    { ordinal: 4, phase: 'p1' as const, attack: 'mortar' },
+    { ordinal: 5, phase: 'p1' as const, attack: 'summon' },
+    { ordinal: 7, phase: 'p2' as const, attack: 'magnet' },
+    { ordinal: 8, phase: 'p2' as const, attack: 'sweepLaser' },
+    { ordinal: 9, phase: 'p1' as const, attack: 'bulletWall' },
+    { ordinal: 9, phase: 'p2' as const, attack: 'spin' },
+    { ordinal: 10, phase: 'p1' as const, attack: 'mortar' },
+    { ordinal: 10, phase: 'p2' as const, attack: 'dualLaser' },
+  ];
+  for (const signature of signatures) {
+    const pool = bossSkillsFor(signature.ordinal)[signature.phase];
+    assert.equal(
+      pool.filter((attack) => attack === signature.attack).length,
+      3,
+      `Boss ${signature.ordinal} ${signature.phase} 招牌技能 ${signature.attack}`,
+    );
+  }
+});
+
+test('配置了阶段变化的竞技场会在半血时开路，且不会污染只读地图原型', () => {
+  for (let ordinal = 1; ordinal <= BOSS_ARENA_CONFIGS.length; ordinal++) {
+    const config = BOSS_ARENA_CONFIGS[ordinal - 1];
+    if (config.phase2Clears.length === 0) continue;
+    const stage = ordinal * 4 - 1;
+    const state = playingAt(200 + ordinal, 1, stage);
+    const beforeRev = state.level.rev;
+    const templateCells = config.phase2Clears.flatMap((clear) => {
+      const cells: Array<{ col: number; row: number; value: number }> = [];
+      for (let row = clear.row; row < clear.row + clear.height; row++) {
+        for (let col = clear.col; col < clear.col + clear.width; col++) {
+          cells.push({ col, row, value: getCell(config.level, col, row) });
+        }
+      }
+      return cells;
+    });
+    assert.ok(templateCells.some((cell) => cell.value !== Cell.EMPTY));
+
+    const boss = state.boss!;
+    boss.hp = boss.maxHp * 0.5 - 1;
+    updateBoss(state);
+
+    assert.equal(boss.phase, 2);
+    assert.ok(state.level.rev > beforeRev, `Boss ${ordinal} 转阶段必须产生地形版本`);
+    for (const cell of templateCells) {
+      assert.equal(getCell(state.level, cell.col, cell.row), Cell.EMPTY);
+      assert.equal(
+        getCell(config.level, cell.col, cell.row),
+        cell.value,
+        `Boss ${ordinal} 地图原型不可被阶段变化污染`,
+      );
+    }
+  }
 });
 
 test('Boss 遇到砖墙会停下并发射双发破障激光，清出 32px 通路后继续移动', () => {

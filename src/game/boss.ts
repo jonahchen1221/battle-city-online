@@ -78,6 +78,7 @@ import { TankState, canTankOccupy, createEnemy, isPlayerTank } from './tank';
 import { BulletState, bulletHitRect, makeSmallExplosion } from './bullet';
 import { damagePlayerTank, destroyPlayerTank } from './death';
 import { Cell, brickMaskOverlapsRect, getCell, setCell } from './level';
+import { applyBossArenaPhase2 } from './levels';
 import type { GameState } from './state';
 
 // Boss 关的核心逻辑（纯模拟层）：一切随机取自 state.rng，BossState 全部为可序列化的纯数据。
@@ -158,17 +159,21 @@ export interface BossState {
   dead: boolean; // 已被击杀（弹幕已清、大爆炸已播；过关判定据此）
 }
 
-// 建立第 bossOrdinal 位 Boss：血量随人数与序号放大，开局即在位（不走出生闪光），
-// 第一次攻击等一个完整冷却（长度同样按序号收紧）。
-export function createBoss(playerCount: number, bossOrdinal = 1): BossState {
+// 建立第 bossOrdinal 位 Boss：血量随人数与序号放大，开局即在竞技场配置的 spawn
+// 就位（不走出生闪光），第一次攻击等一个完整冷却（长度同样按序号收紧）。
+export function createBoss(
+  playerCount: number,
+  bossOrdinal = 1,
+  spawn: { x: number; y: number } = { x: BOSS_X, y: BOSS_Y },
+): BossState {
   return {
     ordinal: bossOrdinal,
     enraged: false,
     hp: bossMaxHp(playerCount, bossOrdinal),
     maxHp: bossMaxHp(playerCount, bossOrdinal),
     phase: 1,
-    x: BOSS_X,
-    y: BOSS_Y,
+    x: spawn.x,
+    y: spawn.y,
     size: BOSS_SIZE,
     dir: 'down',
     moveDir: 'down',
@@ -1270,6 +1275,7 @@ export function updateBoss(state: GameState): void {
   // 阶段转换（单向）：清一次场上 Boss 弹作为喘息窗口与视觉信号，并中止当前攻击。
   if (boss.phase === 1 && boss.hp < boss.maxHp * BOSS_PHASE2_HP_RATIO) {
     boss.phase = 2;
+    applyBossArenaPhase2(state.level, state.stage);
     clearBossBullets(state);
     endAttack(boss);
   }

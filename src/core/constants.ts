@@ -210,6 +210,8 @@ export const SMART_AI_FIRING_BRICK_PENALTY = 12;
 // 多 AI 协同：相近玩家间按当前已分配人数均衡兵力；同一目标则预约不同侧翼与射击位。
 // 目标分流使用平方距离，因此惩罚量也是 px²；64px 的额外路程仍允许明显更近的目标被集火。
 export const SMART_AI_TARGET_LOAD_PENALTY = 64 * 64;
+// 已锁定目标只有在替代目标的综合分数至少好出 1024px² 时才切换，避免多人负载边界上逐轮折返。
+export const SMART_AI_TARGET_SWITCH_MARGIN = 32 * 32;
 export const SMART_AI_RESERVED_GOAL_RADIUS = TANK_SIZE * 2;
 export const SMART_AI_SAME_FLANK_PENALTY = SMART_AI_FLANK_SIDE_COST * 2;
 // 关卡敌军总数（单一可调常量；暂不随人数变化）。各档 STAGE_ENEMY_MIX 之和均等于此值。
@@ -517,8 +519,9 @@ export const LASER_SPRITE_OFFSET = (LASER_SPRITE_SIZE - BULLET_SIZE) / 2; // 2
 // 对小兵子弹是吸收体，能在战场内四向移动，并以双发破障激光打通砖墙（钢墙打不穿，只能绕行）。
 // 只有玩家子弹能对它造成伤害（受击次数制，见 BOSS_DAMAGE_*）。全部数值以 tick 计。
 
-// 车体尺寸与初始坐标（战场相对像素，32×32 盒左上角）。
-// 初始位置位于上半场正中；入场后由 Boss AI 自主移动。
+// 车体尺寸与默认初始坐标（战场相对像素，32×32 盒左上角）。
+// 默认值供直接构造与第 1 / 5 / 10 张经典中轴竞技场使用；正式开关时由
+// BOSS_ARENA_CONFIGS 把每张地图自己的入场点传给 createBoss。
 export const BOSS_SIZE = TANK_SIZE * 2;
 export const BOSS_X = (FIELD_WIDTH - BOSS_SIZE) / 2; // 144
 export const BOSS_Y = 48;
@@ -615,7 +618,26 @@ const BOSS_BASE_ATTACKS_P2: ReadonlyArray<BossAttackKind> = [
   'dualLaser',
 ];
 
-// 第 b 位 Boss 的两个阶段攻击池（表驱动，纯函数；池内等概率由 state.rng 取一）。
+// 各竞技场的招牌技能。重复放入攻击池即代表更高权重，仍保持确定性随机与纯数据快照。
+// 第 6 位的招牌是被动布雷，不额外提高某个主动技能的权重。
+const BOSS_SIGNATURE_ATTACKS: ReadonlyArray<{
+  p1?: BossAttackKind;
+  p2?: BossAttackKind;
+}> = [
+  {},
+  { p1: 'bulletWall' },
+  { p2: 'charge' },
+  { p1: 'mortar' },
+  { p1: 'summon' },
+  {},
+  { p2: 'magnet' },
+  { p2: 'sweepLaser' },
+  { p1: 'bulletWall', p2: 'spin' },
+  { p1: 'mortar', p2: 'dualLaser' },
+];
+
+// 第 b 位 Boss 的两个阶段攻击池（表驱动，纯函数）。基础技能各占一份，招牌技能
+// 额外占两份；因此能稳定塑造关卡身份，又不会把战斗锁死成固定脚本。
 export function bossSkillsFor(b: number): {
   p1: ReadonlyArray<BossAttackKind>;
   p2: ReadonlyArray<BossAttackKind>;
@@ -628,6 +650,13 @@ export function bossSkillsFor(b: number): {
   if (b >= BOSS_SKILL_UNLOCK_SUMMON) p1.push('summon');
   if (b >= BOSS_SKILL_UNLOCK_MAGNET) p2.push('magnet');
   if (b >= BOSS_SKILL_UNLOCK_SWEEP) p2.push('sweepLaser');
+  const signature = BOSS_SIGNATURE_ATTACKS[b - 1];
+  if (signature?.p1 && p1.includes(signature.p1)) {
+    p1.push(signature.p1, signature.p1);
+  }
+  if (signature?.p2 && p2.includes(signature.p2)) {
+    p2.push(signature.p2, signature.p2);
+  }
   return { p1, p2 };
 }
 

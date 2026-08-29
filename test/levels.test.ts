@@ -16,7 +16,12 @@ import {
   stageKind,
 } from '../src/core/constants';
 import { Cell, LevelState, getCell, isSolidForTank } from '../src/game/level';
-import { BOSS_ARENAS, STAGES, VERSUS_ARENAS } from '../src/game/levels';
+import {
+  BOSS_ARENAS,
+  BOSS_ARENA_CONFIGS,
+  STAGES,
+  VERSUS_ARENAS,
+} from '../src/game/levels';
 
 // 全部 40×30 战场原型：普通图 + Boss 竞技场 + 对战图（护送关是 80×90 世界）。
 const ARENAS: Array<{ name: string; level: LevelState }> = [
@@ -46,11 +51,14 @@ function tankFits(level: LevelState, col: number, row: number): boolean {
 }
 
 // 从四个玩家出生点出发做 BFS（步长一个子格），返回全部可达的坦克落位。
-function reachableFromSpawns(level: LevelState): Set<number> {
+function reachableFromSpawns(
+  level: LevelState,
+  spawns: ReadonlyArray<{ x: number; y: number }> = PLAYER_SPAWN_POINTS,
+): Set<number> {
   const key = (col: number, row: number): number => row * FIELD_COLS + col;
   const seen = new Set<number>();
   const queue: Array<[number, number]> = [];
-  for (const p of PLAYER_SPAWN_POINTS) {
+  for (const p of spawns) {
     const col = p.x / SUBTILE;
     const row = p.y / SUBTILE;
     if (!tankFits(level, col, row) || seen.has(key(col, row))) continue;
@@ -68,6 +76,46 @@ function reachableFromSpawns(level: LevelState): Set<number> {
       const nc = col + dc;
       const nr = row + dr;
       if (seen.has(key(nc, nr)) || !tankFits(level, nc, nr)) continue;
+      seen.add(key(nc, nr));
+      queue.push([nc, nr]);
+    }
+  }
+  return seen;
+}
+
+// Boss 的 A* 把砖视为高代价可破坏地形，仅钢、水、鹰巢和边界是永久阻挡。
+function bossFits(level: LevelState, col: number, row: number): boolean {
+  if (col < 0 || row < 0 || col > FIELD_COLS - 4 || row > FIELD_ROWS - 4) return false;
+  for (let r = row; r < row + 4; r++) {
+    for (let c = col; c < col + 4; c++) {
+      const cell = getCell(level, c, r);
+      if (cell === Cell.STEEL || cell === Cell.WATER || cell === Cell.EAGLE) return false;
+    }
+  }
+  return true;
+}
+
+function reachableFromBossSpawn(
+  level: LevelState,
+  spawn: { x: number; y: number },
+): Set<number> {
+  const cols = FIELD_COLS - 3;
+  const key = (col: number, row: number): number => row * cols + col;
+  const startCol = spawn.x / SUBTILE;
+  const startRow = spawn.y / SUBTILE;
+  const seen = new Set<number>([key(startCol, startRow)]);
+  const queue: Array<[number, number]> = [[startCol, startRow]];
+  for (let head = 0; head < queue.length; head++) {
+    const [col, row] = queue[head];
+    for (const [dc, dr] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ]) {
+      const nc = col + dc;
+      const nr = row + dr;
+      if (seen.has(key(nc, nr)) || !bossFits(level, nc, nr)) continue;
       seen.add(key(nc, nr));
       queue.push([nc, nr]);
     }
@@ -106,6 +154,90 @@ test('每张 40×30 战场都连通：上半场每个可站位都能从玩家出
     }
     assert.ok(free > 0, `${name} 上半场没有任何可站位`);
     assert.equal(reached, free, `${name} 上半场有死袋：${orphans.slice(0, 8).join(' ')}`);
+  }
+});
+
+test('Boss 竞技场使用不同构图，且配置中的玩家与 32px Boss 入场区均有效', () => {
+  let symmetricArenas = 0;
+  for (let i = 0; i < BOSS_ARENAS.length; i++) {
+    const level = BOSS_ARENAS[i];
+    const config = BOSS_ARENA_CONFIGS[i];
+
+    let symmetric = true;
+    for (let row = 0; row < FIELD_ROWS && symmetric; row++) {
+      for (let col = 0; col < FIELD_COLS / 2; col++) {
+        if (getCell(level, col, row) !== getCell(level, FIELD_COLS - 1 - col, row)) {
+          symmetric = false;
+          break;
+        }
+      }
+    }
+    if (symmetric) symmetricArenas++;
+
+    for (const [playerIndex, spawn] of config.playerSpawns.entries()) {
+      assert.equal(
+        tankFits(level, spawn.x / SUBTILE, spawn.y / SUBTILE),
+        true,
+        `Boss 图 ${i + 1} 的 ${playerIndex + 1}P 配置出生点必须可站立`,
+      );
+      assert.equal(
+        tankFits(level, spawn.x / SUBTILE, spawn.y / SUBTILE - 2),
+        true,
+        `Boss 图 ${i + 1} 的 ${playerIndex + 1}P 前方必须能投放 MVP 奖励`,
+      );
+    }
+    const playerReachable = reachableFromSpawns(level, [config.playerSpawns[0]]);
+    for (const spawn of config.playerSpawns) {
+      assert.ok(
+        playerReachable.has((spawn.y / SUBTILE) * FIELD_COLS + spawn.x / SUBTILE),
+        `Boss 图 ${i + 1} 的玩家出生席必须处于同一可达区域`,
+      );
+    }
+
+    const bossCol = config.bossSpawn.x / SUBTILE;
+    const bossRow = config.bossSpawn.y / SUBTILE;
+    for (let row = bossRow; row < bossRow + 4; row++) {
+      for (let col = bossCol; col < bossCol + 4; col++) {
+        const cell = getCell(level, col, row);
+        assert.notEqual(cell, Cell.STEEL, `Boss 图 ${i + 1} Boss 入场区不可含钢`);
+        assert.notEqual(cell, Cell.WATER, `Boss 图 ${i + 1} Boss 入场区不可含水`);
+        assert.notEqual(cell, Cell.EAGLE, `Boss 图 ${i + 1} Boss 入场区不可含鹰巢`);
+      }
+    }
+    const bossReachable = reachableFromBossSpawn(level, config.bossSpawn);
+    const bossNavCols = FIELD_COLS - 3;
+    const reaches = (predicate: (col: number, row: number) => boolean): boolean =>
+      [...bossReachable].some((position) =>
+        predicate(position % bossNavCols, (position / bossNavCols) | 0),
+      );
+    assert.ok(reaches((col) => col <= 2), `Boss 图 ${i + 1} 的 32px Boss 到不了左翼`);
+    assert.ok(reaches((col) => col >= FIELD_COLS - 6), `Boss 图 ${i + 1} 的 32px Boss 到不了右翼`);
+    assert.ok(reaches((_col, row) => row >= FIELD_ROWS - 6), `Boss 图 ${i + 1} 的 Boss 到不了下半场`);
+  }
+  assert.ok(symmetricArenas <= 3, `完整左右镜像竞技场过多：${symmetricArenas}`);
+});
+
+test('相邻 Boss 竞技场的地形与阻挡轮廓保持足够差异', () => {
+  for (let i = 0; i < BOSS_ARENAS.length - 1; i++) {
+    const a = BOSS_ARENAS[i];
+    const b = BOSS_ARENAS[i + 1];
+    let exact = 0;
+    let solidIntersection = 0;
+    let solidUnion = 0;
+    for (let cell = 0; cell < a.cells.length; cell++) {
+      if (a.cells[cell] === b.cells[cell]) exact++;
+      const aSolid = isSolidForTank(a.cells[cell]);
+      const bSolid = isSolidForTank(b.cells[cell]);
+      if (aSolid && bSolid) solidIntersection++;
+      if (aSolid || bSolid) solidUnion++;
+    }
+    const exactRatio = exact / a.cells.length;
+    const solidJaccard = solidIntersection / solidUnion;
+    assert.ok(exactRatio < 0.85, `Boss 图 ${i + 1}/${i + 2} 逐格过于相似：${exactRatio}`);
+    assert.ok(
+      solidJaccard < 0.65,
+      `Boss 图 ${i + 1}/${i + 2} 阻挡轮廓过于相似：${solidJaccard}`,
+    );
   }
 });
 

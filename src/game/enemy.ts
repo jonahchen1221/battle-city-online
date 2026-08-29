@@ -40,6 +40,7 @@ import {
   SMART_AI_FLANK_SIDE_COST,
   SMART_AI_FIRING_BRICK_PENALTY,
   SMART_AI_TARGET_LOAD_PENALTY,
+  SMART_AI_TARGET_SWITCH_MARGIN,
   SMART_AI_RESERVED_GOAL_RADIUS,
   SMART_AI_SAME_FLANK_PENALTY,
   SMART_POWERUP_SEEK_RADIUS,
@@ -49,6 +50,7 @@ import {
   bossMinionKindsForStage,
   STAGE_ENEMY_TOTAL,
   isVersusStage,
+  BOSS_MINE_SIZE,
 } from '../core/constants';
 import { Cell, LevelState, brickMaskOverlapsRect, getCell } from './level';
 import {
@@ -65,6 +67,8 @@ import {
   spawnWeaponBullets,
   bulletHitRect,
   spiralBlastRect,
+  bulletCanHit,
+  sweptBulletCollisionTime,
   type BulletState,
 } from './bullet';
 import {
@@ -303,11 +307,10 @@ function predictedBulletPosition(
 }
 
 // 预判只读地形，不真的开砖。普通弹碰到砖/钢即结束；激光可穿砖，带钻头的激光也可穿钢。
-// 鹰巢、边界、Boss 与护送车都能在子弹抵达智能坦克前把它截住，因此可作为可信掩体。
 // silent 表示越过大地图开火视口（F 弹不爆炸）；detonate 表示真实碰撞，F 弹会在该点炎爆。
 type PredictedBulletStop = 'silent' | 'detonate';
 
-function predictedBulletStop(
+function predictedBulletTerrainStop(
   bullet: BulletState,
   state: GameState,
   x: number,
@@ -320,34 +323,6 @@ function predictedBulletStop(
       x + BULLET_SIZE > bullet.viewportBounds.right ||
       y + BULLET_SIZE > bullet.viewportBounds.bottom)
   ) return 'silent';
-  if (
-    state.escort &&
-    navigationBoxesOverlap(
-      x,
-      y,
-      BULLET_SIZE,
-      BULLET_SIZE,
-      state.escort.x,
-      state.escort.y,
-      ESCORT_SIZE,
-      ESCORT_SIZE,
-    )
-  ) return 'detonate';
-  if (
-    state.boss &&
-    !state.boss.dead &&
-    navigationBoxesOverlap(
-      x,
-      y,
-      BULLET_SIZE,
-      BULLET_SIZE,
-      state.boss.x,
-      state.boss.y,
-      state.boss.size,
-      state.boss.size,
-    )
-  ) return 'detonate';
-
   const c0 = Math.floor(x / SUBTILE);
   const c1 = Math.floor((x + BULLET_SIZE - 1e-6) / SUBTILE);
   const r0 = Math.floor(y / SUBTILE);
@@ -381,15 +356,180 @@ function predictedBulletStop(
   return null;
 }
 
+// 动态碰撞在真实模拟中发生于一帧弹道推进完成之后，因此只在每帧终点检查；地形仍在上面
+// 按至多 4px 的子步采样。被评估的目标坦克自身必须忽略，否则轨迹会在记录“命中目标”前消失。
+function predictedBulletDynamicStop(
+  bullet: BulletState,
+  state: GameState,
+  x: number,
+  y: number,
+  ignoredTankId?: number,
+): PredictedBulletStop | null {
+  const predicted = { ...bullet, x, y };
+  const hit = bulletHitRect(predicted);
+  const hitOverlaps = (box: { x: number; y: number }, size: number): boolean =>
+    navigationBoxesOverlap(
+      hit.left,
+      hit.top,
+      hit.right - hit.left,
+      hit.bottom - hit.top,
+      box.x,
+      box.y,
+      size,
+      size,
+    );
+
+  // 与 update.ts 的结算顺序保持一致：Boss → 地雷 → 护送车 → 坦克。
+  // Boss 对 F 弹使用真实 16×8 热区，而不是 4×4 逻辑核心。
+  if (state.boss && !state.boss.dead && hitOverlaps(state.boss, state.boss.size)) {
+    return 'detonate';
+  }
+  if (!bullet.fromEnemy && state.mines.some((mine) => hitOverlaps(mine, BOSS_MINE_SIZE))) {
+    return 'detonate';
+  }
+  if (
+    state.escort &&
+    navigationBoxesOverlap(
+      x,
+      y,
+      BULLET_SIZE,
+      BULLET_SIZE,
+      state.escort.x,
+      state.escort.y,
+      ESCORT_SIZE,
+      ESCORT_SIZE,
+    )
+  ) return 'detonate';
+
+  for (const obstacle of state.tanks) {
+    if (
+      obstacle.id === ignoredTankId ||
+      !obstacle.alive ||
+      !bulletCanHit(predicted, obstacle) ||
+      !hitOverlaps(obstacle, TANK_SIZE)
+    ) continue;
+    // 激光贯穿敌方目标；玩家激光命中队友时仍会按友军冻结规则被吸收。
+    const friendlyPlayerHit = !bullet.fromEnemy && isPlayerTank(obstacle);
+    if (bullet.kind === 'laser' && !friendlyPlayerHit) continue;
+    return 'detonate';
+  }
+  return null;
+}
+
+interface PredictedBulletLifetime {
+  preInterceptionStopTick: number;
+  postInterceptionStopTick: number;
+}
+
+function predictedBulletLifetime(
+  bullet: BulletState,
+  state: GameState,
+  maxTicks: number,
+): PredictedBulletLifetime {
+  let previous = { x: bullet.x, y: bullet.y };
+  for (let currentTick = 1; currentTick <= maxTicks; currentTick++) {
+    const next = predictedBulletPosition(bullet, currentTick);
+    const dx = next.x - previous.x;
+    const dy = next.y - previous.y;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / BULLET_SIZE));
+    for (let step = 0; step <= steps; step++) {
+      const ratio = step / steps;
+      const x = previous.x + dx * ratio;
+      const y = previous.y + dy * ratio;
+      if (predictedBulletTerrainStop(bullet, state, x, y) !== null) {
+        return { preInterceptionStopTick: currentTick, postInterceptionStopTick: Infinity };
+      }
+    }
+    if (predictedBulletDynamicStop(bullet, state, next.x, next.y) !== null) {
+      return { preInterceptionStopTick: Infinity, postInterceptionStopTick: currentTick };
+    }
+    previous = next;
+  }
+  return { preInterceptionStopTick: Infinity, postInterceptionStopTick: Infinity };
+}
+
+interface PredictedBulletInterception {
+  stopped: boolean;
+  spiralGuard: number;
+}
+
+// 子弹互撞使用 bullet.ts 的同一套连续 AABB 判定。预测只修改局部护焰计数，不触碰权威状态。
+function predictedBulletInterception(
+  bullet: BulletState,
+  state: GameState,
+  previous: { x: number; y: number },
+  next: { x: number; y: number },
+  tick: number,
+  maxTicks: number,
+  spiralGuard: number,
+  consumedBulletIds: Set<number>,
+  otherBulletLifetimes: Map<number, PredictedBulletLifetime>,
+): PredictedBulletInterception {
+  let guard = spiralGuard;
+  const predicted = {
+    ...bullet,
+    prevX: previous.x,
+    prevY: previous.y,
+    x: next.x,
+    y: next.y,
+    spiralGuard: guard,
+  };
+  for (const other of state.bullets) {
+    if (other === bullet || !other.alive || consumedBulletIds.has(other.id)) continue;
+    if (bullet.fromEnemy === other.fromEnemy) {
+      if (bullet.fromEnemy || bullet.ownerId === other.ownerId) continue;
+    }
+    let otherLifetime = otherBulletLifetimes.get(other.id);
+    if (otherLifetime === undefined) {
+      otherLifetime = predictedBulletLifetime(other, state, maxTicks);
+      otherBulletLifetimes.set(other.id, otherLifetime);
+    }
+    // 地形在推进中先结算；Boss/地雷/护送车/坦克则位于子弹互撞之后，同 tick 仍能参与拦截。
+    if (
+      tick >= otherLifetime.preInterceptionStopTick ||
+      tick > otherLifetime.postInterceptionStopTick
+    ) continue;
+    const otherPrevious = predictedBulletPosition(other, tick - 1);
+    const otherNext = predictedBulletPosition(other, tick);
+    const predictedOther = {
+      ...other,
+      prevX: otherPrevious.x,
+      prevY: otherPrevious.y,
+      x: otherNext.x,
+      y: otherNext.y,
+    };
+    if (sweptBulletCollisionTime(predicted, predictedOther) === null) continue;
+
+    const opposing = bullet.fromEnemy !== other.fromEnemy;
+    if (opposing) {
+      const selfGuarded = bullet.kind === 'spiral' && guard > 0;
+      const otherGuarded = other.kind === 'spiral' && (other.spiralGuard ?? 0) > 0;
+      if (selfGuarded || otherGuarded) {
+        if (selfGuarded) guard--;
+        else return { stopped: true, spiralGuard: guard };
+        if (!otherGuarded) consumedBulletIds.add(other.id);
+        predicted.spiralGuard = guard;
+        continue;
+      }
+    }
+    return { stopped: true, spiralGuard: guard };
+  }
+  return { stopped: false, spiralGuard: guard };
+}
+
 // 与真实子弹推进一致，把高速弹一帧的路径拆成至多 4px 的采样段，避免激光越过薄掩体。
 // F 弹使用真实的 16×8 热区；撞地形 / Boss / 护送车后额外记录 24×24 炎爆帧。
 function predictBulletFrames(
   bullet: BulletState,
   state: GameState,
   maxTicks = SMART_AI_DODGE_LOOKAHEAD_TICKS,
+  ignoredTankId?: number,
 ): PredictedBulletFrame[] {
   const frames: PredictedBulletFrame[] = [];
   let previous = { x: bullet.x, y: bullet.y };
+  let spiralGuard = bullet.spiralGuard ?? 0;
+  const consumedBulletIds = new Set<number>();
+  const otherBulletLifetimes = new Map<number, PredictedBulletLifetime>();
   for (let tick = 1; tick <= maxTicks; tick++) {
     const next = predictedBulletPosition(bullet, tick);
     const dx = next.x - previous.x;
@@ -399,13 +539,44 @@ function predictBulletFrames(
       const t = step / steps;
       const x = previous.x + dx * t;
       const y = previous.y + dy * t;
-      const stop = predictedBulletStop(bullet, state, x, y);
+      const stop = predictedBulletTerrainStop(bullet, state, x, y);
       if (stop !== null) {
         if (bullet.kind === 'spiral' && stop === 'detonate') {
           frames.push({ tick, x, y, blast: true });
         }
         return frames;
       }
+    }
+    const interception = predictedBulletInterception(
+      bullet,
+      state,
+      previous,
+      next,
+      tick,
+      maxTicks,
+      spiralGuard,
+      consumedBulletIds,
+      otherBulletLifetimes,
+    );
+    spiralGuard = interception.spiralGuard;
+    if (interception.stopped) {
+      if (bullet.kind === 'spiral') {
+        frames.push({ tick, x: next.x, y: next.y, blast: true });
+      }
+      return frames;
+    }
+    const dynamicStop = predictedBulletDynamicStop(
+      bullet,
+      state,
+      next.x,
+      next.y,
+      ignoredTankId,
+    );
+    if (dynamicStop !== null) {
+      if (bullet.kind === 'spiral') {
+        frames.push({ tick, x: next.x, y: next.y, blast: true });
+      }
+      return frames;
     }
     frames.push({ tick, x: next.x, y: next.y, blast: false });
     previous = next;
@@ -442,7 +613,10 @@ function imminentSmartBulletThreat(
   let threatTick = Infinity;
   for (const bullet of state.bullets) {
     if (!bullet.alive || bullet.fromEnemy) continue;
-    const trajectory = { bullet, frames: predictBulletFrames(bullet, state) };
+    const trajectory = {
+      bullet,
+      frames: predictBulletFrames(bullet, state, SMART_AI_DODGE_LOOKAHEAD_TICKS, tank.id),
+    };
     trajectories.push(trajectory);
     const hit = trajectory.frames.find((frame) => trajectoryFrameHitsTank(trajectory, frame, tank));
     if (!hit) continue;
@@ -714,10 +888,13 @@ function smartCoordinationCandidateCost(
   let cost = 0;
   for (const reservation of coordination.reservations) {
     // id 小者拥有稳定预约优先级；高 id 队友主动改位，避免双方每次重算都同时交换目标点。
-    if (reservation.tankId >= tank.id || reservation.targetId !== target.id) continue;
+    if (reservation.tankId >= tank.id) continue;
     const distance = Math.abs(candidate.x - reservation.x) + Math.abs(candidate.y - reservation.y);
+    // 即使分攻不同玩家，实体射击位也不能互相重叠；侧翼重复惩罚则只对同一目标有意义。
     if (distance < SMART_AI_RESERVED_GOAL_RADIUS) return Infinity;
-    if (candidate.side === reservation.side) cost += SMART_AI_SAME_FLANK_PENALTY;
+    if (reservation.targetId === target.id && candidate.side === reservation.side) {
+      cost += SMART_AI_SAME_FLANK_PENALTY;
+    }
   }
   return cost;
 }
@@ -956,11 +1133,14 @@ function buildSmartCoordination(state: GameState): SmartCoordinationContext {
     let target = versusTarget;
     if (!target) {
       let bestScore = Infinity;
+      const previousTarget = players.find((candidate) => candidate.id === tank.smartTargetId) ?? null;
+      let previousScore = Infinity;
       for (const candidate of players) {
         const dx = candidate.x - tank.x;
         const dy = candidate.y - tank.y;
         const load = targetLoads.get(candidate.id) ?? 0;
         const score = dx * dx + dy * dy + load * SMART_AI_TARGET_LOAD_PENALTY;
+        if (candidate === previousTarget) previousScore = score;
         if (
           score < bestScore ||
           (score === bestScore && target !== null && candidate.playerIndex < target.playerIndex)
@@ -969,8 +1149,22 @@ function buildSmartCoordination(state: GameState): SmartCoordinationContext {
           bestScore = score;
         }
       }
+      // 目标仍存活且没有明显更优替代时维持原锁定，避免距离/负载边界随移动每轮翻转。
+      if (previousTarget && previousScore <= bestScore + SMART_AI_TARGET_SWITCH_MARGIN) {
+        target = previousTarget;
+      }
     }
-    if (!target) continue;
+    if (!target) {
+      tank.smartTargetId = -1;
+      clearSmartFiringGoal(tank);
+      continue;
+    }
+    if (tank.smartTargetId !== target.id) {
+      tank.smartTargetId = target.id;
+      clearSmartFiringGoal(tank);
+      tank.smartTurnFireTicks = 0;
+      tank.aiTicks = 0;
+    }
     targetByTankId.set(tank.id, target);
     targetLoads.set(target.id, (targetLoads.get(target.id) ?? 0) + 1);
   }
@@ -1263,11 +1457,32 @@ function predictTargetPositions(
   const probe = { ...target };
   const probeObstacles = obstacles.map((obstacle) => obstacle === target ? probe : obstacle);
   const positions = [{ x: probe.x, y: probe.y }];
+  const assumedMoveDir = target.moving ? target.dir : null;
+  let playerFreezeTicks = state.playerFreezeTicks;
+  let playerSlowTicks = state.playerSlowTicks;
   for (let tick = 1; tick <= maxTicks; tick++) {
-    const input = probe.dashTicks > 0 || !probe.moving
-      ? emptyInput()
-      : driveInput(probe.dir);
-    applyInput(probe, input, level, probeObstacles, state.escort ?? undefined);
+    // 对齐 update.ts 的未来帧顺序：全局/个人计时与速度增益先递减，随后才判定冻结、半速和移动。
+    if (playerFreezeTicks > 0) playerFreezeTicks--;
+    if (playerSlowTicks > 0) playerSlowTicks--;
+    if (probe.speedBoostTicks > 0) probe.speedBoostTicks--;
+    if (probe.ghostTicks > 0) probe.ghostTicks--;
+    const personallyFrozen = probe.freezeTicks > 0;
+    if (personallyFrozen) probe.freezeTicks--;
+    const globallyFrozen = playerFreezeTicks > 0;
+    const futureTick = state.tick + tick;
+    const slowedSkip = !globallyFrozen && !personallyFrozen &&
+      playerSlowTicks > 0 && futureTick % 2 !== 0;
+    if (personallyFrozen || globallyFrozen) probe.dashTicks = 0;
+
+    if (globallyFrozen || personallyFrozen || slowedSkip) {
+      probe.moving = false;
+      probe.slideTicks = 0;
+    } else {
+      const input = probe.dashTicks > 0 || assumedMoveDir === null
+        ? emptyInput()
+        : driveInput(assumedMoveDir);
+      applyInput(probe, input, level, probeObstacles, state.escort ?? undefined);
+    }
     positions.push({ x: probe.x, y: probe.y });
   }
   return positions;
@@ -1312,11 +1527,13 @@ function smartAimPlan(
           bullet,
           state,
           SMART_AI_LEAD_LOOKAHEAD_TICKS - turnDelay,
+          target.id,
         ),
       };
       for (const frame of trajectory.frames) {
         const interceptTick = turnDelay + frame.tick;
-        const targetPosition = positions[interceptTick];
+        // 玩家已在本帧 AI 更新之前行动；新子弹第一次推进时仍应对比当前位置 positions[0]。
+        const targetPosition = positions[Math.max(0, interceptTick - 1)];
         if (!targetPosition || !trajectoryFrameHitsTank(trajectory, frame, targetPosition)) continue;
         const plan: SmartAimPlan = {
           dir,
@@ -1354,7 +1571,12 @@ function readiedPlayerGunThreat(tank: TankState, state: GameState): SmartBulletT
     for (const bullet of bullets) {
       const trajectory: PredictedBulletTrajectory = {
         bullet,
-        frames: predictBulletFrames(bullet, state, SMART_AI_READY_GUN_LOOKAHEAD_TICKS),
+        frames: predictBulletFrames(
+          bullet,
+          state,
+          SMART_AI_READY_GUN_LOOKAHEAD_TICKS,
+          tank.id,
+        ),
       };
       trajectories.push(trajectory);
       const hit = trajectory.frames.find(
@@ -1717,6 +1939,7 @@ function recycleEscapedEscortEnemies(state: GameState): void {
     tank.aiTicks = AI_DECISION_MIN_TICKS;
     tank.smartStuckTicks = 0;
     tank.smartEscapeTicks = 0;
+    tank.smartTargetId = -1;
     tank.smartGoalX = -1;
     tank.smartGoalY = -1;
     tank.smartTurnFireTicks = 0;

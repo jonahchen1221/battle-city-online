@@ -571,7 +571,7 @@ function bulletsOverlap(a: BulletState, b: BulletState): boolean {
 // 返回两枚移动 AABB 在本帧首次重叠的时刻（0..1）；null 表示整段轨迹都未相交。
 // 把 b 视为静止后，a 的相对位移在 x/y 两轴上各给出一个“重叠时间窗”，
 // 两窗的交集非空即命中。边缘只相贴仍沿用旧规则，不算相撞。
-function sweptBulletCollisionTime(a: BulletState, b: BulletState): number | null {
+export function sweptBulletCollisionTime(a: BulletState, b: BulletState): number | null {
   if (bulletsOverlap(a, b)) return 1;
 
   const relativeX = a.prevX - b.prevX;

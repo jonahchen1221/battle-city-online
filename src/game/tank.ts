@@ -67,6 +67,7 @@ export interface TankState {
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
   smartStuckTicks: number; // 智能坦克连续尝试追踪却没有位移的帧数
   smartEscapeTicks: number; // 智能坦克保持当前脱困或闪避方向的剩余帧数
+  smartTargetId: number; // 智能坦克当前协同锁定的玩家 id；无目标时为 -1
   smartGoalX: number; // 智能坦克当前战术射击位 x；无目标时为 -1
   smartGoalY: number; // 智能坦克当前战术射击位 y；无目标时为 -1
   smartTurnFireTicks: number; // 智能坦克转向后允许开火前的剩余等待帧数
@@ -153,6 +154,7 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     aiTicks: 0,
     smartStuckTicks: 0,
     smartEscapeTicks: 0,
+    smartTargetId: -1,
     smartGoalX: -1,
     smartGoalY: -1,
     smartTurnFireTicks: 0,
@@ -228,6 +230,7 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     aiTicks: kind === 'smart' ? 0 : AI_DECISION_MIN_TICKS,
     smartStuckTicks: 0,
     smartEscapeTicks: 0,
+    smartTargetId: -1,
     smartGoalX: -1,
     smartGoalY: -1,
     smartTurnFireTicks: 0,

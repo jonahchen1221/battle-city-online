@@ -12,7 +12,12 @@ import {
   TANK_SIZE,
 } from '../core/constants';
 import { LevelState, cloneLevel, levelHasWater } from './level';
-import { bossArenaForStage, normalLevelForStage, versusArenaForStage } from './levels';
+import {
+  bossArenaConfigForStage,
+  bossPlayerSpawnForStage,
+  normalLevelForStage,
+  versusArenaForStage,
+} from './levels';
 import {
   TankState,
   TankKind,
@@ -232,11 +237,12 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   const escortStage = kind === 'escort';
   const bossStage = kind === 'boss';
   const versusStage = kind === 'versus';
+  const bossArena = bossStage ? bossArenaConfigForStage(stage) : null;
   const level = escortStage
     ? createEscortLevel(stage)
     : cloneLevel(
         bossStage
-          ? bossArenaForStage(stage)
+          ? bossArena!.level
           : versusStage
             ? versusArenaForStage(stage)
             : normalLevelForStage(stage),
@@ -248,7 +254,9 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   const tanks: TankState[] = [];
   for (let i = 0; i < playerCount; i++) {
     const tank = createPlayer(i, i + 1);
-    const spawn = escortPlayerSpawn(escort, i, level);
+    const spawn = bossStage
+      ? bossPlayerSpawnForStage(stage, i)
+      : escortPlayerSpawn(escort, i, level);
     tank.x = spawn.x;
     tank.y = spawn.y;
     tanks.push(tank);
@@ -284,7 +292,9 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     stage,
     // Boss 关：幕布结束后 Boss 即已在位（不走出生闪光）。普通关为 null。
     // 第 b 位 Boss（b = 组号）：血量 / 攻击间隔 / 技能池全部按序号取（见 constants）。
-    boss: bossStage ? createBoss(playerCount, bossOrdinalForStage(stage)) : null,
+    boss: bossStage
+      ? createBoss(playerCount, bossOrdinalForStage(stage), bossArena!.bossSpawn)
+      : null,
     mines: [],
     nextMineId: 1,
     phase: 'stagestart',
@@ -331,6 +341,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
 export function nextStage(state: GameState): void {
   const nextStageNum = (state.stage % STAGE_COUNT) + 1;
   const nextKind = stageKind(nextStageNum);
+  const nextBossArena = nextKind === 'boss' ? bossArenaConfigForStage(nextStageNum) : null;
 
   // ── MVP 开局奖励（仅多人局）──
   // 规则：以「本关得分差」评 MVP —— delta[i] = 当前累计分 − 本关开始时的累计分快照；
@@ -374,7 +385,7 @@ export function nextStage(state: GameState): void {
       ? createEscortLevel(nextStageNum)
       : cloneLevel(
           nextKind === 'boss'
-            ? bossArenaForStage(nextStageNum)
+            ? nextBossArena!.level
             : nextKind === 'versus'
               ? versusArenaForStage(nextStageNum)
               : normalLevelForStage(nextStageNum),
@@ -383,7 +394,13 @@ export function nextStage(state: GameState): void {
   state.enemyQueue = createStageQueue(nextStageNum);
   // Boss 关重建一台满血 Boss（按新关号取序号）；普通关 / 护送关清空。地雷一律清场。
   state.boss =
-    nextKind === 'boss' ? createBoss(state.playerCount, bossOrdinalForStage(nextStageNum)) : null;
+    nextKind === 'boss'
+      ? createBoss(
+          state.playerCount,
+          bossOrdinalForStage(nextStageNum),
+          nextBossArena!.bossSpawn,
+        )
+      : null;
   state.mines = [];
 
   // 每关独立的战斗态一律清空。
@@ -423,7 +440,10 @@ export function nextStage(state: GameState): void {
   // MVP 奖励投放（多人局）：固定五角星，位置为该玩家出生点正上方一个坦克身位
   //（y−16，越界钳到 0），一进关卡就能顺手吃到。单机局 mvpIndex 恒为 -1，不发。
   if (mvpIndex >= 0) {
-    const spawn = escortPlayerSpawn(state.escort, mvpIndex, state.level);
+    const spawn =
+      nextKind === 'boss'
+        ? bossPlayerSpawnForStage(nextStageNum, mvpIndex)
+        : escortPlayerSpawn(state.escort, mvpIndex, state.level);
     state.powerups.push({ kind: 'star', x: spawn.x, y: Math.max(0, spawn.y - TANK_SIZE) });
   }
 
@@ -437,7 +457,10 @@ export function nextStage(state: GameState): void {
   for (let i = 0; i < state.playerCount; i++) {
     if (state.livesByPlayer[i] <= 0) continue;
     const tank = createPlayer(i, i + 1);
-    const spawn = escortPlayerSpawn(state.escort, i, state.level);
+    const spawn =
+      nextKind === 'boss'
+        ? bossPlayerSpawnForStage(nextStageNum, i)
+        : escortPlayerSpawn(state.escort, i, state.level);
     tank.x = spawn.x;
     tank.y = spawn.y;
     restorePlayerUpgrade(tank, levelByPlayer[i], hpByPlayer[i], armorByPlayer[i]);
