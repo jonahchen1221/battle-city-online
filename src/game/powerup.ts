@@ -54,7 +54,7 @@ export type PowerupKind =
   | 'shovel'
   | 'helmet'
   | 'wpnSpread' // S：散弹
-  | 'wpnSpiral' // F：螺旋弹
+  | 'wpnSpiral' // F：双螺旋炎爆弹
   | 'wpnLaser' // L：激光
   | 'wpnMachine' // M：机枪
   | 'boots' // 快靴：拾取者限时加速

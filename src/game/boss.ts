@@ -75,7 +75,7 @@ import {
 } from '../core/constants';
 import type { Direction } from '../core/types';
 import { TankState, canTankOccupy, createEnemy, isPlayerTank } from './tank';
-import { BulletState, makeSmallExplosion } from './bullet';
+import { BulletState, bulletHitRect, makeSmallExplosion } from './bullet';
 import { damagePlayerTank, destroyPlayerTank } from './death';
 import { Cell, brickMaskOverlapsRect, getCell, setCell } from './level';
 import type { GameState } from './state';
@@ -1350,7 +1350,17 @@ export function updateMines(state: GameState): void {
     let shot: BulletState | null = null;
     for (const b of state.bullets) {
       if (!b.alive || b.fromEnemy) continue;
-      if (rectsOverlap(mine.x, mine.y, BOSS_MINE_SIZE, BOSS_MINE_SIZE, b.x, b.y, BULLET_SIZE, BULLET_SIZE)) {
+      const hit = bulletHitRect(b);
+      if (rectsOverlap(
+        mine.x,
+        mine.y,
+        BOSS_MINE_SIZE,
+        BOSS_MINE_SIZE,
+        hit.left,
+        hit.top,
+        hit.right - hit.left,
+        hit.bottom - hit.top,
+      )) {
         shot = b;
         break;
       }
@@ -1376,10 +1386,11 @@ export function updateMines(state: GameState): void {
   state.mines = survivors;
 }
 
-// 子弹 4×4 盒是否与 Boss 车体重叠。
+// 子弹伤害盒是否与 Boss 车体重叠；F 弹使用 16×8 连续热区。
 function bulletHitsBoss(b: BulletState, boss: BossState): boolean {
+  const hit = bulletHitRect(b);
   const r = bossRect(boss);
-  return b.x < r.x1 && b.x + BULLET_SIZE > r.x0 && b.y < r.y1 && b.y + BULLET_SIZE > r.y0;
+  return hit.left < r.x1 && hit.right > r.x0 && hit.top < r.y1 && hit.bottom > r.y0;
 }
 
 // 子弹 vs Boss。玩家弹扣血（激光 −2、其余 −1）并一律消亡（激光对 Boss 不贯穿，
@@ -1393,8 +1404,11 @@ export function resolveBulletBoss(state: GameState): void {
     if (!bulletHitsBoss(b, boss)) continue;
 
     b.alive = false;
-    state.explosions.push(makeSmallExplosion(b.x + BULLET_SIZE / 2, b.y + BULLET_SIZE / 2));
-    state.events.push('explosionSmall');
+    // F 弹稍后统一生成大范围炎爆；其余子弹仍在命中点生成经典小火花。
+    if (b.kind !== 'spiral') {
+      state.explosions.push(makeSmallExplosion(b.x + BULLET_SIZE / 2, b.y + BULLET_SIZE / 2));
+      state.events.push('explosionSmall');
+    }
     if (b.fromEnemy) continue; // 吸收体：小兵弹不伤 Boss
 
     boss.hp -= b.kind === 'laser' ? BOSS_DAMAGE_LASER : BOSS_DAMAGE_NORMAL;

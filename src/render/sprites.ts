@@ -789,7 +789,7 @@ const BULLET = assertGrid([
   '..cccc..',
 ], 8, 8, 'bullet');
 
-// ── 螺旋弹（8×8 美术 = 4×4 逻辑）──：橙红火球，黄芯 + 亮红过渡 + 暗红外缘（同心圆填充）。
+// ── 双螺旋炎爆弹单颗火球（8×8 美术 = 4×4 逻辑）──：黄芯 + 亮红过渡 + 暗红外缘。
 const BULLET_SPIRAL = ((): string[] => {
   const g = blankGrid(8);
   fillCircleG(g, 3.5, 3.5, 3.6, '3'); // 暗红外缘
@@ -1367,7 +1367,7 @@ export interface SpriteAtlas {
   }; // 携带道具敌军红闪变体（各种类）
   powerup: Record<PowerupKind, Sprite>; // 各种道具图标（16×16 逻辑）
   bullet: Sprite;
-  bulletSpiral: Sprite; // 螺旋弹火球（4×4 逻辑）
+  bulletSpiral: Sprite; // 双螺旋炎爆弹的单颗火球（4×4 逻辑）
   bulletLaser: Record<Direction, Sprite>; // 激光细长条（8×8 逻辑，四朝向）
   spawnStar: [Sprite, Sprite, Sprite, Sprite]; // 出生闪光 4 帧（32×32）
   spawnStarSmart: [Sprite, Sprite, Sprite, Sprite]; // 智能坦克青蓝出生闪光
@@ -1515,7 +1515,7 @@ export function createSpriteAtlas(): SpriteAtlas {
     paint(ctx, HUD_LIFE_TANKS[i], 112 + i * 16, Y_TERRAIN);
   }
 
-  // 鹰巢行（32×32）+ 子弹（8×8）+ 螺旋弹（8×8）+ 激光四朝向（各 16×16）
+  // 鹰巢行（32×32）+ 子弹（8×8）+ 炎爆火球（8×8）+ 激光四朝向（各 16×16）
   paint(ctx, EAGLE, 0, Y_EAGLE);
   paint(ctx, EAGLE_DESTROYED, 32, Y_EAGLE);
   paint(ctx, HUD_FLAG, 64, Y_EAGLE);

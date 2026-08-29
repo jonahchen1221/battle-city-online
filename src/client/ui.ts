@@ -17,7 +17,7 @@ const POWERUP_TICKER_COPY: Record<PowerupKind, { name: string; effect: string }>
   shovel: { name: '铁铲', effect: '强化基地；护送关暂停计时 20 秒' },
   helmet: { name: '头盔', effect: '无敌 10 秒' },
   wpnSpread: { name: '散射炮', effect: '三向射击' },
-  wpnSpiral: { name: '螺旋炮', effect: '波浪弹道' },
+  wpnSpiral: { name: '双螺旋炎爆弹', effect: '宽热区消弹，命中范围爆炸' },
   wpnLaser: { name: '激光炮', effect: '穿透射击' },
   wpnMachine: { name: '机关枪', effect: '高速连射，最多 3 弹在场' },
   boots: { name: '战靴', effect: '加速 20 秒' },

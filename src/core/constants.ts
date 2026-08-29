@@ -446,11 +446,16 @@ export const SPREAD_SPLAY_RAD = Math.PI / 8; // 22.5°
 export const SPREAD_BULLET_SPEED = 3; // 与 STAR_BULLET_SPEED 一致
 export const SPREAD_MAX_VOLLEYS = 1;
 
-// spiral（F 螺旋弹）：前进分量恒定，实际位置在直线路径两侧做正弦摆动。
-// 摆动用增量式实现（每帧位移 = 前进分量 + (sin((age+1)ω)−sin(age·ω))·R），无需记录出膛原点。
-export const SPIRAL_BULLET_SPEED = 2;
-export const SPIRAL_RADIUS = 6; // 摆动半径（px）
-export const SPIRAL_PERIOD_TICKS = 24; // 摆动周期（帧）
+// spiral（F 双螺旋炎爆弹）：逻辑核心沿准星直飞，两颗火球仅在渲染层绕中心线反向旋转。
+// 16px 宽的连续热区保证轴向瞄准不会因视觉摆动漏怪；命中后产生 24px 炎爆。
+export const SPIRAL_BULLET_SPEED = 3;
+export const SPIRAL_RADIUS = 6; // 双火球相对逻辑核心的最大视觉摆幅（px）
+export const SPIRAL_PERIOD_TICKS = 24; // 双火球完成一轮交叉的周期（帧）
+export const SPIRAL_HIT_WIDTH = 16; // 垂直于行进方向的连续热区宽度
+export const SPIRAL_HIT_LENGTH = 8; // 沿行进方向的热区长度
+export const SPIRAL_BLAST_SIZE = 24; // 命中炎爆的正方形伤害范围
+export const SPIRAL_BRICK_BLAST_SIZE = 16; // 炎爆清除砖墙的范围（钢块不受影响）
+export const SPIRAL_GUARD_HITS = 1; // 外层火焰可烧掉一发对方子弹后继续飞
 export const SPIRAL_MAX_BULLETS = 1;
 
 // laser（L 激光）：高速贯穿弹 —— 穿敌人（照常扣血/记分/爆炸）、穿砖块（照常开凿）；

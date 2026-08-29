@@ -18,8 +18,11 @@ import {
   SPREAD_BULLET_SPEED,
   SPREAD_MAX_VOLLEYS,
   SPIRAL_BULLET_SPEED,
-  SPIRAL_RADIUS,
-  SPIRAL_PERIOD_TICKS,
+  SPIRAL_HIT_WIDTH,
+  SPIRAL_HIT_LENGTH,
+  SPIRAL_BLAST_SIZE,
+  SPIRAL_BRICK_BLAST_SIZE,
+  SPIRAL_GUARD_HITS,
   SPIRAL_MAX_BULLETS,
   LASER_BULLET_SPEED,
   LASER_MAX_BULLETS,
@@ -42,7 +45,7 @@ import type { ExplosionState, GameEvent } from './state';
 
 // 子弹种类（决定观感与特殊结算）：
 // 'normal' = 经典弹（cannon / 机枪 / 敌弹，纯四方向）；'pellet' = 散弹粒（可斜飞）；
-// 'spiral' = 螺旋弹（沿路径正弦摆动）；'laser' = 激光（穿敌人 / 穿砖块）。
+// 'spiral' = 双螺旋炎爆弹（逻辑核心直飞、宽热区、命中爆炸）；'laser' = 激光（穿敌人 / 穿砖块）。
 export type BulletKind = 'normal' | 'pellet' | 'spiral' | 'laser';
 
 export interface BulletViewportBounds {
@@ -77,6 +80,13 @@ export interface BulletState {
   // 可击穿钢块（击中钢块时整格清除）。两条来源：玩家 star 2 级、敌军 star 3 级的 cannon 弹，或射手持有
   // drill 钻头（此时任何武器、任何等级都带破钢）。鹰巢与战场边界永不可穿。
   steelPiercing: boolean;
+  // F 弹外层护焰：可烧掉一发对方子弹而不消亡，消耗后渲染为缩小的单核心。
+  // 可选是为了兼容 Boss 弹幕与旧快照；非 F 弹等价于 0。
+  spiralGuard?: number;
+  // F 弹死亡后是否产生炎爆。越过开火视口时会被置为 false，保持原有静默回收语义。
+  spiralDetonate?: boolean;
+  // F 弹若直接撞上坦克，先由普通命中流程结算一次；炎爆排除该 id，避免同一发连扣两次。
+  spiralHitTankId?: number;
 }
 
 const EPS = 1e-6;
@@ -99,12 +109,6 @@ function dirVector(dir: Direction): { x: number; y: number } {
     case 'right':
       return { x: 1, y: 0 };
   }
-}
-
-// 垂直于朝向的单位向量（把 dirVector 顺时针旋转 90°）：螺旋弹的摆动轴。
-function perpVector(dir: Direction): { x: number; y: number } {
-  const v = dirVector(dir);
-  return { x: -v.y, y: v.x };
 }
 
 // 炮口位置：4×4 弹体居中于坦克宽度、紧贴坦克盒外侧。
@@ -157,6 +161,9 @@ function makeBullet(
     alive: true,
     viewportBounds: level ? firingViewportBounds(tank, level) : null,
     steelPiercing,
+    spiralGuard: kind === 'spiral' ? SPIRAL_GUARD_HITS : 0,
+    spiralDetonate: kind === 'spiral',
+    spiralHitTankId: -1,
   };
 }
 
@@ -254,21 +261,13 @@ export function maxBulletsFor(tank: TankState): number {
   }
 }
 
-// 按速度向量推进一帧。normal 弹的 vx/vy 由 dir×speed 推出，结果与纯四方向位移完全一致。
-// 螺旋弹另叠加一个垂直于主轴的正弦增量：位移 = (sin((age+1)ω) − sin(age·ω))·R，
-// 等价于横向偏移恒为 sin(age·ω)·R（幅度 ≤ SPIRAL_RADIUS），无需记录出膛原点。
+// 按速度向量推进一帧。F 弹的逻辑核心也严格直飞；双螺旋只在渲染层表现，
+// 从根源上避免视觉摆动把碰撞盒带离准星。
 function moveBullet(b: BulletState): void {
   b.prevX = b.x;
   b.prevY = b.y;
   b.x += b.vx;
   b.y += b.vy;
-  if (b.kind === 'spiral') {
-    const w = (2 * Math.PI) / SPIRAL_PERIOD_TICKS;
-    const d = (Math.sin((b.age + 1) * w) - Math.sin(b.age * w)) * SPIRAL_RADIUS;
-    const n = perpVector(b.dir);
-    b.x += n.x * d;
-    b.y += n.y * d;
-  }
   b.age++;
 }
 
@@ -359,6 +358,30 @@ function carveSteelStrip(b: BulletState, level: LevelState): void {
   for (let row = r0; row <= r1; row++) {
     for (let col = c0; col <= c1; col++) {
       removeSteel(level, col, row);
+    }
+  }
+}
+
+// F 弹炎爆会把爆心附近一个坦克身位的砖墙整格掀开；钢块、鹰巢与边界不受影响。
+// 以子格中心是否落在 16×16 爆破框内为准，避免爆心落在格线时意外扩大成 24×24。
+export function clearSpiralBlastBricks(level: LevelState, b: BulletState): void {
+  const cx = b.x + BULLET_SIZE / 2;
+  const cy = b.y + BULLET_SIZE / 2;
+  const half = SPIRAL_BRICK_BLAST_SIZE / 2;
+  const c0 = Math.floor((cx - half) / SUBTILE);
+  const c1 = Math.floor((cx + half - EPS) / SUBTILE);
+  const r0 = Math.floor((cy - half) / SUBTILE);
+  const r1 = Math.floor((cy + half - EPS) / SUBTILE);
+  const fullBrick = BRICK_TL | BRICK_TR | BRICK_BL | BRICK_BR;
+  for (let row = r0; row <= r1; row++) {
+    for (let col = c0; col <= c1; col++) {
+      const cellCx = col * SUBTILE + SUBTILE / 2;
+      const cellCy = row * SUBTILE + SUBTILE / 2;
+      if (cellCx < cx - half || cellCx >= cx + half) continue;
+      if (cellCy < cy - half || cellCy >= cy + half) continue;
+      if (getCell(level, col, row) === Cell.BRICK) {
+        removeBrickQuarters(level, col, row, fullBrick);
+      }
     }
   }
 }
@@ -477,6 +500,7 @@ export function advanceBullets(
           b.x + BULLET_SIZE > bounds.right ||
           b.y + BULLET_SIZE > bounds.bottom)
       ) {
+        if (b.kind === 'spiral') b.spiralDetonate = false;
         b.alive = false;
         break; // 越过开火时视口仍然静默回收，不产生火花
       }
@@ -488,29 +512,59 @@ export function advanceBullets(
       }
     }
 
-    if (terrainKilled) {
+    if (terrainKilled && b.kind !== 'spiral') {
       explosions.push(makeSmallExplosion(b.x + BULLET_SIZE / 2, b.y + BULLET_SIZE / 2));
     }
   }
 }
 
-// 4×4 子弹 AABB 是否与 16×16 坦克 AABB 重叠。
+export interface BulletHitRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+// F 弹以直飞核心为中心形成 16×8 连续热区；其他弹仍使用原 4×4 碰撞盒。
+export function bulletHitRect(b: BulletState): BulletHitRect {
+  if (b.kind !== 'spiral') {
+    return { left: b.x, top: b.y, right: b.x + BULLET_SIZE, bottom: b.y + BULLET_SIZE };
+  }
+  const cx = b.x + BULLET_SIZE / 2;
+  const cy = b.y + BULLET_SIZE / 2;
+  const vertical = b.dir === 'up' || b.dir === 'down';
+  const halfW = (vertical ? SPIRAL_HIT_WIDTH : SPIRAL_HIT_LENGTH) / 2;
+  const halfH = (vertical ? SPIRAL_HIT_LENGTH : SPIRAL_HIT_WIDTH) / 2;
+  return { left: cx - halfW, top: cy - halfH, right: cx + halfW, bottom: cy + halfH };
+}
+
+export function spiralBlastRect(b: BulletState): BulletHitRect {
+  const cx = b.x + BULLET_SIZE / 2;
+  const cy = b.y + BULLET_SIZE / 2;
+  const half = SPIRAL_BLAST_SIZE / 2;
+  return { left: cx - half, top: cy - half, right: cx + half, bottom: cy + half };
+}
+
+// 子弹热区是否与 16×16 坦克 AABB 重叠。
 function bulletHitsTank(b: BulletState, t: TankState): boolean {
+  const r = bulletHitRect(b);
   return (
-    b.x < t.x + TANK_SIZE &&
-    b.x + BULLET_SIZE > t.x &&
-    b.y < t.y + TANK_SIZE &&
-    b.y + BULLET_SIZE > t.y
+    r.left < t.x + TANK_SIZE &&
+    r.right > t.x &&
+    r.top < t.y + TANK_SIZE &&
+    r.bottom > t.y
   );
 }
 
-// 两发子弹的 4×4 盒是否重叠。
+// 两发子弹的伤害盒是否重叠；F 弹用宽热区主动烧弹。
 function bulletsOverlap(a: BulletState, b: BulletState): boolean {
+  const ar = bulletHitRect(a);
+  const br = bulletHitRect(b);
   return (
-    a.x < b.x + BULLET_SIZE &&
-    a.x + BULLET_SIZE > b.x &&
-    a.y < b.y + BULLET_SIZE &&
-    a.y + BULLET_SIZE > b.y
+    ar.left < br.right &&
+    ar.right > br.left &&
+    ar.top < br.bottom &&
+    ar.bottom > br.top
   );
 }
 
@@ -525,17 +579,34 @@ function sweptBulletCollisionTime(a: BulletState, b: BulletState): number | null
   const relativeDx = (a.x - a.prevX) - (b.x - b.prevX);
   const relativeDy = (a.y - a.prevY) - (b.y - b.prevY);
 
-  const axisWindow = (offset: number, delta: number): [number, number] | null => {
-    if (Math.abs(delta) < EPS) {
-      return Math.abs(offset) < BULLET_SIZE ? [-Infinity, Infinity] : null;
+  const halfExtents = (bullet: BulletState): { x: number; y: number } => {
+    if (bullet.kind !== 'spiral') {
+      return { x: BULLET_SIZE / 2, y: BULLET_SIZE / 2 };
     }
-    const t0 = (-BULLET_SIZE - offset) / delta;
-    const t1 = (BULLET_SIZE - offset) / delta;
+    const vertical = bullet.dir === 'up' || bullet.dir === 'down';
+    return {
+      x: (vertical ? SPIRAL_HIT_WIDTH : SPIRAL_HIT_LENGTH) / 2,
+      y: (vertical ? SPIRAL_HIT_LENGTH : SPIRAL_HIT_WIDTH) / 2,
+    };
+  };
+  const aHalf = halfExtents(a);
+  const bHalf = halfExtents(b);
+
+  const axisWindow = (
+    offset: number,
+    delta: number,
+    combinedHalfExtent: number,
+  ): [number, number] | null => {
+    if (Math.abs(delta) < EPS) {
+      return Math.abs(offset) < combinedHalfExtent ? [-Infinity, Infinity] : null;
+    }
+    const t0 = (-combinedHalfExtent - offset) / delta;
+    const t1 = (combinedHalfExtent - offset) / delta;
     return t0 < t1 ? [t0, t1] : [t1, t0];
   };
 
-  const xWindow = axisWindow(relativeX, relativeDx);
-  const yWindow = axisWindow(relativeY, relativeDy);
+  const xWindow = axisWindow(relativeX, relativeDx, aHalf.x + bHalf.x);
+  const yWindow = axisWindow(relativeY, relativeDy, aHalf.y + bHalf.y);
   if (!xWindow || !yWindow) return null;
   const entry = Math.max(0, xWindow[0], yWindow[0]);
   const exit = Math.min(1, xWindow[1], yWindow[1]);
@@ -544,6 +615,7 @@ function sweptBulletCollisionTime(a: BulletState, b: BulletState): number | null
 
 // 子弹 vs 子弹（重叠即判定）：
 // - 不同阵营（玩家弹 × 敌弹）：相互抵消（经典机制）。
+//   F 弹若仍有外层护焰，则先烧掉一发对方子弹并继续飞；护焰消耗后再碰弹才会同归于尽。
 // - 同为玩家弹但射手不同（多人合作友军火力）：也相互抵消 —— 队友可打掉你的弹幕。
 // - 同一射手的玩家弹（star 双弹 / 机枪连发 / 散弹同轮）与敌弹 × 敌弹：互相穿过。
 // 抵消处生成一个小爆炸火花。
@@ -565,15 +637,40 @@ export function resolveBulletBullet(
       }
       const collisionTime = sweptBulletCollisionTime(a, b);
       if (collisionTime === null) continue;
-      if (a.fromEnemy !== b.fromEnemy) {
+      const opposing = a.fromEnemy !== b.fromEnemy;
+      if (opposing) {
         interceptedEnemyOwners.add(a.fromEnemy ? a.ownerId : b.ownerId);
       }
-      a.alive = false;
-      b.alive = false;
+
       const ax = a.prevX + (a.x - a.prevX) * collisionTime;
       const ay = a.prevY + (a.y - a.prevY) * collisionTime;
       const bx = b.prevX + (b.x - b.prevX) * collisionTime;
       const by = b.prevY + (b.y - b.prevY) * collisionTime;
+
+      // 护焰只压制敌对阵营的子弹，不吞队友弹。双方都是完整 F 弹时各烧掉对方一层护焰，
+      // 两颗核心继续穿过；其中一方护焰已破时，则由仍完整的一方压制另一方。
+      if (opposing) {
+        const aGuarded = a.kind === 'spiral' && (a.spiralGuard ?? 0) > 0;
+        const bGuarded = b.kind === 'spiral' && (b.spiralGuard ?? 0) > 0;
+        if (aGuarded || bGuarded) {
+          if (aGuarded) a.spiralGuard = Math.max(0, (a.spiralGuard ?? 0) - 1);
+          else a.alive = false;
+          if (bGuarded) b.spiralGuard = Math.max(0, (b.spiralGuard ?? 0) - 1);
+          else b.alive = false;
+          explosions.push(
+            makeSmallExplosion(
+              (ax + bx) / 2 + BULLET_SIZE / 2,
+              (ay + by) / 2 + BULLET_SIZE / 2,
+            ),
+          );
+          events.push('explosionSmall');
+          if (!a.alive) break;
+          continue;
+        }
+      }
+
+      a.alive = false;
+      b.alive = false;
       explosions.push(
         makeSmallExplosion((ax + bx) / 2 + BULLET_SIZE / 2, (ay + by) / 2 + BULLET_SIZE / 2),
       );

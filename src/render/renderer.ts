@@ -37,6 +37,8 @@ import {
   POWERUP_BLINK_CYCLE_TICKS,
   GHOST_RENDER_ALPHA,
   LASER_SPRITE_OFFSET,
+  SPIRAL_RADIUS,
+  SPIRAL_PERIOD_TICKS,
   COLOR_WEAPON_SPREAD,
   COLOR_WEAPON_SPIRAL,
   COLOR_WEAPON_LASER,
@@ -73,6 +75,7 @@ import {
 } from '../core/constants';
 import type { Direction } from '../core/types';
 import { GameState } from '../game/state';
+import type { BulletState } from '../game/bullet';
 import { Cell, LevelState, cellIndex, getCell } from '../game/level';
 import { TankState, EnemyKind, WeaponKind } from '../game/tank';
 import {
@@ -1299,6 +1302,39 @@ export class Renderer {
     }
   }
 
+  // F 双螺旋炎爆弹：权威碰撞核心始终沿准星直飞；这里只把两颗火球画在中心线两侧。
+  // 外层护焰烧掉一发敌弹后，spiralGuard 归零并缩成单核心，让防弹次数有明确视觉反馈。
+  private drawSpiralBullet(bullet: BulletState, px: number, py: number): void {
+    const { ctx, atlas } = this;
+    if ((bullet.spiralGuard ?? 0) <= 0) {
+      drawTile(ctx, atlas.bulletSpiral, snapArt(px), snapArt(py));
+      return;
+    }
+
+    const phase = (bullet.age / SPIRAL_PERIOD_TICKS) * Math.PI * 2;
+    const wave = Math.sin(phase) * SPIRAL_RADIUS;
+    const depth = Math.cos(phase);
+    const vertical = bullet.dir === 'up' || bullet.dir === 'down';
+    const ox = vertical ? wave : 0;
+    const oy = vertical ? 0 : wave;
+    const extent = Math.abs(wave);
+
+    // 两火球之间保留一条亮热芯，碰撞上对应恒定的 16px 连续热区，不会在交叉相位出现空洞。
+    if (vertical) {
+      this.drawArtRect(px + 2 - extent, py + 1.5, extent * 2, 1, COLOR_WEAPON_SPIRAL);
+    } else {
+      this.drawArtRect(px + 1.5, py + 2 - extent, 1, extent * 2, COLOR_WEAPON_SPIRAL);
+    }
+    this.drawArtRect(px + 1, py + 1, 2, 2, '#fff0a0');
+
+    ctx.save();
+    ctx.globalAlpha = depth >= 0 ? 1 : 0.62;
+    drawTile(ctx, atlas.bulletSpiral, snapArt(px + ox), snapArt(py + oy));
+    ctx.globalAlpha = depth < 0 ? 1 : 0.62;
+    drawTile(ctx, atlas.bulletSpiral, snapArt(px - ox), snapArt(py - oy));
+    ctx.restore();
+  }
+
   // 子弹按 kind 区分观感：normal / pellet 用经典银弹，spiral 用橙红火球，
   // laser 用沿 dir 的细长亮条（精灵比弹体盒大，按 LASER_SPRITE_OFFSET 居中绘制）。
   private drawBullets(state: GameState): void {
@@ -1317,7 +1353,7 @@ export class Renderer {
           );
           break;
         case 'spiral':
-          drawTile(ctx, atlas.bulletSpiral, snapArt(px), snapArt(py));
+          this.drawSpiralBullet(bullet, px, py);
           break;
         default:
           drawTile(ctx, atlas.bullet, snapArt(px), snapArt(py));

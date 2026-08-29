@@ -9,7 +9,9 @@ import {
   resolveBulletBullet,
   bulletCanHit,
   bulletHitsTank,
+  clearSpiralBlastBricks,
   makeSmallExplosion,
+  spiralBlastRect,
 } from './bullet';
 import { updateEnemies } from './enemy';
 import { collisionTanks, updateBoss, updateMines, resolveBulletBoss } from './boss';
@@ -24,7 +26,10 @@ import { damagePlayerTank, dropDeathStar, pushBigExplosion } from './death';
 import { resolveEscortHits, updateEscort } from './escort';
 import {
   BULLET_SIZE,
+  TANK_SIZE,
   ENEMY_SCORE,
+  EXPLOSION_BIG_SIZE,
+  EXPLOSION_BIG_TICKS,
   STAGE_START_TICKS,
   FRIENDLY_FREEZE_TICKS,
   MACHINE_FIRE_INTERVAL_TICKS,
@@ -171,6 +176,8 @@ export function update(
   updateMines(state);
   resolveEscortHits(state);
   resolveBulletTanks(state);
+  // F 弹在所有直接碰撞结算之后统一爆燃：直接目标不会重复受伤，附近对手各结算一次。
+  resolveSpiralBlasts(state);
 
   // 清理死亡子弹（其主人即可再次开火）与死亡坦克。
   state.bullets = state.bullets.filter((b) => b.alive);
@@ -293,6 +300,7 @@ function resolveBulletTanks(state: GameState): void {
       if (!t.alive) continue;
       if (!bulletCanHit(b, t)) continue;
       if (!bulletHitsTank(b, t)) continue;
+      if (b.kind === 'spiral') b.spiralHitTankId = t.id;
 
       // 友军火力（多人合作）：玩家弹命中队友 —— 不扣血、不记击杀、不产生大爆炸，
       // 改为把对方冻结 FRIENDLY_FREEZE_TICKS 帧；已在冻结中则刷新计时。
@@ -300,10 +308,12 @@ function resolveBulletTanks(state: GameState): void {
       if (!b.fromEnemy && isPlayerTank(t)) {
         b.alive = false;
         t.freezeTicks = FRIENDLY_FREEZE_TICKS;
-        state.explosions.push(
-          makeSmallExplosion(b.x + BULLET_SIZE / 2, b.y + BULLET_SIZE / 2),
-        );
-        state.events.push('explosionSmall');
+        if (b.kind !== 'spiral') {
+          state.explosions.push(
+            makeSmallExplosion(b.x + BULLET_SIZE / 2, b.y + BULLET_SIZE / 2),
+          );
+          state.events.push('explosionSmall');
+        }
         break;
       }
 
@@ -312,27 +322,62 @@ function resolveBulletTanks(state: GameState): void {
       if (isPlayerTank(t)) {
         damagePlayerTank(state, t);
       } else {
-        t.hp--;
-        if (t.hp <= 0) {
-          pushBigExplosion(state, t);
-          t.alive = false;
-          // 敌方坦克被击毁：把得分与击毁数归属给射手（敌弹不打敌人，故此处必为玩家弹，
-          // ownerPlayerIndex ≥ 0；仍做守卫以防万一）。
-          const kind = t.kind as EnemyKind; // 非玩家分支：kind 必为敌方种类
-          if (b.ownerPlayerIndex >= 0) {
-            state.scoreByPlayer[b.ownerPlayerIndex] += ENEMY_SCORE[kind];
-            state.killsByPlayer[b.ownerPlayerIndex][kind]++;
-          }
-          state.events.push('explosionBig');
-          // 携带者被击毁：用一枚新随机道具替换场上现有道具（随机落点）。
-          // 仅子弹击杀触发掉落；grenade 群灭不掉落（在 powerup.ts 内直接置死，不经此分支）。
-          if (t.carriesPowerup) dropPowerup(state);
-          // 智能坦克无论是否为随机道具携带者，死亡位置都必定额外生成一颗五角星。
-          if (t.kind === 'smart') dropDeathStar(state, t);
-        }
+        damageEnemyTank(state, t, b.ownerPlayerIndex);
       }
       // 装甲坦克 hp>0 时仅扣血（渲染层据 hp<ARMOR_HP 闪烁），子弹已消亡。
       if (!pierces) break;
+    }
+  }
+}
+
+// 敌方坦克的统一单次伤害入口，供直击与 F 弹范围炎爆复用，确保得分、携带道具和智能坦克掉星一致。
+function damageEnemyTank(state: GameState, tank: GameState['tanks'][number], ownerPlayerIndex: number): void {
+  if (!tank.alive || isPlayerTank(tank)) return;
+  tank.hp--;
+  if (tank.hp > 0) return;
+
+  pushBigExplosion(state, tank);
+  tank.alive = false;
+  const kind = tank.kind as EnemyKind;
+  if (ownerPlayerIndex >= 0) {
+    state.scoreByPlayer[ownerPlayerIndex] += ENEMY_SCORE[kind];
+    state.killsByPlayer[ownerPlayerIndex][kind]++;
+  }
+  state.events.push('explosionBig');
+  if (tank.carriesPowerup) dropPowerup(state);
+  if (tank.kind === 'smart') dropDeathStar(state, tank);
+}
+
+// 所有本帧死亡且允许爆燃的 F 弹各产生一次 24×24 炎爆。伤害按阵营筛选：玩家 F 只炸敌军，
+// 敌军 F 只炸玩家；护盾玩家免疫。直接命中的坦克 id 被排除，避免“核心 + 炎爆”重复扣血。
+export function resolveSpiralBlasts(state: GameState): void {
+  for (const b of state.bullets) {
+    if (b.kind !== 'spiral' || b.alive || b.spiralDetonate === false) continue;
+    b.spiralDetonate = false;
+    clearSpiralBlastBricks(state.level, b);
+
+    const blast = spiralBlastRect(b);
+    const cx = b.x + BULLET_SIZE / 2;
+    const cy = b.y + BULLET_SIZE / 2;
+    state.explosions.push({
+      x: cx - EXPLOSION_BIG_SIZE / 2,
+      y: cy - EXPLOSION_BIG_SIZE / 2,
+      ticksLeft: EXPLOSION_BIG_TICKS,
+      big: true,
+    });
+    state.events.push('explosionBig');
+
+    for (const tank of state.tanks) {
+      if (!tank.alive || tank.id === b.spiralHitTankId) continue;
+      if (blast.left >= tank.x + TANK_SIZE || blast.right <= tank.x) continue;
+      if (blast.top >= tank.y + TANK_SIZE || blast.bottom <= tank.y) continue;
+      if (b.fromEnemy) {
+        if (!isPlayerTank(tank) || tank.invulnTicks > 0) continue;
+        damagePlayerTank(state, tank);
+      } else {
+        if (isPlayerTank(tank)) continue;
+        damageEnemyTank(state, tank, b.ownerPlayerIndex);
+      }
     }
   }
 }
