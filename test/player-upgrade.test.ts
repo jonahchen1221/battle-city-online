@@ -54,13 +54,20 @@ test('player stars follow the speed, firepower, and armor route', () => {
     { level: 3, hp: 2, armor: 1 },
   );
 
-  // 满级继续拾星会被消耗，但属性完全不变，也不会补回任何耐久。
+  // 满级继续拾星会补回被打掉的一次性外层护甲，但不治疗车体。
   damagePlayerTank(state, player);
   assert.equal(player.armor, 0);
   giveStar(state);
   assert.deepEqual(
     { level: player.level, hp: player.hp, armor: player.armor },
-    { level: 3, hp: 2, armor: 0 },
+    { level: 3, hp: 2, armor: 1 },
+  );
+
+  // 护甲还在时不会继续叠加。
+  giveStar(state);
+  assert.deepEqual(
+    { level: player.level, hp: player.hp, armor: player.armor },
+    { level: 3, hp: 2, armor: 1 },
   );
 });
 

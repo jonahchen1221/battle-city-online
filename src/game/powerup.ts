@@ -344,7 +344,8 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
   switch (kind) {
     case 'star':
       if (player) {
-        upgradePlayerTank(collector);
+        // 满级时不再升级；若 3 级的一次性外层护甲已损失，则补回这一层。
+        if (!upgradePlayerTank(collector) && collector.armor === 0) collector.armor = 1;
       } else {
         // 智能坦克只升到 1 级（提升弹速，不开放双弹 / 破钢）；其他敌军仍封顶 3。
         collector.level = Math.min(
