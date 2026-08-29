@@ -41,6 +41,8 @@ import {
   COLOR_WEAPON_SPIRAL,
   COLOR_WEAPON_LASER,
   COLOR_WEAPON_MACHINE,
+  SMART_MARKER_PULSE_TICKS,
+  COLOR_SMART_MARKER,
 } from '../core/constants';
 import { GameState } from '../game/state';
 import { Cell, LevelState, cellIndex, getCell } from '../game/level';
@@ -126,6 +128,8 @@ export class Renderer {
 
     // 第二遍：树林（覆盖在实体之上，坦克可藏于其下）
     this.drawTrees(state.level);
+    // 智能坦克标记在树林之后绘制：即使车体藏在树下，也能明确辨认其 AI 身份和位置。
+    this.drawSmartTankMarkers(state);
     // 道具浮标：绘于树林之上（经典 —— 浮于一切之上），仍在战场裁剪区内。
     this.drawPowerup(state);
     ctx.restore();
@@ -494,6 +498,40 @@ export class Renderer {
         ly = Math.max(FIELD_Y, ly);
         drawTextOutlined(ctx, atlas, label, lx, ly, color);
       }
+    }
+  }
+
+  // 智能坦克的高辨识度覆盖标记：青色四角瞄准框，轻微脉冲但不闪灭。
+  // 该层位于树林之上，避免只有车身配色时被地形完全遮住。
+  private drawSmartTankMarkers(state: GameState): void {
+    const { ctx } = this;
+    const pulse = Math.floor(state.tick / SMART_MARKER_PULSE_TICKS) % 2;
+    const offset = pulse === 0 ? 2 : 1;
+    const color = COLOR_SMART_MARKER;
+    const corner = 4;
+    const thickness = 1;
+
+    for (const tank of state.tanks) {
+      if (!tank.alive || tank.kind !== 'smart') continue;
+      const px = snapArt(FIELD_X + tank.x);
+      const py = snapArt(FIELD_Y + tank.y);
+      const left = px - offset;
+      const top = py - offset;
+      const right = px + TANK_SIZE + offset;
+      const bottom = py + TANK_SIZE + offset;
+      ctx.fillStyle = color;
+
+      // 左上 / 右上横线。
+      ctx.fillRect(left * ART_SCALE, top * ART_SCALE, corner * ART_SCALE, thickness * ART_SCALE);
+      ctx.fillRect((right - corner) * ART_SCALE, top * ART_SCALE, corner * ART_SCALE, thickness * ART_SCALE);
+      // 左下 / 右下横线。
+      ctx.fillRect(left * ART_SCALE, (bottom - thickness) * ART_SCALE, corner * ART_SCALE, thickness * ART_SCALE);
+      ctx.fillRect((right - corner) * ART_SCALE, (bottom - thickness) * ART_SCALE, corner * ART_SCALE, thickness * ART_SCALE);
+      // 四角纵线。
+      ctx.fillRect(left * ART_SCALE, top * ART_SCALE, thickness * ART_SCALE, corner * ART_SCALE);
+      ctx.fillRect((right - thickness) * ART_SCALE, top * ART_SCALE, thickness * ART_SCALE, corner * ART_SCALE);
+      ctx.fillRect(left * ART_SCALE, (bottom - corner) * ART_SCALE, thickness * ART_SCALE, corner * ART_SCALE);
+      ctx.fillRect((right - thickness) * ART_SCALE, (bottom - corner) * ART_SCALE, thickness * ART_SCALE, corner * ART_SCALE);
     }
   }
 

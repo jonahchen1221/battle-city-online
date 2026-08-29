@@ -82,6 +82,9 @@ export const BRICK_CARVE_DEPTH = SUBTILE; // 8
 
 // 坦克履带动画：移动时每约 8 逻辑帧切换一帧
 export const TRACK_ANIM_TICKS = 8;
+// 智能坦克识别标记：绘于树林之上，瞄准框按此周期轻微脉冲。
+export const SMART_MARKER_PULSE_TICKS = 12;
+export const COLOR_SMART_MARKER = '#58f8f8';
 
 // ── 敌方坦克 ──
 // 移动速度（px/tick）：快速坦克最快，基础/装甲最慢。
@@ -123,42 +126,41 @@ export const STAGE_COUNT = 5;
 // 每关敌军编成（每关总数均为 STAGE_ENEMY_TOTAL，逐关升级）。
 // 出生队列按各种类剩余数轮转交错（round-robin）构建，确定性、无需 rng（见 state.ts）。
 export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; count: number }>> = [
-  // 第 1 关：基础 17 + 快速 2 + 智能 1
+  // 第 1 关：基础 14 + 快速 2 + 智能 4（智能占 20%）
   [
-    { kind: 'basic', count: 17 },
+    { kind: 'basic', count: 14 },
     { kind: 'fast', count: 2 },
-    { kind: 'smart', count: 1 },
+    { kind: 'smart', count: 4 },
   ],
-  // 第 2 关：基础 11 + 快速 5 + 威力 2 + 智能 2
-  [
-    { kind: 'basic', count: 11 },
-    { kind: 'fast', count: 5 },
-    { kind: 'power', count: 2 },
-    { kind: 'smart', count: 2 },
-  ],
-  // 第 3 关：基础 8 + 快速 5 + 威力 2 + 装甲 2 + 智能 3
+  // 第 2 关：基础 8 + 快速 5 + 威力 2 + 智能 5（智能占 25%）
   [
     { kind: 'basic', count: 8 },
     { kind: 'fast', count: 5 },
     { kind: 'power', count: 2 },
-    { kind: 'armor', count: 2 },
-    { kind: 'smart', count: 3 },
+    { kind: 'smart', count: 5 },
   ],
-  // 第 4 关：基础 6 + 快速 5 + 威力 3 + 装甲 3 + 智能 3
+  // 第 3 关：基础 5 + 快速 5 + 威力 2 + 装甲 2 + 智能 6（智能占 30%）
   [
-    { kind: 'basic', count: 6 },
+    { kind: 'basic', count: 5 },
+    { kind: 'fast', count: 5 },
+    { kind: 'power', count: 2 },
+    { kind: 'armor', count: 2 },
+    { kind: 'smart', count: 6 },
+  ],
+  // 第 4 关：基础 2 + 快速 5 + 威力 3 + 装甲 3 + 智能 7（智能占 35%）
+  [
+    { kind: 'basic', count: 2 },
     { kind: 'fast', count: 5 },
     { kind: 'power', count: 3 },
     { kind: 'armor', count: 3 },
-    { kind: 'smart', count: 3 },
+    { kind: 'smart', count: 7 },
   ],
-  // 第 5 关：基础 4 + 快速 4 + 威力 4 + 装甲 4 + 智能 4
+  // 第 5 关：快速 4 + 威力 4 + 装甲 4 + 智能 8（智能占 40%，不再出现基础型）
   [
-    { kind: 'basic', count: 4 },
     { kind: 'fast', count: 4 },
     { kind: 'power', count: 4 },
     { kind: 'armor', count: 4 },
-    { kind: 'smart', count: 4 },
+    { kind: 'smart', count: 8 },
   ],
 ];
 // 同屏敌军上限的基数与每多一名玩家的增量。

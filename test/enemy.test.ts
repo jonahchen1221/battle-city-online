@@ -3,10 +3,17 @@ import assert from 'node:assert/strict';
 import { createGameState } from '../src/game/state';
 import { createEnemy } from '../src/game/tank';
 import { updateEnemies } from '../src/game/enemy';
-import { createEmptyLevel } from '../src/game/level';
+import { Cell, createEmptyLevel, removeBrickQuarters, setCell } from '../src/game/level';
 import { spawnBullet } from '../src/game/bullet';
 import { resolveEagleHit } from '../src/game/phase';
-import { EAGLE_COL, EAGLE_ROW, STAGE_ENEMY_TOTAL, SUBTILE } from '../src/core/constants';
+import {
+  BRICK_TL,
+  BRICK_TR,
+  EAGLE_COL,
+  EAGLE_ROW,
+  STAGE_ENEMY_TOTAL,
+  SUBTILE,
+} from '../src/core/constants';
 
 test('enemy waits in spawn flash while its spawn point is occupied', () => {
   const state = createGameState(42, 1);
@@ -73,6 +80,33 @@ test('smart enemy aims and fires immediately when a player enters its firing lan
   assert.equal(state.bullets[0].attacksEagle, false);
 });
 
+test('smart enemy backs away from a half-brick snap point instead of getting stuck', () => {
+  const state = createGameState(42, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  const level = createEmptyLevel();
+  // 残砖从 y=148 开始；坦克停在 y=132 时恰好贴边，但向右转会尝试吸附到 y=136 并压入残砖。
+  for (const col of [5, 6]) {
+    setCell(level, col, 18, Cell.BRICK);
+    removeBrickQuarters(level, col, 18, BRICK_TL | BRICK_TR);
+  }
+  Object.assign(player, { x: 96, y: 132 });
+  Object.assign(smart, { x: 40, y: 132, dir: 'down' });
+  state.phase = 'playing';
+  state.level = level;
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  updateEnemies(state, level);
+  assert.equal(smart.dir, 'up');
+  assert.ok(smart.y < 132, `expected recovery step, got y=${smart.y}`);
+
+  updateEnemies(state, level);
+  assert.equal(smart.dir, 'right');
+  assert.equal(state.bullets[0]?.ownerId, smart.id);
+});
+
 test('smart enemy neither fires down the eagle lane nor damages the eagle with its bullets', () => {
   const state = createGameState(42, 1);
   const player = state.tanks[0];
@@ -106,9 +140,13 @@ test('smart enemy neither fires down the eagle lane nor damages the eagle with i
 });
 
 test('stage enemy queues include smart tanks without changing the configured total', () => {
+  const expectedSmartCounts = [4, 5, 6, 7, 8];
   for (let stage = 1; stage <= 5; stage++) {
     const state = createGameState(42, 1, stage);
     assert.equal(state.enemyQueue.length, STAGE_ENEMY_TOTAL);
-    assert.ok(state.enemyQueue.includes('smart'), `stage ${stage} should include a smart tank`);
+    assert.equal(
+      state.enemyQueue.filter((kind) => kind === 'smart').length,
+      expectedSmartCounts[stage - 1],
+    );
   }
 });

@@ -262,6 +262,26 @@ function fireSmartTank(tank: TankState, state: GameState): void {
   if (tank.weapon === 'machine') tank.fireCooldown = MACHINE_FIRE_INTERVAL_TICKS;
 }
 
+function oppositeDirection(dir: Direction): Direction {
+  switch (dir) {
+    case 'up':
+      return 'down';
+    case 'down':
+      return 'up';
+    case 'left':
+      return 'right';
+    case 'right':
+      return 'left';
+  }
+}
+
+// 垂直↔水平转向可能因“最近 8px 吸附点”压到半砖而被拒绝。若仍原地重复同一规划，
+// 智能坦克会永久死锁；此时先沿当前轴反向退出一小步，让下一帧能吸附到后方安全网格。
+function recoverFromRejectedTurn(tank: TankState, state: GameState, level: LevelState): void {
+  applyInput(tank, driveInput(oppositeDirection(tank.dir)), level, state.tanks);
+  tank.aiTicks = 0;
+}
+
 // 当前场上（含出生闪光中的）敌方坦克数量。出生队列现在也可能含玩家复活，需排除。
 function enemyCount(state: GameState): number {
   let n = 0;
@@ -392,7 +412,11 @@ function updateSmartEnemy(tank: TankState, state: GameState, level: LevelState):
   const aim = aimDirection(tank, target);
   if (aim !== null && !shotThreatensEagle(tank, aim)) {
     tank.moving = false;
-    if (turnTank(tank, aim, level, state.tanks)) fireSmartTank(tank, state);
+    if (turnTank(tank, aim, level, state.tanks)) {
+      fireSmartTank(tank, state);
+    } else {
+      recoverFromRejectedTurn(tank, state, level);
+    }
     return;
   }
 
@@ -405,6 +429,10 @@ function updateSmartEnemy(tank: TankState, state: GameState, level: LevelState):
   const px = tank.x;
   const py = tank.y;
   applyInput(tank, driveInput(desired), level, state.tanks);
+  if (tank.dir !== desired) {
+    recoverFromRejectedTurn(tank, state, level);
+    return;
+  }
   if (tank.x !== px || tank.y !== py) return;
 
   // 动态障碍或砖墙使本步失败：立即重算。若替代首步存在则原地转向并尝试；仍失败时开炮清障。
@@ -412,6 +440,10 @@ function updateSmartEnemy(tank: TankState, state: GameState, level: LevelState):
   const retry = findSmartDirection(tank, target, level);
   if (retry !== null && retry !== desired) {
     applyInput(tank, driveInput(retry), level, state.tanks);
+    if (tank.dir !== retry) {
+      recoverFromRejectedTurn(tank, state, level);
+      return;
+    }
     if (tank.x !== px || tank.y !== py) return;
   }
   fireSmartTank(tank, state);

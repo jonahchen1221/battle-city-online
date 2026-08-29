@@ -68,6 +68,11 @@ const PALETTE: Record<string, string> = {
   '3': '#d82800', // 主体红
   '4': '#a81800', // 暗红过渡
   '5': '#701000', // 阴影红
+  // 智能坦克：高亮青色计算核心，避免与银色敌军及 P3 蓝色坦克混淆。
+  '6': '#ffffff', // 传感器白色高光
+  '7': '#58f8f8', // 霓虹青
+  '8': '#00b8d8', // 青蓝主体
+  '9': '#005878', // 深青阴影
 };
 
 // 校验一张精灵网格的尺寸（模块加载即执行，越早暴露排版错误越好）。
@@ -543,8 +548,8 @@ const MAP_PLAYERS: ColorMap[] = [MAP_PLAYER1, MAP_PLAYER2, MAP_PLAYER3, MAP_PLAY
 const MAP_BASIC: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
 // 威力型：银车体 + 绿色高光点缀（L→绿 / 过渡 S→亮绿），炮管仍为亮色。
 const MAP_POWER: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 'j', Z: 'v', L: 'G', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
-// 智能型：蓝色计算核心 + 青色传感器高光，与银色经典敌军一眼区分。
-const MAP_SMART: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'K', S: 'J', Z: 'P', L: 'I', D: 'Q', O: 'e', K: 'Q', B: 'e', R: 'I' };
+// 智能型：高亮青色计算核心 + 白色传感器，与银色敌军和 P3 蓝色坦克一眼区分。
+const MAP_SMART: ColorMap = { T: 'c', t: 'a', E: 'e', H: '8', S: '7', Z: '9', L: '6', D: '9', O: 'e', K: '9', B: 'e', R: '7' };
 // 装甲型（常态）：与基础同为银色，靠更厚履带区分。
 const MAP_ARMOR: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
 // 装甲型（白闪）：受损时交替使用的高亮白色变体（履带 w/c、分隔灰，车体近全白）。
