@@ -76,6 +76,10 @@ export const PLAYER_LABEL_COLORS: ReadonlyArray<string> = [
 export const BULLET_SIZE = 4;
 export const BULLET_SPEED = 2; // px/tick
 
+// 开火输入缓冲（帧）：按下沿装填；在场子弹达到上限时不吞掉这次按键，
+// 缓冲窗口内一旦腾出弹位立即补发。机枪为按住连发，不走缓冲。
+export const FIRE_BUFFER_TICKS = 6;
+
 // 子弹击穿砖块：垂直行进方向宽 16px、沿行进方向纵深 8px 的破坏条
 export const BRICK_CARVE_WIDTH = TILE; // 16
 export const BRICK_CARVE_DEPTH = SUBTILE; // 8

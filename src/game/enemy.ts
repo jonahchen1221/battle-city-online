@@ -485,11 +485,9 @@ function updateSmartEnemy(tank: TankState, state: GameState, level: LevelState):
     const aim = aimDirection(tank, target);
     if (aim !== null && !shotThreatensEagle(tank, aim)) {
       tank.moving = false;
-      if (turnTank(tank, aim, level, state.tanks)) {
-        fireSmartTank(tank, state);
-      } else {
-        recoverFromRejectedTurn(tank, state, level);
-      }
+      // 转向必然生效（吸附不可用时原地转车头，见 tank.ts turnTank），转完即可开火压制。
+      turnTank(tank, aim, level, state.tanks);
+      fireSmartTank(tank, state);
       return;
     }
   }

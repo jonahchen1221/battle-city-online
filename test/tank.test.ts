@@ -5,7 +5,7 @@ import { emptyInput } from '../src/core/types';
 import { Cell, createEmptyLevel, removeBrickQuarters, setCell } from '../src/game/level';
 import { applyInput, canTankOccupy, createEnemy, createPlayer } from '../src/game/tank';
 
-test('perpendicular turn is rejected when axis snap would overlap another tank', () => {
+test('perpendicular turn falls back to turning in place when the axis snap is blocked', () => {
   const level = createEmptyLevel();
   const tank = createPlayer(0, 1);
   const blocker = createPlayer(1, 2);
@@ -16,9 +16,10 @@ test('perpendicular turn is rejected when axis snap would overlap another tank',
 
   applyInput(tank, input, level, [tank, blocker]);
 
+  // 吸附位（32,104）被 blocker 占用：放弃吸附但车头立即右转，并从原位（未对齐）继续右移。
   assert.deepEqual(
     { x: tank.x, y: tank.y, dir: tank.dir },
-    { x: 32, y: 100, dir: 'up' },
+    { x: 32.75, y: 100, dir: 'right' },
   );
 });
 

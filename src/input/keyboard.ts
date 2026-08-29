@@ -21,10 +21,17 @@ function isDir(field: keyof InputState): field is Dir {
   return (DIRS as readonly string[]).includes(field);
 }
 
+// 非方向的动作键（开火 / 开始 / 暂停）。
+type ActionField = Exclude<keyof InputState, Dir>;
+
 export class Keyboard {
   private state: InputState = emptyInput();
   // 方向来源用物理键码（e.code）标识：W 与 ↑ 同映射 'up'，须全部松开才算离手。
   private dirs = new DirOrder();
+  // 快速点按锁存：keydown 与 keyup 都落在两次快照之间的轻点（<1 逻辑帧）不再整次丢失，
+  // 至少生效一帧。方向只锁存最近一次按下（与“后按生效”一致）；动作键逐键锁存。
+  private tapDir: Dir | null = null;
+  private tappedActions = new Set<ActionField>();
 
   constructor(target: Window = window) {
     target.addEventListener('keydown', (e) => this.handle(e, true));
@@ -39,17 +46,31 @@ export class Keyboard {
     if (pressed && e.repeat) return;
     if (!isDir(field)) {
       this.state[field] = pressed;
+      if (pressed) this.tappedActions.add(field);
       return;
     }
-    if (pressed) this.dirs.press(field, e.code);
-    else this.dirs.release(field, e.code);
+    if (pressed) {
+      this.dirs.press(field, e.code);
+      this.tapDir = field;
+    } else {
+      this.dirs.release(field, e.code);
+    }
   }
 
   snapshot(): InputState {
     const snap = { ...this.state };
+    // 动作键：快照间隙内点按过的键本帧至少为真一次（即使已松开）。
+    for (const a of this.tappedActions) snap[a] = true;
+    this.tappedActions.clear();
     for (const d of DIRS) snap[d] = false;
     const latest = this.dirs.latest();
-    if (latest !== undefined) snap[latest] = true;
+    if (latest !== undefined) {
+      snap[latest] = true;
+    } else if (this.tapDir !== null) {
+      // 全部方向已松开，但最近一次按下还没被任何快照见过：补报一帧。
+      snap[this.tapDir] = true;
+    }
+    this.tapDir = null;
     return snap;
   }
 
@@ -58,5 +79,7 @@ export class Keyboard {
   reset(): void {
     this.state = emptyInput();
     this.dirs.clear();
+    this.tapDir = null;
+    this.tappedActions.clear();
   }
 }

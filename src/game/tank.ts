@@ -66,6 +66,7 @@ export interface TankState {
   freezeTicks: number; // 友军冻结剩余帧：被队友子弹击中后 >0，期间不能移动 / 开火（敌人恒为 0）
   weapon: WeaponKind; // 当前武器：初始 / 死亡复活均为 'cannon'，由武器道具替换
   fireCooldown: number; // 连发冷却剩余帧（仅机枪使用：>0 时不能再射，逐帧递减）
+  fireBufferTicks: number; // 开火输入缓冲剩余帧：按下沿装填，在场子弹清空后的窗口内自动补发（敌人恒为 0）
   speedBoostTicks: number; // boots 快靴剩余帧：>0 时移动速度 ×BOOTS_SPEED_MULT（speed 基值不变）
   hasBoat: boolean; // boat 船：true 时移动碰撞把水面视为可通行（子弹不受影响），死亡即失
   ghostTicks: number; // ghost 幽灵剩余帧：>0 时移动碰撞把砖块视为可通行（钢/水/鹰/边界照旧）
@@ -102,6 +103,7 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     freezeTicks: 0, // 复活即用 createPlayer 重建 → 冻结自然解除
     weapon: 'cannon', // 复活即用 createPlayer 重建 → 武器自然归经典炮
     fireCooldown: 0,
+    fireBufferTicks: 0,
     // 四项道具状态同样随 createPlayer 重建而清空（死亡复活即失效；跨关继承见 state.ts nextStage）。
     speedBoostTicks: 0,
     hasBoat: false,
@@ -161,6 +163,7 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     freezeTicks: 0, // 敌人不受友军冻结影响（敌军冻结由道具 state.enemyFreezeTicks 全局控制）
     weapon: 'cannon',
     fireCooldown: 0,
+    fireBufferTicks: 0, // 敌人开火不走输入缓冲（见 enemy.ts 随机开火）
     speedBoostTicks: 0,
     hasBoat: false,
     ghostTicks: 0,
@@ -366,29 +369,29 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
 }
 
 // 仅转向（含原版轴吸附），不移动。垂直↔水平切换时把上一条移动轴吸附到最近 8px；
-// 反向（up<->down / left<->right）不吸附。候选吸附位置被地形或坦克占据时拒绝本次转向，
-// 下一帧若方向键仍按住会自动重试。返回是否已处于 desired 方向。
+// 反向（up<->down / left<->right）不吸附。吸附位置被地形（残砖象限）或坦克占据时
+// 放弃吸附、原地转向 —— 车头必须立即响应输入（原版手感），能否前进交由移动碰撞裁决。
 export function turnTank(
   tank: TankState,
   desired: Direction,
   level: LevelState,
   tanks: TankState[],
-): boolean {
-  if (desired === tank.dir) return true;
-  let nx = tank.x;
-  let ny = tank.y;
+): void {
+  if (desired === tank.dir) return;
   if (isVertical(tank.dir) !== isVertical(desired)) {
+    let nx = tank.x;
+    let ny = tank.y;
     if (isVertical(tank.dir)) {
       ny = Math.min(MAX_Y, Math.max(0, snapAxis(tank.y)));
     } else {
       nx = Math.min(MAX_X, Math.max(0, snapAxis(tank.x)));
     }
-    if (!canTankOccupy(tank, nx, ny, level, tanks)) return false;
+    if (canTankOccupy(tank, nx, ny, level, tanks)) {
+      tank.x = nx;
+      tank.y = ny;
+    }
   }
-  tank.x = nx;
-  tank.y = ny;
   tank.dir = desired;
-  return true;
 }
 
 // 坦克中心所在子格是否为冰面（16×16 盒中心 = 左上角 + 8）。
@@ -426,12 +429,7 @@ export function applyInput(
   }
 
   tank.moving = true;
-  if (!turnTank(tank, desired, level, tanks)) {
-    // 有转向输入但吸附位置暂不可用：保持朝向与坐标，障碍离开后会继续重试。
-    // 中断冰面滑行，避免松键后沿旧方向意外滑走。
-    tank.slideTicks = 0;
-    return;
-  }
+  turnTank(tank, desired, level, tanks); // 转向必然生效（吸附不可用时原地转车头）
   moveTank(tank, level, tanks);
   // 移动后：中心若在冰面则装填滑行计时（松键后可继续滑行），离开冰面则清零。
   tank.slideTicks = centerOnIce(tank, level) ? ICE_SLIDE_TICKS : 0;

@@ -26,6 +26,7 @@ import {
   STAGE_START_TICKS,
   FRIENDLY_FREEZE_TICKS,
   MACHINE_FIRE_INTERVAL_TICKS,
+  FIRE_BUFFER_TICKS,
 } from '../core/constants';
 
 // 每逻辑帧调用一次。纯函数式推进：只依赖 state 与 inputs，
@@ -176,16 +177,21 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
 
     // 开火触发方式按武器区分：
     // - 机枪：按住连发（非边沿），由 fireCooldown 节流为每 MACHINE_FIRE_INTERVAL_TICKS 帧一发；
-    // - 其余武器（含 cannon）：边沿触发 —— 本帧按下且上帧未按下。
+    // - 其余武器（含 cannon）：边沿触发 + 短输入缓冲 —— 按下沿装填 FIRE_BUFFER_TICKS 帧，
+    //   在场子弹达到上限时这次按键不被吞掉，窗口内一旦腾出弹位立即补发（提前按开火也能出弹）。
     // 两者都还需满足在场子弹数低于该坦克上限（见 maxBulletsFor：star 双弹 / 各武器自有上限）。
     const firePressed = input.fire && !tank.prevFire;
     tank.prevFire = input.fire;
-    const wantFire = tank.weapon === 'machine' ? input.fire && tank.fireCooldown === 0 : firePressed;
+    if (tank.fireBufferTicks > 0) tank.fireBufferTicks--;
+    if (firePressed) tank.fireBufferTicks = FIRE_BUFFER_TICKS;
+    const wantFire =
+      tank.weapon === 'machine' ? input.fire && tank.fireCooldown === 0 : tank.fireBufferTicks > 0;
     if (wantFire && liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)) {
       const spawned = spawnWeaponBullets(tank, state.nextBulletId);
       state.nextBulletId += spawned.length;
       for (const b of spawned) state.bullets.push(b);
       if (tank.weapon === 'machine') tank.fireCooldown = MACHINE_FIRE_INTERVAL_TICKS;
+      tank.fireBufferTicks = 0; // 缓冲已兑现，避免同一次按键连发两发
       state.events.push('playerFire'); // 仅玩家开火发声（敌弹静音，从简）
     }
   }

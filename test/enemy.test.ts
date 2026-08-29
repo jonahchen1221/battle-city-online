@@ -156,12 +156,13 @@ test('smart enemy prioritizes a player in its firing lane over a nearby powerup'
   assert.equal(state.bullets[0]?.ownerId, smart.id);
 });
 
-test('smart enemy backs away from a half-brick snap point instead of getting stuck', () => {
+test('smart enemy turns in place at a half-brick snap point and fires immediately', () => {
   const state = createGameState(42, 1);
   const player = state.tanks[0];
   const smart = createEnemy('smart', 2, 0);
   const level = createEmptyLevel();
-  // 残砖从 y=148 开始；坦克停在 y=132 时恰好贴边，但向右转会尝试吸附到 y=136 并压入残砖。
+  // 残砖从 y=148 开始；坦克停在 y=132 时向右转的吸附位（y=136）会压入残砖。
+  // 转向不再被整帧拒绝：放弃吸附、原地转车头，当帧即可瞄准开火，不会卡死也无需倒车脱困。
   for (const col of [5, 6]) {
     setCell(level, col, 18, Cell.BRICK);
     removeBrickQuarters(level, col, 18, BRICK_TL | BRICK_TR);
@@ -175,11 +176,8 @@ test('smart enemy backs away from a half-brick snap point instead of getting stu
   state.enemyQueue = [];
 
   updateEnemies(state, level);
-  assert.equal(smart.dir, 'up');
-  assert.ok(smart.y < 132, `expected recovery step, got y=${smart.y}`);
-
-  updateEnemies(state, level);
   assert.equal(smart.dir, 'right');
+  assert.deepEqual({ x: smart.x, y: smart.y }, { x: 40, y: 132 }); // 原地转向，未吸附进残砖
   assert.equal(state.bullets[0]?.ownerId, smart.id);
 });
 
