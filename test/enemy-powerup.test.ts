@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { bulletCanHit, spawnBullet } from '../src/game/bullet';
-import { tryPickupPowerup } from '../src/game/powerup';
+import { tryPickupPowerup, type PowerupKind } from '../src/game/powerup';
 import { createGameState } from '../src/game/state';
 import { createEnemy } from '../src/game/tank';
-import { STAR_BULLET_SPEED } from '../src/core/constants';
+import {
+  SMART_BOOTS_TICKS,
+  SMART_GHOST_TICKS,
+  SMART_HELMET_TICKS,
+  STAR_BULLET_SPEED,
+} from '../src/core/constants';
 import { update } from '../src/game/update';
 import { emptyInput } from '../src/core/types';
 
@@ -83,4 +88,69 @@ test('enemy grenade destroys players through the normal life and respawn flow', 
   assert.equal(state.livesByPlayer[0], livesBefore - 1);
   assert.equal(state.spawning[0]?.tank.playerIndex, 0);
   assert.ok(state.events.includes('playerDeath'));
+});
+
+test('smart enemy ignores battle-swinging powerups even when overlapping them', () => {
+  const state = createGameState(42, 1);
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(smart, { x: 32, y: 32 });
+  state.tanks.push(smart);
+  const excluded: PowerupKind[] = [
+    'grenade',
+    'tank',
+    'timer',
+    'shovel',
+    'wpnLaser',
+    'wpnMachine',
+    'hourglass',
+  ];
+  state.powerups = excluded.map((kind) => ({ kind, x: smart.x, y: smart.y }));
+
+  tryPickupPowerup(state, 'enemy');
+
+  assert.deepEqual(state.powerups.map((powerup) => powerup.kind), excluded);
+  assert.equal(state.tanks[0].alive, true);
+  assert.equal(state.playerFreezeTicks, 0);
+  assert.equal(state.enemyQueue.length, 20);
+});
+
+test('smart enemy personal powerups use reduced durations and hard upgrade caps', () => {
+  const state = createGameState(42, 1);
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(smart, { x: 32, y: 32 });
+  state.tanks.push(smart);
+  state.powerups = [
+    { kind: 'star', x: smart.x, y: smart.y },
+    { kind: 'star', x: smart.x, y: smart.y },
+    { kind: 'helmet', x: smart.x, y: smart.y },
+    { kind: 'boots', x: smart.x, y: smart.y },
+    { kind: 'ghost', x: smart.x, y: smart.y },
+    { kind: 'wrench', x: smart.x, y: smart.y },
+    { kind: 'wrench', x: smart.x, y: smart.y },
+  ];
+
+  tryPickupPowerup(state, 'enemy');
+
+  assert.equal(smart.level, 1);
+  assert.equal(smart.invulnTicks, SMART_HELMET_TICKS);
+  assert.equal(smart.speedBoostTicks, SMART_BOOTS_TICKS);
+  assert.equal(smart.ghostTicks, SMART_GHOST_TICKS);
+  assert.equal(smart.hp, 2);
+  assert.deepEqual(state.powerups.map((powerup) => powerup.kind), ['star', 'wrench']);
+});
+
+test('smart enemy takes one balanced special weapon and leaves later replacements', () => {
+  const state = createGameState(42, 1);
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(smart, { x: 32, y: 32 });
+  state.tanks.push(smart);
+  state.powerups = [
+    { kind: 'wpnSpread', x: smart.x, y: smart.y },
+    { kind: 'wpnSpiral', x: smart.x, y: smart.y },
+  ];
+
+  tryPickupPowerup(state, 'enemy');
+
+  assert.equal(smart.weapon, 'spread');
+  assert.deepEqual(state.powerups.map((powerup) => powerup.kind), ['wpnSpiral']);
 });

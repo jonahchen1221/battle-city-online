@@ -17,6 +17,11 @@ import {
   MAX_POWERUPS_ON_FIELD,
   BOOTS_TICKS,
   GHOST_TICKS,
+  SMART_HELMET_TICKS,
+  SMART_BOOTS_TICKS,
+  SMART_GHOST_TICKS,
+  SMART_MAX_LEVEL,
+  SMART_MAX_HP,
   ENEMY_SLOW_TICKS,
   NEUTRAL_POWERUP_INTERVAL_TICKS,
   NEUTRAL_POWERUP_RETRY_TICKS,
@@ -232,6 +237,31 @@ function pickupOverlap(t: TankState, p: PowerupState): boolean {
 
 export type PowerupCollectorSide = 'player' | 'enemy' | 'any';
 
+// 智能坦克的平衡白名单：只拿个人、可控且不会瞬间改变战局的强化。
+// 已持有或达到上限时不再拾取，避免浪费道具，也避免在多个等价武器间反复横跳。
+export function canSmartTankPickup(tank: TankState, kind: PowerupKind): boolean {
+  if (tank.kind !== 'smart' || !tank.alive) return false;
+  switch (kind) {
+    case 'helmet':
+      return tank.invulnTicks <= 0;
+    case 'star':
+      return tank.level < SMART_MAX_LEVEL;
+    case 'wpnSpread':
+    case 'wpnSpiral':
+      return tank.weapon === 'cannon';
+    case 'boots':
+      return tank.speedBoostTicks <= 0;
+    case 'boat':
+      return !tank.hasBoat;
+    case 'ghost':
+      return tank.ghostTicks <= 0;
+    case 'wrench':
+      return tank.hp < SMART_MAX_HP;
+    default:
+      return false;
+  }
+}
+
 // 拾取检测：遍历场上全部浮标（自旧到新），任一符合阵营筛选的存活坦克与之重叠即
 // 拾取、生效、从数组移除、发声。玩家照常加 500 分，敌方不计入玩家分数。
 // side 默认 any，方便测试与外部调用；主循环会在敌我各自移动后按阵营调用。
@@ -244,6 +274,7 @@ export function tryPickupPowerup(state: GameState, side: PowerupCollectorSide = 
       const player = isPlayerTank(t);
       if (side === 'player' && !player) continue;
       if (side === 'enemy' && player) continue;
+      if (t.kind === 'smart' && !canSmartTankPickup(t, p.kind)) continue;
       if (!pickupOverlap(t, p)) continue;
       if (player) state.scoreByPlayer[t.playerIndex] += POWERUP_SCORE;
       applyPowerupEffect(state, t, p.kind);
@@ -264,8 +295,11 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
   const player = isPlayerTank(collector);
   switch (kind) {
     case 'star':
-      // 升级：等级 +1，封顶 3。敌我均可获得弹速 / 双弹 / 破钢升级。
-      collector.level = Math.min(PLAYER_MAX_LEVEL, collector.level + 1);
+      // 智能坦克只升到 1 级（提升弹速，不开放双弹 / 破钢）；其他坦克仍封顶 3。
+      collector.level = Math.min(
+        collector.kind === 'smart' ? SMART_MAX_LEVEL : PLAYER_MAX_LEVEL,
+        collector.level + 1,
+      );
       break;
     case 'grenade':
       grenadeKillOpponents(state, collector);
@@ -295,11 +329,11 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       break;
     case 'helmet':
       // 无敌：复用出生护盾计时 / 渲染。
-      collector.invulnTicks = HELMET_INVULN_TICKS;
+      collector.invulnTicks = collector.kind === 'smart' ? SMART_HELMET_TICKS : HELMET_INVULN_TICKS;
       break;
     case 'boots':
       // 快靴：限时加速（仅作用于移动计算，不改 speed 基值）；重复拾取重置计时。
-      collector.speedBoostTicks = BOOTS_TICKS;
+      collector.speedBoostTicks = collector.kind === 'smart' ? SMART_BOOTS_TICKS : BOOTS_TICKS;
       break;
     case 'boat':
       // 船：水面视为可通行，直到该玩家死亡（复活即用 createPlayer 重建 → 自然消失）。
@@ -307,7 +341,7 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       break;
     case 'ghost':
       // 幽灵：限时穿砖；重复拾取重置计时。
-      collector.ghostTicks = GHOST_TICKS;
+      collector.ghostTicks = collector.kind === 'smart' ? SMART_GHOST_TICKS : GHOST_TICKS;
       break;
     case 'drill':
       // 钻头：拾取者所有武器的子弹一律可击穿钢块，直到该坦克被击毁（复活即用
@@ -324,8 +358,10 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
         if (state.shovelTicks > 0) fortifyEagleRing(state);
         else restoreEagleRingBrick(state);
       } else {
-        // 敌方维修自身，额外增加一点耐久；即使满血拾取也能获得实际强化。
-        collector.hp++;
+        // 智能坦克最多修到 2 血，其他敌军沿用原有的 +1 耐久效果。
+        collector.hp = collector.kind === 'smart'
+          ? Math.min(SMART_MAX_HP, collector.hp + 1)
+          : collector.hp + 1;
       }
       break;
     default: {

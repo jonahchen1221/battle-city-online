@@ -18,6 +18,7 @@ import {
   EAGLE_ROW,
   SMART_AI_REPLAN_TICKS,
   SMART_AI_BRICK_COST,
+  SMART_POWERUP_SEEK_RADIUS,
 } from '../core/constants';
 import { Cell, LevelState, getCell } from './level';
 import {
@@ -29,6 +30,11 @@ import {
   canTankOccupy,
 } from './tank';
 import { liveBulletCount, maxBulletsFor, spawnWeaponBullets } from './bullet';
+import {
+  canSmartTankPickup,
+  type PowerupKind,
+  type PowerupState,
+} from './powerup';
 import type { GameState } from './state';
 
 // 敌方 AI + 生成器。纯逻辑：一切随机取自 state.rng，可复现。
@@ -114,15 +120,17 @@ function popOpen(heap: OpenNode[]): OpenNode | undefined {
   return first;
 }
 
-// 智能坦克会把砖看成“可清除但代价较高”的路面，把钢、水和鹰巢视为永久障碍。
+// 智能坦克会把砖看成“可清除但代价较高”的路面，把钢和鹰巢视为永久障碍；
+// 拿到船后水面可通行，幽灵生效期间砖块按普通路面规划。
 // 返回进入这个 8px 对齐位置的代价；16×16 车体覆盖的任一子格为永久障碍时不可进入。
-function navigationCost(level: LevelState, col: number, row: number): number {
+function navigationCost(tank: TankState, level: LevelState, col: number, row: number): number {
   let hasBrick = false;
   for (let dr = 0; dr < NAV_TANK_CELLS; dr++) {
     for (let dc = 0; dc < NAV_TANK_CELLS; dc++) {
       const cell = getCell(level, col + dc, row + dr);
-      if (cell === Cell.STEEL || cell === Cell.WATER || cell === Cell.EAGLE) return Infinity;
-      if (cell === Cell.BRICK) hasBrick = true;
+      if (cell === Cell.STEEL || cell === Cell.EAGLE) return Infinity;
+      if (cell === Cell.WATER && !tank.hasBoat) return Infinity;
+      if (cell === Cell.BRICK && tank.ghostTicks <= 0) hasBrick = true;
     }
   }
   return hasBrick ? SMART_AI_BRICK_COST : 1;
@@ -134,7 +142,11 @@ function manhattan(col: number, row: number, goalCol: number, goalRow: number): 
 
 // 在 8px 网格上以 A* 找到追向玩家的第一步。其他坦克是会移动的动态障碍，不写入路径图，
 // 实际移动仍由 applyInput 做实体碰撞；若目标暂不可达，则走向已搜索到的最近可达点。
-function findSmartDirection(tank: TankState, target: TankState, level: LevelState): Direction | null {
+function findSmartDirection(
+  tank: TankState,
+  target: { x: number; y: number },
+  level: LevelState,
+): Direction | null {
   const navCols = level.cols - NAV_TANK_CELLS + 1;
   const navRows = level.rows - NAV_TANK_CELLS + 1;
   const clampCol = (x: number): number => Math.max(0, Math.min(navCols - 1, Math.round(x / SUBTILE)));
@@ -178,7 +190,7 @@ function findSmartDirection(tank: TankState, target: TankState, level: LevelStat
       const nextCol = col + step.dc;
       const nextRow = row + step.dr;
       if (nextCol < 0 || nextRow < 0 || nextCol >= navCols || nextRow >= navRows) continue;
-      const stepCost = navigationCost(level, nextCol, nextRow);
+      const stepCost = navigationCost(tank, level, nextCol, nextRow);
       if (!Number.isFinite(stepCost)) continue;
       const nextIndex = nextRow * navCols + nextCol;
       const nextCost = costs[current.index] + stepCost;
@@ -207,6 +219,64 @@ function nearestPlayer(tank: TankState, state: GameState): TankState | null {
       (distance === bestDistance && target !== null && candidate.playerIndex < target.playerIndex)
     ) {
       target = candidate;
+      bestDistance = distance;
+    }
+  }
+  return target;
+}
+
+// 严格优先级：无敌 > 合适武器 > 星星 > 修复 > 临时机动 > 船。
+// 分数只用于当前坦克在自己拥有的候选中择优；同一道具的归属由距离单独决定。
+const SMART_POWERUP_PRIORITY: Partial<Record<PowerupKind, number>> = {
+  helmet: 8,
+  wpnSpread: 7,
+  wpnSpiral: 7,
+  star: 6,
+  wrench: 5,
+  ghost: 4,
+  boots: 3,
+  boat: 2,
+};
+const SMART_POWERUP_SEEK_RADIUS_SQ = SMART_POWERUP_SEEK_RADIUS * SMART_POWERUP_SEEK_RADIUS;
+
+function distanceSquared(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+// 每枚道具只由范围内最近的可用智能坦克认领；完全同距时 id 小者优先，保证模拟确定性。
+function smartTankClaimsPowerup(tank: TankState, powerup: PowerupState, state: GameState): boolean {
+  let owner: TankState | null = null;
+  let ownerDistance = Infinity;
+  for (const candidate of state.tanks) {
+    if (!canSmartTankPickup(candidate, powerup.kind)) continue;
+    const distance = distanceSquared(candidate, powerup);
+    if (distance > SMART_POWERUP_SEEK_RADIUS_SQ) continue;
+    if (
+      distance < ownerDistance ||
+      (distance === ownerDistance && owner !== null && candidate.id < owner.id)
+    ) {
+      owner = candidate;
+      ownerDistance = distance;
+    }
+  }
+  return owner?.id === tank.id;
+}
+
+function smartPowerupTarget(tank: TankState, state: GameState): PowerupState | null {
+  let target: PowerupState | null = null;
+  let bestPriority = -1;
+  let bestDistance = Infinity;
+  for (const powerup of state.powerups) {
+    const priority = SMART_POWERUP_PRIORITY[powerup.kind];
+    if (priority === undefined || !canSmartTankPickup(tank, powerup.kind)) continue;
+    const distance = distanceSquared(tank, powerup);
+    if (distance > SMART_POWERUP_SEEK_RADIUS_SQ) continue;
+    if (!smartTankClaimsPowerup(tank, powerup, state)) continue;
+    if (priority > bestPriority || (priority === bestPriority && distance < bestDistance)) {
+      target = powerup;
+      bestPriority = priority;
       bestDistance = distance;
     }
   }
@@ -404,26 +474,31 @@ function updateOneEnemy(tank: TankState, state: GameState, level: LevelState): v
 // 撞上路径中的砖墙时向规划方向清障。所有开火都经过鹰巢射线检查，不参与传统的随机向下攻击。
 function updateSmartEnemy(tank: TankState, state: GameState, level: LevelState): void {
   const target = nearestPlayer(tank, state);
-  if (!target) {
+  const powerupTarget = smartPowerupTarget(tank, state);
+  if (!target && !powerupTarget) {
     tank.moving = false;
     return;
   }
 
   tank.aiTicks--;
-  const aim = aimDirection(tank, target);
-  if (aim !== null && !shotThreatensEagle(tank, aim)) {
-    tank.moving = false;
-    if (turnTank(tank, aim, level, state.tanks)) {
-      fireSmartTank(tank, state);
-    } else {
-      recoverFromRejectedTurn(tank, state, level);
+  if (target) {
+    const aim = aimDirection(tank, target);
+    if (aim !== null && !shotThreatensEagle(tank, aim)) {
+      tank.moving = false;
+      if (turnTank(tank, aim, level, state.tanks)) {
+        fireSmartTank(tank, state);
+      } else {
+        recoverFromRejectedTurn(tank, state, level);
+      }
+      return;
     }
-    return;
   }
+
+  const chaseTarget = powerupTarget ?? target!;
 
   let desired = tank.dir;
   if (tank.aiTicks <= 0) {
-    desired = findSmartDirection(tank, target, level) ?? desired;
+    desired = findSmartDirection(tank, chaseTarget, level) ?? desired;
     tank.aiTicks = SMART_AI_REPLAN_TICKS;
   }
 
@@ -438,7 +513,7 @@ function updateSmartEnemy(tank: TankState, state: GameState, level: LevelState):
 
   // 动态障碍或砖墙使本步失败：立即重算。若替代首步存在则原地转向并尝试；仍失败时开炮清障。
   tank.aiTicks = SMART_AI_REPLAN_TICKS;
-  const retry = findSmartDirection(tank, target, level);
+  const retry = findSmartDirection(tank, chaseTarget, level);
   if (retry !== null && retry !== desired) {
     applyInput(tank, driveInput(retry), level, state.tanks);
     if (tank.dir !== retry) {

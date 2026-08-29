@@ -80,6 +80,82 @@ test('smart enemy aims and fires immediately when a player enters its firing lan
   assert.equal(state.bullets[0].attacksEagle, false);
 });
 
+test('smart enemy detours toward an eligible nearby powerup', () => {
+  const state = createGameState(42, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 240, y: 160 });
+  Object.assign(smart, { x: 0, y: 0, dir: 'down', aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.powerups = [{ kind: 'helmet', x: 64, y: 0 }];
+
+  updateEnemies(state, state.level);
+
+  assert.ok(smart.x > 0, `expected smart tank to seek helmet, got (${smart.x}, ${smart.y})`);
+  assert.equal(smart.y, 0);
+});
+
+test('smart enemy keeps seeking powerups while no player tank is alive', () => {
+  const state = createGameState(42, 1);
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(smart, { x: 0, y: 0, dir: 'down', aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.powerups = [{ kind: 'helmet', x: 64, y: 0 }];
+
+  updateEnemies(state, state.level);
+
+  assert.ok(smart.x > 0, `expected smart tank to keep seeking helmet, got x=${smart.x}`);
+});
+
+test('only the closest smart enemy claims a nearby powerup', () => {
+  const state = createGameState(42, 1);
+  const player = state.tanks[0];
+  const farther = createEnemy('smart', 2, 0);
+  const closer = createEnemy('smart', 3, 0);
+  Object.assign(player, { x: 0, y: 200 });
+  Object.assign(farther, { x: 0, y: 0, dir: 'down', aiTicks: 0 });
+  Object.assign(closer, { x: 48, y: 0, dir: 'down', aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, farther, closer];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.powerups = [{ kind: 'helmet', x: 80, y: 0 }];
+
+  updateEnemies(state, state.level);
+
+  assert.equal(farther.x, 0);
+  assert.ok(closer.x > 48, `expected closest smart tank to claim helmet, got x=${closer.x}`);
+});
+
+test('smart enemy prioritizes a player in its firing lane over a nearby powerup', () => {
+  const state = createGameState(42, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 40, y: 120 });
+  Object.assign(smart, { x: 40, y: 40, dir: 'right', aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.powerups = [{ kind: 'helmet', x: 88, y: 40 }];
+
+  updateEnemies(state, state.level);
+
+  assert.equal(smart.dir, 'down');
+  assert.equal(smart.x, 40);
+  assert.equal(state.bullets[0]?.ownerId, smart.id);
+});
+
 test('smart enemy backs away from a half-brick snap point instead of getting stuck', () => {
   const state = createGameState(42, 1);
   const player = state.tanks[0];

@@ -310,6 +310,13 @@ export const BOOTS_SPEED_MULT = 1.5;
 export const GHOST_TICKS = 10 * TICKS_PER_SECOND; // 600 帧 = 10 秒
 // 幽灵态坦克的渲染透明度（半透明，与友军冻结的明灭闪烁明显区分）。
 export const GHOST_RENDER_ALPHA = 0.45;
+// 智能坦克只会主动争夺附近的温和强化，并使用更短持续时间 / 更低上限控制强度。
+export const SMART_POWERUP_SEEK_RADIUS = 80;
+export const SMART_HELMET_TICKS = 4 * TICKS_PER_SECOND;
+export const SMART_BOOTS_TICKS = 8 * TICKS_PER_SECOND;
+export const SMART_GHOST_TICKS = 5 * TICKS_PER_SECOND;
+export const SMART_MAX_LEVEL = 1;
+export const SMART_MAX_HP = 2;
 // hourglass 沙漏：敌军半速持续帧数（期间敌军仅在偶数 tick 行动；enemyFreezeTicks 全冻结优先）。
 export const ENEMY_SLOW_TICKS = 12 * TICKS_PER_SECOND; // 720 帧 = 12 秒
 // 中立道具定时刷新（每关必出五种新道具）：首枚延迟、后续间隔、落点采样失败时的顺延重试间隔。
