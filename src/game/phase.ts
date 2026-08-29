@@ -85,14 +85,13 @@ function arm(state: GameState, result: Exclude<Phase, 'playing'>, delay: number)
 // 每帧（playing 期间）末尾调用：检测触发并武装延迟结果；已武装则倒计时并适时切换阶段。
 // 延迟期间仍处于 playing，模拟照常推进（经典手感）。
 export function updatePhase(state: GameState): void {
-  if (state.pendingResult === null) {
-    if (state.eagleDestroyed) {
-      arm(state, 'gameover', GAMEOVER_DELAY_TICKS);
-    } else if (playerDefeated(state)) {
-      arm(state, 'gameover', GAMEOVER_DELAY_TICKS);
-    } else if (stageCleared(state)) {
-      arm(state, 'stageclear', STAGE_CLEAR_DELAY_TICKS);
-    }
+  // 失败优先级始终高于通关：全歼后仍有 3 秒延迟模拟，期间残留敌弹可能摧毁鹰巢
+  // 或击杀最后一名玩家。此时必须用 gameover 覆盖已武装的 stageclear。
+  const defeated = state.eagleDestroyed || playerDefeated(state);
+  if (defeated && state.pendingResult !== 'gameover') {
+    arm(state, 'gameover', GAMEOVER_DELAY_TICKS);
+  } else if (state.pendingResult === null && stageCleared(state)) {
+    arm(state, 'stageclear', STAGE_CLEAR_DELAY_TICKS);
   }
 
   if (state.pendingResult !== null) {

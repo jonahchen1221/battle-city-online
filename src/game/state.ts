@@ -68,6 +68,8 @@ export type GameEvent = AudioEvent | PowerupPickupEvent;
 export interface GameState {
   tick: number;
   rng: Rng;
+  // 地图实例代际：每次跨关或整局重开都单调递增。与 level.rev 共同构成网络地形缓存键。
+  levelEpoch: number;
   level: LevelState;
   tanks: TankState[];
   bullets: BulletState[];
@@ -77,6 +79,7 @@ export interface GameState {
   enemySpawnTimer: number; // 距下次出生的倒计时（≤0 且有空位即出生）
   enemySpawnPoint: number; // 下一个出生点索引（0→1→2 轮转）
   nextEnemyId: number; // 敌方坦克 id 分配器
+  nextBulletId: number; // 子弹 id 分配器（联机插值按此稳定匹配多发同源子弹）
   stage: number; // 当前关号（1-based，1..STAGE_COUNT）
   phase: Phase; // 当前阶段
   phaseTicks: number; // 进入当前阶段以来的帧数（stagestart 幕布计时 / gameover 滑入动画等据此推算）
@@ -144,6 +147,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   return {
     tick: 0,
     rng,
+    levelEpoch: 0,
     // 拷贝一份，避免就地破坏砖块时污染 STAGES 常量。
     level: cloneLevel(STAGES[stageIndex]),
     tanks,
@@ -154,6 +158,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     enemySpawnTimer: 0, // 开局即可出生第一台
     enemySpawnPoint: 0,
     nextEnemyId: playerCount + 1, // 玩家占用 id=1..N
+    nextBulletId: 1,
     stage,
     phase: 'stagestart',
     phaseTicks: 0,
@@ -220,6 +225,7 @@ export function nextStage(state: GameState): void {
   }
 
   state.stage = nextStageNum;
+  state.levelEpoch++;
   state.level = cloneLevel(STAGES[stageIndex]);
   state.enemyQueue = createStageQueue(stageIndex);
 
@@ -282,5 +288,8 @@ export function nextStage(state: GameState): void {
 // 就地重置为全新的第 1 关（保留同一 state 对象引用，供 main.ts 持有）——一切归零（生命/得分/等级/关号）。
 // 用于 gameover 时按 start 重开整局：seed 由旧 rng 派生，保持确定性；玩家数沿用本局。
 export function resetGameState(state: GameState, seed: number): void {
-  Object.assign(state, createGameState(seed, state.playerCount, 1));
+  const nextLevelEpoch = state.levelEpoch + 1;
+  const fresh = createGameState(seed, state.playerCount, 1);
+  fresh.levelEpoch = nextLevelEpoch;
+  Object.assign(state, fresh);
 }

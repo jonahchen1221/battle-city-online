@@ -176,7 +176,9 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     if (tank.fireCooldown > 0) tank.fireCooldown--;
     const wantFire = tank.weapon === 'machine' ? input.fire && tank.fireCooldown === 0 : firePressed;
     if (wantFire && liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)) {
-      for (const b of spawnWeaponBullets(tank)) state.bullets.push(b);
+      const spawned = spawnWeaponBullets(tank, state.nextBulletId);
+      state.nextBulletId += spawned.length;
+      for (const b of spawned) state.bullets.push(b);
       if (tank.weapon === 'machine') tank.fireCooldown = MACHINE_FIRE_INTERVAL_TICKS;
       state.events.push('playerFire'); // 仅玩家开火发声（敌弹静音，从简）
     }

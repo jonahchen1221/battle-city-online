@@ -77,17 +77,19 @@ async function main(): Promise<void> {
   const c2 = await client('P2');
 
   // 1) 建房
-  c1.send({ t: 'create' });
+  c1.send({ t: 'create', name: 'P1' });
   const joined1 = (await c1.waitFor('joined')) as Extract<ServerMessage, { t: 'joined' }>;
   console.log('[smoke] 建房成功', { code: joined1.code, playerIndex: joined1.playerIndex });
   assert(joined1.playerIndex === 0, 'P1 建房分配到 playerIndex 0（房主）');
+  assert(joined1.players[0]?.name === 'P1', 'P1 名字随大厅状态广播');
   assert(/^[A-Z]{4}$/.test(joined1.code), '房间码为 4 个大写字母');
 
   // 2) 加入
-  c2.send({ t: 'join', code: joined1.code });
+  c2.send({ t: 'join', code: joined1.code, name: 'P2' });
   const joined2 = (await c2.waitFor('joined')) as Extract<ServerMessage, { t: 'joined' }>;
   console.log('[smoke] P2 加入', { playerIndex: joined2.playerIndex });
   assert(joined2.playerIndex === 1, 'P2 加入分配到 playerIndex 1');
+  assert(joined2.players.some((player) => player.name === 'P2'), 'P2 名字随大厅状态广播');
 
   // 3) 双方准备
   c1.send({ t: 'ready', ready: true });

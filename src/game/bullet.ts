@@ -44,6 +44,7 @@ export type BulletKind = 'normal' | 'pellet' | 'spiral' | 'laser';
 
 // 子弹实体：纯数据、可序列化。x/y 为 4×4 包围盒左上角的战场相对像素坐标。
 export interface BulletState {
+  id: number; // 每发子弹唯一；同一射手多弹时供网络快照稳定匹配
   x: number;
   y: number;
   dir: Direction; // 主轴朝向：地形开凿 / 前沿扫描一律按它定向（斜飞的散弹粒亦然）
@@ -105,6 +106,7 @@ function muzzlePos(tank: TankState): { x: number; y: number } {
 // dir 一律取 tank.dir —— 地形开凿与前沿扫描按主轴定向，斜飞只体现在 vx/vy 上。
 function makeBullet(
   tank: TankState,
+  id: number,
   kind: BulletKind,
   speed: number,
   steelPiercing: boolean,
@@ -117,6 +119,7 @@ function makeBullet(
   const cos = Math.cos(angleRad);
   const sin = Math.sin(angleRad);
   return {
+    id,
     x,
     y,
     dir: tank.dir,
@@ -135,15 +138,15 @@ function makeBullet(
 
 // 从坦克炮口生成一发经典弹（cannon / 敌弹）。
 // 速度取自该坦克（威力坦克更快；玩家 star 等级 ≥1 提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
-export function spawnBullet(tank: TankState): BulletState {
+export function spawnBullet(tank: TankState, bulletId: number): BulletState {
   const isPlayer = isPlayerTank(tank);
   const speed = isPlayer && tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
-  return makeBullet(tank, 'normal', speed, isPlayer && tank.level >= 3);
+  return makeBullet(tank, bulletId, 'normal', speed, isPlayer && tank.level >= 3);
 }
 
 // 按坦克当前武器生成一次开火的全部子弹（cannon / 机枪各一发，散弹一轮三发）。
 // star 满级的破钢只作用于 cannon（特殊武器一律不穿钢）。
-export function spawnWeaponBullets(tank: TankState): BulletState[] {
+export function spawnWeaponBullets(tank: TankState, firstBulletId: number): BulletState[] {
   switch (tank.weapon) {
     case 'spread': {
       // 以主轴为中心对称展开：三发时即 −22.5° / 0° / +22.5°（dir 均为 tank.dir）。
@@ -151,19 +154,26 @@ export function spawnWeaponBullets(tank: TankState): BulletState[] {
       const out: BulletState[] = [];
       for (let i = 0; i < SPREAD_PELLET_COUNT; i++) {
         out.push(
-          makeBullet(tank, 'pellet', SPREAD_BULLET_SPEED, false, (i - mid) * SPREAD_SPLAY_RAD),
+          makeBullet(
+            tank,
+            firstBulletId + i,
+            'pellet',
+            SPREAD_BULLET_SPEED,
+            false,
+            (i - mid) * SPREAD_SPLAY_RAD,
+          ),
         );
       }
       return out;
     }
     case 'spiral':
-      return [makeBullet(tank, 'spiral', SPIRAL_BULLET_SPEED, false)];
+      return [makeBullet(tank, firstBulletId, 'spiral', SPIRAL_BULLET_SPEED, false)];
     case 'laser':
-      return [makeBullet(tank, 'laser', LASER_BULLET_SPEED, false)];
+      return [makeBullet(tank, firstBulletId, 'laser', LASER_BULLET_SPEED, false)];
     case 'machine':
-      return [makeBullet(tank, 'normal', MACHINE_BULLET_SPEED, false)];
+      return [makeBullet(tank, firstBulletId, 'normal', MACHINE_BULLET_SPEED, false)];
     default:
-      return [spawnBullet(tank)];
+      return [spawnBullet(tank, firstBulletId)];
   }
 }
 

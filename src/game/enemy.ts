@@ -123,7 +123,7 @@ function updateOneEnemy(tank: TankState, state: GameState, level: LevelState): v
 
   // 随机开火：每帧约 1/AI_FIRE_DENOM，且当前无在场子弹。
   if (state.rng.int(AI_FIRE_DENOM) === 0 && !hasLiveBullet(state.bullets, tank.id)) {
-    state.bullets.push(spawnBullet(tank));
+    state.bullets.push(spawnBullet(tank, state.nextBulletId++));
   }
 }
 

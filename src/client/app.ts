@@ -14,6 +14,7 @@ import {
 } from '../game/state';
 import { update } from '../game/update';
 import type { LevelState } from '../game/level';
+import type { BulletState } from '../game/bullet';
 import { Renderer } from '../render/renderer';
 import { Sfx } from '../audio/sfx';
 import { Keyboard } from '../input/keyboard';
@@ -38,8 +39,11 @@ import {
   ServerErrorCode,
   LobbyPlayer,
   MAX_PLAYERS,
+  DEFAULT_PLAYER_NAME,
+  PLAYER_NAME_LENGTH,
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
+  normalizePlayerName,
 } from '../net/protocol';
 import { NetClient } from './net';
 import {
@@ -53,8 +57,11 @@ import {
 
 export type ScreenName = 'title' | 'joinCode' | 'lobby' | 'localGame' | 'netGame';
 
-// 标题菜单项。
-const TITLE_ITEMS = ['1 PLAYER', 'CREATE ROOM', 'JOIN ROOM'] as const;
+// 标题菜单项。名字编辑也是首页菜单的一项，确认后进入 2 字符输入态。
+const TITLE_ITEMS = ['NAME', '1 PLAYER', 'CREATE ROOM', 'JOIN ROOM'] as const;
+
+// 玩家名只保存在当前浏览器；联机时随 create / join 消息交给服务器广播。
+const PLAYER_NAME_STORAGE_KEY = 'battle-city-player-name';
 
 // 联机输入心跳：即便输入未变化，也每 500ms 重发一次最近输入（对抗丢包 / 保活）。
 const INPUT_HEARTBEAT_MS = 500;
@@ -127,7 +134,10 @@ export class App {
   private localState: GameState;
 
   // ── 标题菜单 ──
-  private titleSel = 0;
+  private titleSel = 1;
+  private playerName = DEFAULT_PLAYER_NAME;
+  private nameBuffer = DEFAULT_PLAYER_NAME;
+  private nameEditing = false;
 
   // ── 房间码输入 ──
   private codeBuffer = '';
@@ -174,6 +184,8 @@ export class App {
     this.powerupTickerElement = document.getElementById('powerup-ticker');
     this.powerupTickerTextElement =
       this.powerupTickerElement?.querySelector<HTMLElement>('.cabinet-ticker-text') ?? null;
+    this.playerName = loadPlayerName();
+    this.nameBuffer = this.playerName;
     this.localState = createGameState(20260708, 1);
 
     this.net = new NetClient();
@@ -264,6 +276,10 @@ export class App {
   private handleMenuPad(pad: MenuEdges): void {
     switch (this.screen) {
       case 'title':
+        if (this.nameEditing) {
+          if (pad.back) this.cancelNameEdit();
+          return;
+        }
         if (pad.up) this.moveTitleSel(-1);
         if (pad.down) this.moveTitleSel(1);
         if (pad.confirm || pad.start) this.confirmTitle();
@@ -334,10 +350,10 @@ export class App {
   private onNetOpen(): void {
     this.statusError = '';
     if (this.pendingAction?.t === 'create') {
-      this.net.send({ t: 'create' });
+      this.net.send({ t: 'create', name: this.playerName });
       this.statusMsg = 'CREATING ROOM';
     } else if (this.pendingAction?.t === 'join') {
-      this.net.send({ t: 'join', code: this.pendingAction.code });
+      this.net.send({ t: 'join', code: this.pendingAction.code, name: this.playerName });
       this.statusMsg = 'JOINING';
     }
   }
@@ -360,6 +376,8 @@ export class App {
         this.players = msg.players;
         break;
       case 'started':
+        // 大厅座位存在空洞时，服务端会在开局时压紧为连续的对局序号。
+        this.myPlayerIndex = msg.playerIndex;
         // 清空快照缓冲，等待第一份 snapshot 才真正进入渲染。
         this.resetNetPlayState();
         this.disconnected = false;
@@ -494,6 +512,10 @@ export class App {
   }
 
   private onTitleKey(e: KeyboardEvent): void {
+    if (this.nameEditing) {
+      this.onNameEditKey(e);
+      return;
+    }
     switch (e.code) {
       case 'ArrowUp':
       case 'KeyW':
@@ -520,12 +542,16 @@ export class App {
   private confirmTitle(): void {
     this.statusError = '';
     if (this.titleSel === 0) {
+      this.nameEditing = true;
+      this.nameBuffer = '';
+      this.statusMsg = '';
+    } else if (this.titleSel === 1) {
       // 1 PLAYER：全新本地单机局。设 prevStart=true，避免刚按下的 Enter 被当作暂停边沿。
       resetGameState(this.localState, (Date.now() >>> 0) || 20260708);
       this.localState.prevStart = true;
       this.clearPowerupTicker();
       this.screen = 'localGame';
-    } else if (this.titleSel === 1) {
+    } else if (this.titleSel === 2) {
       // CREATE ROOM：连接并建房。
       this.pendingAction = { t: 'create' };
       this.statusMsg = 'CONNECTING';
@@ -536,6 +562,54 @@ export class App {
       this.statusMsg = '';
       this.screen = 'joinCode';
     }
+  }
+
+  private onNameEditKey(e: KeyboardEvent): void {
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      this.cancelNameEdit();
+      return;
+    }
+    if (e.code === 'Backspace') {
+      e.preventDefault();
+      this.nameBuffer = this.nameBuffer.slice(0, -1);
+      this.statusError = '';
+      return;
+    }
+    if (e.code === 'Enter') {
+      e.preventDefault();
+      this.commitPlayerName();
+      return;
+    }
+
+    const letter = /^Key([A-Z])$/.exec(e.code)?.[1];
+    const digit = /^(?:Digit|Numpad)([0-9])$/.exec(e.code)?.[1];
+    const ch = letter ?? digit;
+    if (ch && this.nameBuffer.length < PLAYER_NAME_LENGTH) {
+      e.preventDefault();
+      this.nameBuffer += ch;
+      this.statusError = '';
+    }
+  }
+
+  private cancelNameEdit(): void {
+    this.nameEditing = false;
+    this.nameBuffer = this.playerName;
+    this.statusError = '';
+  }
+
+  private commitPlayerName(): void {
+    const name = normalizePlayerName(this.nameBuffer);
+    if (!name) {
+      this.statusError = 'NEED 2 LETTERS OR NUMBERS';
+      return;
+    }
+    this.playerName = name;
+    this.nameBuffer = name;
+    this.nameEditing = false;
+    const saved = savePlayerName(name);
+    this.statusMsg = saved ? 'NAME SAVED' : '';
+    this.statusError = saved ? '' : 'STORAGE UNAVAILABLE';
   }
 
   private onJoinCodeKey(e: KeyboardEvent): void {
@@ -583,8 +657,19 @@ export class App {
     }
   }
 
-  // 粘贴：仅房间码输入画面响应。整段 URL 或裸房间码都能识别。
+  // 粘贴：首页名字编辑支持恰好 2 位字母/数字；房间码画面支持整段 URL 或裸码。
   private onPaste(e: ClipboardEvent): void {
+    if (this.screen === 'title' && this.nameEditing) {
+      e.preventDefault();
+      const name = normalizePlayerName(e.clipboardData?.getData('text') ?? '');
+      if (name) {
+        this.nameBuffer = name;
+        this.statusError = '';
+      } else {
+        this.statusError = 'NEED 2 LETTERS OR NUMBERS';
+      }
+      return;
+    }
     if (this.screen !== 'joinCode') return;
     e.preventDefault();
     const code = extractRoomCode(e.clipboardData?.getData('text') ?? '');
@@ -627,7 +712,7 @@ export class App {
     this.net.send({ t: 'ready', ready: nextReady });
   }
 
-  // 房主（0 号位）在全员 ready 时开局；非房主 / 未齐时按键无效。
+  // 当前房主在全员 ready 时开局；房主身份由服务端显式下发，不再从座位号推断。
   private hostStartGame(): void {
     if (this.isHost() && this.allReady()) this.net.send({ t: 'start' });
   }
@@ -657,7 +742,7 @@ export class App {
   }
 
   private isHost(): boolean {
-    return this.myPlayerIndex === 0;
+    return this.players.find((p) => p.playerIndex === this.myPlayerIndex)?.isHost ?? false;
   }
 
   private allReady(): boolean {
@@ -682,7 +767,7 @@ export class App {
     drawTile(ctx, atlas.playerTank[0].right[0], cx - 76, 95);
     drawTile(ctx, atlas.enemyTank.basic.left[0], cx + 60, 95);
 
-    drawPixelPanel(ctx, cx - 86, 116, 172, 70);
+    drawPixelPanel(ctx, cx - 86, 116, 172, 87);
 
     // 菜单项 + 黄色迷你坦克光标。
     const menuTop = 126;
@@ -690,7 +775,10 @@ export class App {
     for (let i = 0; i < TITLE_ITEMS.length; i++) {
       const y = menuTop + i * rowH;
       const selected = i === this.titleSel;
-      const label = TITLE_ITEMS[i];
+      const label =
+        i === 0
+          ? `NAME  ${this.nameEditing ? this.nameBuffer.padEnd(PLAYER_NAME_LENGTH, '_') : this.playerName}`
+          : TITLE_ITEMS[i];
       const labelX = cx - Math.round(textWidth(label) / 2);
       if (selected) {
         ctx.fillStyle = '#3b160c';
@@ -698,7 +786,14 @@ export class App {
         ctx.fillStyle = '#b83424';
         ctx.fillRect((cx - 72) * ART_SCALE, (y - 4) * ART_SCALE, 2 * ART_SCALE, 15 * ART_SCALE);
       }
-      drawTextOutlined(ctx, atlas, label, labelX, y, selected ? COLOR_MENU : COLOR_MENU_DIM);
+      drawTextOutlined(
+        ctx,
+        atlas,
+        label,
+        labelX,
+        y,
+        selected ? (this.nameEditing ? COLOR_HIGHLIGHT : COLOR_MENU) : COLOR_MENU_DIM,
+      );
       if (selected) {
         // 光标：复用 HUD 生命迷你坦克（P1 黄），置于文字左侧、与文字垂直居中对齐。
         // 文字 7px 高、视觉中心在 y+3.5；迷你坦克车体只占格子上部、内容中心在格顶 +3；
@@ -707,8 +802,15 @@ export class App {
       }
     }
 
-    drawTextCentered(ctx, atlas, 'ARROWS SELECT   ENTER CONFIRM', cx, 203, '#606966');
-    this.drawStatusLines(221);
+    drawTextCentered(
+      ctx,
+      atlas,
+      this.nameEditing ? 'TYPE 2 LETTERS OR NUMBERS   ENTER SAVE' : 'ARROWS SELECT   ENTER CONFIRM',
+      cx,
+      211,
+      '#606966',
+    );
+    this.drawStatusLines(225);
   }
 
   // ───────────────────────── 绘制：房间码输入 ─────────────────────────
@@ -783,7 +885,7 @@ export class App {
           color = COLOR_MENU_DIM;
         }
       } else {
-        text = `${i + 1}P  ${p.ready ? 'READY' : 'JOINED'}`;
+        text = `${i + 1}P  ${p.name}  ${p.ready ? 'READY' : 'JOINED'}`;
         color = p.ready ? COLOR_OK : COLOR_MENU;
       }
       if (mine) color = COLOR_HIGHLIGHT;
@@ -872,14 +974,8 @@ export class App {
       return { ...t, x: lerp(p.x, t.x, alpha), y: lerp(p.y, t.y, alpha) };
     });
 
-    // 子弹按 ownerId 匹配（每坦克同时仅一发，ownerId 唯一）；方向不同或找不到则不插值。
-    const fromBulletByOwner = new Map<number, { x: number; y: number; dir: string }>();
-    for (const b of from.snap.bullets) fromBulletByOwner.set(b.ownerId, { x: b.x, y: b.y, dir: b.dir });
-    const bullets = base.bullets.map((b) => {
-      const p = fromBulletByOwner.get(b.ownerId);
-      if (!p || p.dir !== b.dir) return b;
-      return { ...b, x: lerp(p.x, b.x, alpha), y: lerp(p.y, b.y, alpha) };
-    });
+    // 每发子弹都有稳定 id；星级双弹、散弹与机枪弹即使 ownerId 相同也能各自正确插值。
+    const bullets = interpolateBulletPositions(from.snap.bullets, base.bullets, alpha);
 
     // 拼成 GameState 形状：塞入解析后的 level、dummy rng 与空 events（渲染层均不读取后二者）。
     return { ...base, level, rng: this.dummyRng, events: [], tanks, bullets };
@@ -965,6 +1061,23 @@ export class App {
 
 // ───────────────────────── 纯函数工具 ─────────────────────────
 
+function loadPlayerName(): string {
+  try {
+    return normalizePlayerName(localStorage.getItem(PLAYER_NAME_STORAGE_KEY)) ?? DEFAULT_PLAYER_NAME;
+  } catch {
+    return DEFAULT_PLAYER_NAME;
+  }
+}
+
+function savePlayerName(name: string): boolean {
+  try {
+    localStorage.setItem(PLAYER_NAME_STORAGE_KEY, name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // 从粘贴文本里提取房间码：先试 URL 形态（?room=XXXX），失败则把整段当作裸码，
 // 统一大写后只保留字母表内字符，截取前 ROOM_CODE_LENGTH 位。捞不到返回空串。
 function extractRoomCode(text: string): string {
@@ -1038,6 +1151,21 @@ function clamp01(v: number): number {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+// 按唯一 bullet.id 匹配前后快照。导出纯函数，覆盖同一射手多发子弹的回归测试。
+export function interpolateBulletPositions(
+  fromBullets: ReadonlyArray<BulletState>,
+  toBullets: ReadonlyArray<BulletState>,
+  alpha: number,
+): BulletState[] {
+  const fromById = new Map<number, { x: number; y: number }>();
+  for (const b of fromBullets) fromById.set(b.id, { x: b.x, y: b.y });
+  return toBullets.map((b) => {
+    const p = fromById.get(b.id);
+    if (!p) return b;
+    return { ...b, x: lerp(p.x, b.x, alpha), y: lerp(p.y, b.y, alpha) };
+  });
 }
 
 // 把本地渲染时刻映射到权威 tick 时间轴，并返回包围它的两份快照及插值比例。

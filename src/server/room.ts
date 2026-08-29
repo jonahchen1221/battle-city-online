@@ -31,16 +31,19 @@ const EMPTY_ROOM_GRACE_MS = 60_000;
 // 快照背压阈值：连接的未送出缓冲超过此值则跳过本次快照（防弱网延迟滚雪球）。
 const SNAPSHOT_BACKPRESSURE_BYTES = 16 * 1024;
 
-// 房内一个座位。playerIndex 即游戏内座位号（0..3），决定出生点/配色/输入映射。
+// 房内一个大厅座位。开局时在线座位会按座位号排序并紧凑映射为对局 playerIndex，
+// 避免大厅中间座位离开后生成没有连接的幽灵玩家。
 interface Slot {
   playerIndex: number;
+  name: string;
   ready: boolean;
   connected: boolean;
   isHost: boolean;
   ws: WebSocket | null; // 断线时置 null
   input: InputState; // 该玩家最新输入（逐帧应用，收到新消息才更新）
-  // 已成功下发给该连接的 level.rev（增量地形，见 protocol.ts）。-1 = 尚未发过任何 level；
-  // 入房 / 重连时重置为 -1，保证新连接的第一份快照必含完整地形。
+  // 已成功下发给该连接的地形 epoch / rev（增量地形，见 protocol.ts）。-1 = 尚未发过；
+  // 入房 / 重连时二者都重置为 -1，保证新连接的第一份快照必含完整地形。
+  sentLevelEpoch: number;
   sentLevelRev: number;
 }
 
@@ -50,6 +53,8 @@ export class Room {
   readonly code: string;
   phase: RoomPhase = 'lobby';
   private readonly slots = new Map<number, Slot>(); // key = playerIndex
+  // 对局 playerIndex → 大厅 Slot。只在开局时建立，之后即使断线也保持稳定供重连复用。
+  private gameSlots: Slot[] = [];
   private game: GameState | null = null;
   // 两次快照之间累积的音效事件；随 snapshot 消息一并下发后清空。
   private eventAccumulator: GameEvent[] = [];
@@ -79,7 +84,13 @@ export class Room {
   private toLobbyPlayers(): LobbyPlayer[] {
     return [...this.slots.values()]
       .sort((a, b) => a.playerIndex - b.playerIndex)
-      .map((s) => ({ playerIndex: s.playerIndex, ready: s.ready, connected: s.connected }));
+      .map((s) => ({
+        playerIndex: s.playerIndex,
+        name: s.name,
+        ready: s.ready,
+        connected: s.connected,
+        isHost: s.isHost,
+      }));
   }
 
   // 找出最低空闲座位号（0..MAX_PLAYERS-1）；满则返回 -1。
@@ -111,14 +122,16 @@ export class Room {
 
   // ── 加入 / 建房 ──
   // 建房者：分配 0 号位并成为房主。
-  addHost(ws: WebSocket): number {
+  addHost(ws: WebSocket, name: string): number {
     const slot: Slot = {
       playerIndex: 0,
+      name,
       ready: false,
       connected: true,
       isHost: true,
       ws,
       input: emptyInput(),
+      sentLevelEpoch: -1,
       sentLevelRev: -1,
     };
     this.slots.set(0, slot);
@@ -129,7 +142,7 @@ export class Room {
 
   // 加入：大厅内取最低空位；进行中的房间仅允许顶替断线座位（重连）。
   // 返回分配到的 playerIndex，失败返回错误码。
-  join(ws: WebSocket): number | ServerErrorCode {
+  join(ws: WebSocket, name: string): number | ServerErrorCode {
     if (this.phase === 'in-game') {
       // 重连：寻找一个断线且已保留的座位顶替。
       const reclaimed = [...this.slots.values()]
@@ -137,8 +150,10 @@ export class Room {
         .sort((a, b) => a.playerIndex - b.playerIndex)[0];
       if (!reclaimed) return 'already_started';
       reclaimed.ws = ws;
+      reclaimed.name = name;
       reclaimed.connected = true;
       reclaimed.input = emptyInput();
+      reclaimed.sentLevelEpoch = -1;
       reclaimed.sentLevelRev = -1; // 重连：强制下一份快照重发完整地形
       this.cancelDestroyTimer();
       // 先发 joined（含旧座位号），再补一条 started 让客户端直接进入游戏画面。
@@ -148,7 +163,12 @@ export class Room {
         playerIndex: reclaimed.playerIndex,
         players: this.toLobbyPlayers(),
       });
-      Room.send(ws, { t: 'started', playerCount: this.game?.playerCount ?? this.slotCount() });
+      const gamePlayerIndex = this.gameSlots.indexOf(reclaimed);
+      Room.send(ws, {
+        t: 'started',
+        playerCount: this.game?.playerCount ?? this.gameSlots.length,
+        playerIndex: gamePlayerIndex,
+      });
       return reclaimed.playerIndex;
     }
 
@@ -157,11 +177,13 @@ export class Room {
     if (idx < 0) return 'room_full';
     const slot: Slot = {
       playerIndex: idx,
+      name,
       ready: false,
       connected: true,
       isHost: false,
       ws,
       input: emptyInput(),
+      sentLevelEpoch: -1,
       sentLevelRev: -1,
     };
     this.slots.set(idx, slot);
@@ -235,11 +257,12 @@ export class Room {
 
   // ── 对局循环 ──
   private startGame(): void {
-    // 座位可能存在空洞（大厅内有人离开），playerCount 取“最高座位号 + 1”，
-    // 以保证引擎按 playerIndex 映射输入不错位；空洞座位以 emptyInput 驱动（静止的幽灵坦克）。
-    let maxIndex = -1;
-    for (const i of this.slots.keys()) if (i > maxIndex) maxIndex = i;
-    const playerCount = maxIndex + 1;
+    // 大厅座位可能有空洞：只取在线座位并按旧座位号排序，紧凑映射到对局 0..N-1。
+    // gameSlots 在整局内保持稳定；断线座位仍留在数组中，重连后继续控制原来的坦克。
+    this.gameSlots = [...this.slots.values()]
+      .filter((s) => s.connected)
+      .sort((a, b) => a.playerIndex - b.playerIndex);
+    const playerCount = this.gameSlots.length;
 
     // 游戏种子来自 crypto（对局外，不影响“注入 Rng 后确定性”这一铁律）。
     const seed = randomInt(0, 0x7fffffff);
@@ -247,7 +270,10 @@ export class Room {
     this.eventAccumulator = [];
     this.phase = 'in-game';
 
-    this.broadcast({ t: 'started', playerCount });
+    // started 必须逐连接发送，因为大厅座位有空洞时，每人的对局 playerIndex 需要重新映射。
+    for (let i = 0; i < this.gameSlots.length; i++) {
+      Room.send(this.gameSlots[i].ws, { t: 'started', playerCount, playerIndex: i });
+    }
 
     this.lastTickTime = Date.now();
     this.loopTimer = setInterval(() => this.pump(), TICK_MS);
@@ -274,7 +300,7 @@ export class Room {
 
     const inputs: InputState[] = new Array(game.playerCount);
     for (let i = 0; i < game.playerCount; i++) {
-      const slot = this.slots.get(i);
+      const slot = this.gameSlots[i];
       inputs[i] = slot && slot.connected ? slot.input : emptyInput();
     }
 
@@ -291,18 +317,18 @@ export class Room {
     // 只发新鲜数据，否则积压滚雪球、延迟无限增长）。只跳快照，其余消息照发。
     //
     // 增量地形（见 protocol.ts）：每 tick 至多构造两份序列化——「含 level」与「不含 level」。
-    // 逐连接按其 sentLevelRev 是否等于当前 game.level.rev 决定用哪份；两份都按需惰性构造。
-    // 关键：仅在“真正发出含 level 的那份”后才推进 slot.sentLevelRev——被背压跳过的连接
-    // 保持 sentLevelRev 不变，下次仍会补发完整地形，绝不会漏掉地形更新。
+    // 逐连接按其已发出的 (levelEpoch, level.rev) 是否等于当前版本决定用哪份。
+    // 关键：仅在真正发出含 level 的那份后才推进两个版本号；被背压跳过的连接下次仍会补发。
     if (game.tick % SNAPSHOT_INTERVAL_TICKS === 0) {
       const events = this.eventAccumulator;
+      const levelEpoch = game.levelEpoch;
       const levelRev = game.level.rev;
       let payloadWithLevel: string | null = null;
       let payloadNoLevel: string | null = null;
       for (const s of this.slots.values()) {
         if (!s.ws || s.ws.readyState !== 1) continue;
-        if (s.ws.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) continue; // 背压：跳过，sentLevelRev 不动
-        const includeLevel = s.sentLevelRev !== levelRev;
+        if (s.ws.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) continue; // 背压：版本号保持不动
+        const includeLevel = s.sentLevelEpoch !== levelEpoch || s.sentLevelRev !== levelRev;
         let payload: string;
         if (includeLevel) {
           payloadWithLevel ??= JSON.stringify({
@@ -320,7 +346,10 @@ export class Room {
           payload = payloadNoLevel;
         }
         s.ws.send(payload);
-        if (includeLevel) s.sentLevelRev = levelRev; // 仅在实际发出后推进
+        if (includeLevel) {
+          s.sentLevelEpoch = levelEpoch;
+          s.sentLevelRev = levelRev;
+        }
       }
       this.eventAccumulator = [];
     }
@@ -346,6 +375,7 @@ export class Room {
       this.loopTimer = null;
     }
     this.game = null;
+    this.gameSlots = [];
     this.slots.clear();
     this.onDestroy(this.code);
   }

@@ -18,17 +18,30 @@ export const ROOM_CODE_LENGTH = 4;
 
 export const MAX_PLAYERS = 4;
 
+// 玩家名固定为 2 位 ASCII 字母 / 数字。统一转为大写，既适配像素字体，
+// 也避免客户端展示与服务端广播出现大小写差异。
+export const PLAYER_NAME_LENGTH = 2;
+export const DEFAULT_PLAYER_NAME = 'P1';
+
+export function normalizePlayerName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  if (!/^[A-Za-z0-9]{2}$/.test(raw)) return null;
+  return raw.toUpperCase();
+}
+
 // 大厅中的玩家条目。playerIndex 即游戏内座位（0..3，决定出生点与配色）。
 export interface LobbyPlayer {
   playerIndex: number;
+  name: string;
   ready: boolean;
   connected: boolean;
+  isHost: boolean;
 }
 
 // ── 客户端 → 服务器 ──
 export type ClientMessage =
-  | { t: 'create' } // 建房；成功后收到 joined（自己为 0 号位/房主）
-  | { t: 'join'; code: string } // 按房间码加入（进行中的房间若有断线空位则顶替重连）
+  | { t: 'create'; name: string } // 建房；成功后收到 joined（自己为 0 号位/房主）
+  | { t: 'join'; code: string; name: string } // 按房间码加入（进行中的房间若有断线空位则顶替重连）
   | { t: 'ready'; ready: boolean } // 大厅内切换准备状态
   | { t: 'start' } // 房主开局（要求全员 ready）
   // 输入快照；状态变化时发送，服务器保留每人最新值逐帧应用。
@@ -39,7 +52,8 @@ export type ClientMessage =
 export type ServerMessage =
   | { t: 'joined'; code: string; playerIndex: number; players: LobbyPlayer[] } // 入房成功（含重连）
   | { t: 'lobby'; players: LobbyPlayer[] } // 大厅状态变更广播
-  | { t: 'started'; playerCount: number } // 开局；随后开始收 snapshot
+  // playerIndex 是紧凑后的对局内序号；大厅座位有空洞时可能与 joined 中的序号不同。
+  | { t: 'started'; playerCount: number; playerIndex: number } // 开局；随后开始收 snapshot
   | { t: 'snapshot'; snap: Snapshot; events: GameEvent[] } // 权威快照 + 自上次快照以来累积的音效 / UI 事件
   | { t: 'error'; code: ServerErrorCode; msg: string };
 
@@ -62,9 +76,9 @@ import type { LevelState } from '../game/level';
 // 增量地形契约（弱网带宽优化的关键）：
 // 全量地形（40×30 的 cells + brickMask 两个数组）是快照里最大的负载，且极少逐帧变化。
 // 因此 level 变为「可选」字段——只在需要时下发：
-//   • 服务器为每个连接跟踪其“最后确认收到的 level.rev”；当该值与当前 game.level.rev 不一致
-//     （新客户端 / 重连 / 地形刚被破坏）时，本次快照携带完整 level，并记录已下发的 rev；
-//   • rev 一致时省略 level，客户端沿用它上一次收到的 level 对象。
+//   • 服务器为每个连接跟踪其最后下发的 (levelEpoch, level.rev)；任一值不一致
+//     （新客户端 / 重连 / 跨关 / 重开 / 地形刚被破坏）时，本次快照携带完整 level；
+//   • epoch 与 rev 都一致时省略 level，客户端沿用它上一次收到的 level 对象。
 // 客户端据此重建：snap.level 存在则替换本地地形，否则复用上一份（渲染永远有 level 可用）。
 export type Snapshot = Omit<GameState, 'rng' | 'events' | 'level'> & {
   level?: LevelState;

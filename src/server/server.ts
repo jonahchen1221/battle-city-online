@@ -13,7 +13,12 @@ import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import type { ClientMessage, ServerMessage, ServerErrorCode } from '../net/protocol';
+import {
+  normalizePlayerName,
+  type ClientMessage,
+  type ServerMessage,
+  type ServerErrorCode,
+} from '../net/protocol';
 import { InputState } from '../core/types';
 import { Room, RoomManager } from './room';
 
@@ -179,8 +184,13 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
           case 'create': {
             // 已在房内则忽略（对当前阶段无效的消息一律安全忽略）。
             if (ctx) return;
+            const name = normalizePlayerName(msg.name);
+            if (!name) {
+              sendError(ws, 'bad_message', 'name 必须为 2 位字母或数字');
+              return;
+            }
             const room = manager.createRoom();
-            const idx = room.addHost(ws);
+            const idx = room.addHost(ws, name);
             contexts.set(ws, { room, playerIndex: idx });
             break;
           }
@@ -191,12 +201,17 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
               sendError(ws, 'bad_message', 'join 缺少房间码');
               return;
             }
+            const name = normalizePlayerName(msg.name);
+            if (!name) {
+              sendError(ws, 'bad_message', 'name 必须为 2 位字母或数字');
+              return;
+            }
             const room = manager.getRoom(msg.code.toUpperCase());
             if (!room) {
               sendError(ws, 'room_not_found', '房间不存在');
               return;
             }
-            const res = room.join(ws);
+            const res = room.join(ws, name);
             if (typeof res === 'string') {
               sendError(ws, res, '无法加入房间');
               return;
