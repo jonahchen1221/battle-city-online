@@ -28,7 +28,7 @@ import {
   onVersusEnemyKilled,
   pushBigExplosion,
 } from './death';
-import { resolveEscortHits, updateEscort } from './escort';
+import { escortNoteDashPush, resolveEscortHits, updateEscort } from './escort';
 import {
   BULLET_SIZE,
   TANK_SIZE,
@@ -263,6 +263,8 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     if (dashPressed && tank.dashCooldown === 0 && tank.dashTicks === 0 && !personallyFrozen) {
       tank.dashTicks = DASH_TICKS;
       tank.dashCooldown = DASH_COOLDOWN_TICKS;
+      // 推车冲刺：在车尾朝行进方向冲刺时给护送车一段短促推力（非护送关为空操作）。
+      escortNoteDashPush(state, tank);
       state.events.push('dash');
     }
 

@@ -41,6 +41,9 @@ export const ESCORT_STOPPED_SPAWN_DIVISOR = 2;
 // 与护卫位占比相加 —— 满护航 + 2 人推 = 2 倍速。
 export const ESCORT_PUSH_SPEED_PER_TANK = 0.5;
 export const ESCORT_PUSH_MAX_TANKS = 2;
+// 推车冲刺：推车手在车尾朝行进方向冲刺时，给小车一段短促推力（额外 +1 档动力）。
+export const ESCORT_DASH_BOOST_TICKS = 45; // 0.75 秒
+export const ESCORT_DASH_BOOST_DRIVE = 1;
 
 // 战场在屏幕上的偏移（左侧 16px 灰边，顶部 8px，右侧留 32px HUD 栏）
 export const FIELD_X = 16;
@@ -405,7 +408,7 @@ export const SHIELD_ANIM_TICKS = 4;
 // ── 友军冻结（多人合作）──
 // 玩家坦克被队友子弹击中后的冻结帧数：期间不能移动、不能开火（不扣血、不记击杀）。
 // 单人局不存在队友，天然不会触发。
-export const FRIENDLY_FREEZE_TICKS = 3 * TICKS_PER_SECOND; // 180 帧 = 3 秒
+export const FRIENDLY_FREEZE_TICKS = 2 * TICKS_PER_SECOND; // 120 帧 = 2 秒
 // 冻结中的玩家坦克闪烁周期（帧）：每约 4 帧明灭一次，一眼可辨“这台坦克被冻了”。
 export const FRIENDLY_FREEZE_BLINK_TICKS = 4;
 

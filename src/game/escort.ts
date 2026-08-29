@@ -4,6 +4,8 @@ import {
   ESCORT_FIELD_COLS,
   ESCORT_FIELD_ROWS,
   ESCORT_PUSH_SPEED_PER_TANK,
+  ESCORT_DASH_BOOST_TICKS,
+  ESCORT_DASH_BOOST_DRIVE,
   ESCORT_PUSH_MAX_TANKS,
   ESCORT_SIZE,
   ESCORT_SPEED,
@@ -19,6 +21,7 @@ export { isEscortStage } from '../core/constants';
 import type { Direction } from '../core/types';
 import { Cell, type CellType, type LevelState, brickMaskOverlapsRect, getCell } from './level';
 import type { GameState } from './state';
+import type { TankState } from './tank';
 
 // 移动鹰巢的全部权威状态。只存数据，可随 GameState 直接进入网络快照。
 export interface EscortState {
@@ -33,6 +36,7 @@ export interface EscortState {
   speed: number;
   moving: boolean;
   arrived: boolean;
+  dashBoostTicks: number; // 推车冲刺的短促推力剩余帧（见 escortNoteDashPush）
 }
 
 export interface EscortWaypoint {
@@ -190,6 +194,22 @@ export function escortPusherCount(
   );
 }
 
+
+// 推车冲刺：站在推车位、朝行进方向冲刺的玩家给小车一段短促推力。
+// 由 update.ts 在冲刺触发那一帧调用；重复冲刺只刷新计时，不叠加档数。
+export function escortNoteDashPush(state: GameState, tank: TankState): void {
+  const escort = state.escort;
+  if (!escort || escort.arrived || tank.dir !== escort.dir) return;
+  const slot = escortPushSlot(escort);
+  const centerX = tank.x + TANK_SIZE / 2;
+  const centerY = tank.y + TANK_SIZE / 2;
+  const inSlot =
+    centerX >= slot.x &&
+    centerX <= slot.x + slot.width &&
+    centerY >= slot.y &&
+    centerY <= slot.y + slot.height;
+  if (inSlot) escort.dashBoostTicks = ESCORT_DASH_BOOST_TICKS;
+}
 
 // 推车是独立动力：每名推车手贡献 ESCORT_PUSH_SPEED_PER_TANK 档车速，
 // 与护卫位占比相加构成总动力（见 updateEscort）。
@@ -778,6 +798,7 @@ export function createEscortState(_level: LevelState, stage = 1): EscortState {
     speed: ESCORT_SPEED,
     moving: false,
     arrived: false,
+    dashBoostTicks: 0,
   };
 }
 
@@ -909,10 +930,15 @@ export function updateEscort(state: GameState, activePlayers?: readonly boolean[
     }
   }
 
-  // 总动力 = 护卫位占比 + 推车贡献：护航与推车都是独立动力源，任一有人车即可走 ——
-  // 车尾 1 人推 = 半速、2 人推 = 全速，满护航 + 2 人推 = 2 倍速。
+  // 总动力 = 护卫位占比 + 推车贡献 + 冲刺推力：护航与推车都是独立动力源，任一有人车即可走 ——
+  // 车尾 1 人推 = 半速、2 人推 = 全速，满护航 + 2 人推 = 2 倍速；
+  // 推车手朝行进方向冲刺再追加短促的 +1 档推力（见 escortNoteDashPush）。
+  if (escort.dashBoostTicks > 0) escort.dashBoostTicks--;
+  const dashBoost = escort.dashBoostTicks > 0 ? ESCORT_DASH_BOOST_DRIVE : 0;
   const driveScale =
-    escortGuardSpeedScale(state, activePlayers) + escortPushSpeedScale(state, activePlayers);
+    escortGuardSpeedScale(state, activePlayers) +
+    escortPushSpeedScale(state, activePlayers) +
+    dashBoost;
   if (driveScale === 0) {
     escort.moving = false;
     return;

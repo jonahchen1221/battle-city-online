@@ -14,6 +14,7 @@ import {
   escortRoadblockCountForStage,
   escortGuardSlots,
   escortHasGuard,
+  escortNoteDashPush,
   escortPushSlot,
   escortPusherCount,
   escortSpawnApproachForStage,
@@ -355,4 +356,26 @@ test('escort arrival clears the stage and time expiry has failure priority', () 
   escort.timeExpired = true;
   updatePhase(state);
   assert.equal(state.pendingResult, 'gameover');
+});
+
+test('a pusher dashing along the travel direction shoves the convoy briefly', () => {
+  const state = createGameState(604, 1, 2);
+  const escort = state.escort!;
+  state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
+  const push = escortPushSlot(escort);
+  const player = state.tanks[0];
+  Object.assign(player, { x: push.x, y: push.y, dir: escort.dir });
+
+  // 朝行进方向冲刺 → 获得短促推力：1 名推车手 0.5 + 冲刺 1 = 1.5 倍速。
+  escortNoteDashPush(state, player);
+  assert.ok(escort.dashBoostTicks > 0);
+  let before = escort.y;
+  updateEscort(state);
+  assert.equal(before - escort.y, escort.speed * 1.5);
+
+  // 背向车辆冲刺不产生推力。
+  escort.dashBoostTicks = 0;
+  player.dir = 'down';
+  escortNoteDashPush(state, player);
+  assert.equal(escort.dashBoostTicks, 0);
 });
