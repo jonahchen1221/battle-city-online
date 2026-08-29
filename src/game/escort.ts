@@ -419,30 +419,81 @@ export function createEscortState(_level: LevelState, stage = 1): EscortState {
 
 // 玩家始终在护送关开局时的固定出生区成扇形出生。
 // 复活点不跟随已经前进的车队，避免阵亡变相成为向前传送。
+// 16×16 坦克落点的地形校验（仅地形：砖/钢/水/鹰巢算挡；坦克重叠交由出生闪光的
+// 实体化重试处理）。坐标须已在场内。
+function tankSpotClear(level: LevelState, x: number, y: number): boolean {
+  const col0 = Math.floor(x / SUBTILE);
+  const row0 = Math.floor(y / SUBTILE);
+  const col1 = Math.floor((x + TANK_SIZE - 1) / SUBTILE);
+  const row1 = Math.floor((y + TANK_SIZE - 1) / SUBTILE);
+  for (let row = row0; row <= row1; row++) {
+    for (let col = col0; col <= col1; col++) {
+      const cell = getCell(level, col, row);
+      if (cell === Cell.STEEL || cell === Cell.WATER || cell === Cell.EAGLE) return false;
+      if (
+        cell === Cell.BRICK &&
+        brickMaskOverlapsRect(level, col, row, x, y, x + TANK_SIZE, y + TANK_SIZE)
+      )
+        return false;
+    }
+  }
+  return true;
+}
+
+// 以某锚点（护送车位置）推导玩家落点：车尾方向退一个车位 + 按 playerIndex 横向错位。
+function spawnBehind(
+  anchorX: number,
+  anchorY: number,
+  dir: Direction,
+  playerIndex: number,
+): { x: number; y: number } {
+  const offsets = [-32, 48, -56, 72];
+  const behind = ESCORT_SIZE + 8;
+  let x = anchorX;
+  let y = anchorY;
+  if (dir === 'up' || dir === 'down') {
+    x += offsets[playerIndex];
+    y += dir === 'up' ? behind : -behind;
+  } else {
+    x += dir === 'left' ? behind : -behind;
+    y += offsets[playerIndex];
+  }
+  return { x, y };
+}
+
+// 玩家出生 / 阵亡重生落点：以护送车「当前位置」为锚（开局时即路线起点，行为不变），
+// 重生因此始终落在车辆附近的同一屏内，而不是被送回路线起点。
+// 主选 = 车尾错位点；被地形挡住时按由近及远的环形备选扫描；全部失败则回退主选（钳到场内）。
 export function escortPlayerSpawn(
   escort: EscortState | null,
   playerIndex: number,
   level: LevelState,
 ): { x: number; y: number } {
   if (!escort) return PLAYER_SPAWN_POINTS[playerIndex];
-  const offsets = [-32, 48, -56, 72];
   const maxX = level.cols * SUBTILE - TANK_SIZE;
   const maxY = level.rows * SUBTILE - TANK_SIZE;
-  const start = escort.route[0];
-  let x = start.x;
-  let y = start.y;
-  const behind = ESCORT_SIZE + 8;
-  if (escort.dir === 'up' || escort.dir === 'down') {
-    x += offsets[playerIndex];
-    y += escort.dir === 'up' ? behind : -behind;
-  } else {
-    x += escort.dir === 'left' ? behind : -behind;
-    y += offsets[playerIndex];
+  const align = (v: number, max: number): number =>
+    Math.max(0, Math.min(max, Math.round(v / SUBTILE) * SUBTILE));
+
+  const primary = spawnBehind(escort.x, escort.y, escort.dir, playerIndex);
+  const candidates: Array<{ x: number; y: number }> = [primary];
+  // 环形备选：围绕车辆中心由近及远（上/下/左/右/四角），保证仍在车辆附近同屏。
+  const cx = escort.x + ESCORT_SIZE / 2 - TANK_SIZE / 2;
+  const cy = escort.y + ESCORT_SIZE / 2 - TANK_SIZE / 2;
+  for (const r of [40, 56, 72, 88]) {
+    for (const [dx, dy] of [
+      [0, r], [0, -r], [-r, 0], [r, 0],
+      [-r, r], [r, r], [-r, -r], [r, -r],
+    ]) {
+      candidates.push({ x: cx + dx, y: cy + dy });
+    }
   }
-  return {
-    x: Math.max(0, Math.min(maxX, x)),
-    y: Math.max(0, Math.min(maxY, y)),
-  };
+  for (const c of candidates) {
+    const x = align(c.x, maxX);
+    const y = align(c.y, maxY);
+    if (tankSpotClear(level, x, y)) return { x, y };
+  }
+  return { x: align(primary.x, maxX), y: align(primary.y, maxY) };
 }
 
 function rectHitsSolid(level: LevelState, x: number, y: number, size: number): boolean {

@@ -172,20 +172,26 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     if (!tank.alive) continue;
     const input = inputs[tank.playerIndex] ?? emptyInput();
 
-    // 友军冻结与敌方 timer 均阻止移动 / 开火；敌方 hourglass 则让玩家隔帧行动。
+    // 敌方 timer 阻止移动 / 开火；敌方 hourglass 让玩家隔帧行动。
     const personallyFrozen = tank.freezeTicks > 0;
     if (personallyFrozen) tank.freezeTicks--;
     const globallyFrozen = state.playerFreezeTicks > 0;
     const slowedSkip = !globallyFrozen && !personallyFrozen &&
       state.playerSlowTicks > 0 && state.tick % 2 !== 0;
-    if (globallyFrozen || personallyFrozen || slowedSkip) {
+    if (globallyFrozen || slowedSkip) {
       tank.moving = false;
       tank.slideTicks = 0;
       tank.prevFire = input.fire; // 仍记录开火键状态：解冻那帧不会因一直按住而被判为边沿
       continue;
     }
 
-    applyInput(tank, input, level, obstacles, state.escort ?? undefined);
+    // 友军冻结只封移动 / 转向、不封开火：被队友定住时仍可按被定住时的朝向原地输出。
+    if (personallyFrozen) {
+      tank.moving = false;
+      tank.slideTicks = 0;
+    } else {
+      applyInput(tank, input, level, obstacles, state.escort ?? undefined);
+    }
 
     // 开火触发方式按武器区分：
     // - 机枪：按住连发（非边沿），由 fireCooldown 节流为每 MACHINE_FIRE_INTERVAL_TICKS 帧一发；

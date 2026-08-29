@@ -329,6 +329,24 @@ function moveBoss(state: GameState, boss: BossState, target: TankState | null): 
   const speed = bossMoveSpeed(state, boss);
   if (speed <= 0 || !target) return;
 
+  // 贴身站定：追击轴上与目标只剩不到一步的间隙、且另一轴车体投影已重叠（真·脸贴脸）时，
+  // 面向目标原地输出攻击。否则会为“再挤近半步”在两轴间来回改向，表现为贴身甩头。
+  const dx = target.x + TANK_SIZE / 2 - (boss.x + boss.size / 2);
+  const dy = target.y + TANK_SIZE / 2 - (boss.y + boss.size / 2);
+  const halfSum = (boss.size + TANK_SIZE) / 2;
+  const gapX = Math.abs(dx) - halfSum; // ≤0 = X 轴投影重叠
+  const gapY = Math.abs(dy) - halfSum;
+  if (gapX <= speed && gapY <= 0) {
+    boss.dir = dx < 0 ? 'left' : 'right';
+    boss.moveDir = boss.dir;
+    return;
+  }
+  if (gapY <= speed && gapX <= 0) {
+    boss.dir = dy < 0 ? 'up' : 'down';
+    boss.moveDir = boss.dir;
+    return;
+  }
+
   // 四个候选方向全被硬障碍堵死时不做任何事（原地停留，攻击照常）—— 绝不会卡死。
   for (const dir of bossMoveCandidates(boss, target)) {
     const probe = probeBossMove(state, boss, dir, speed);

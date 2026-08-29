@@ -289,7 +289,7 @@ test('players can move through the expanded world but cannot drive through the e
   assert.equal(player.y, before);
 });
 
-test('players respawn at the original escort-stage spawn after the convoy has moved', () => {
+test('players respawn near the convoy after it has moved (not the route start)', () => {
   const state = createGameState(10, 1, 2);
   const player = state.tanks[0];
   const originalSpawn = { x: player.x, y: player.y };
@@ -297,8 +297,10 @@ test('players respawn at the original escort-stage spawn after the convoy has mo
 
   destroyPlayerTank(state, player);
 
+  // 重生点跟随车辆当前位置（同屏），不再回路线起点附近的初始出生位。
   const respawn = state.spawning[0]!.tank;
-  assert.deepEqual({ x: respawn.x, y: respawn.y }, originalSpawn);
+  assert.ok(Math.abs(respawn.y - 320) <= 160, `重生应在车辆附近，实际 y=${respawn.y}`);
+  assert.ok(Math.abs(respawn.y - originalSpawn.y) > 100, '不应回到初始出生位');
 });
 
 test('enemy bullets are blocked without affecting time, while wrench adds time', () => {
