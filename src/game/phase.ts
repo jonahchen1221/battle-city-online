@@ -20,7 +20,9 @@ const EAGLE_SIZE = 2 * SUBTILE; // 16
 
 // 子弹（4×4）命中鹰巢：除智能坦克弹外，任一方子弹触及鹰巢即摧毁基地。
 // 鹰巢一旦被毁只结算一次；产生一个居中的大爆炸；命中子弹消亡。
+// Boss 关地图没有鹰巢（无 E 字符），此处整体跳过 —— 否则飞过底部正中的子弹会误触发基地摧毁。
 export function resolveEagleHit(state: GameState): void {
+  if (state.boss) return;
   if (state.eagleDestroyed) return;
   for (const b of state.bullets) {
     if (
@@ -67,7 +69,9 @@ function anyEnemySpawning(state: GameState): boolean {
 }
 
 // 胜利条件：队列空 且 无在场敌人 且 无出生中的敌人。
+// Boss 关分流：小兵无限补充，永远不满足清场条件 —— 过关条件改为 Boss 死亡。
 function stageCleared(state: GameState): boolean {
+  if (state.boss) return state.boss.dead;
   return state.enemyQueue.length === 0 && !anyEnemyAlive(state) && !anyEnemySpawning(state);
 }
 

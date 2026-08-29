@@ -124,11 +124,21 @@ export const SMART_AI_REPLAN_TICKS = 12;
 // A* 中进入含砖位置的代价：优先选择短绕路，无路可绕时仍会主动射穿砖墙。
 export const SMART_AI_BRICK_COST = 6;
 // 关卡敌军总数（单一可调常量；暂不随人数变化）。各关 STAGE_ENEMY_MIX 之和均等于此值。
+// Boss 关不走有限队列（编成为空数组），故不受此值约束。
 export const STAGE_ENEMY_TOTAL = 20;
-// 关卡总数（levels.ts STAGES 的长度）；通关第 10 关后回卷到第 1 关。
-export const STAGE_COUNT = 10;
-// 每关敌军编成（每关总数均为 STAGE_ENEMY_TOTAL，逐关升级）。
+// 关卡总数（levels.ts STAGES 的长度）；通关第 12 关后回卷到第 1 关。
+// 序列：普通关 1–5 → Boss 关 A（6）→ 普通关 7–11 → Boss 关 B / 最终战（12）。
+export const STAGE_COUNT = 12;
+// Boss 关的关号（1-based）。第 6 关为 Boss A，第 12 关为 Boss B（最终战）。
+export const BOSS_STAGES: ReadonlyArray<number> = [6, 12];
+// 某关号是否为 Boss 关。stage 可为任意正整数（回卷关号先归一到 1..STAGE_COUNT）。
+export function isBossStage(stage: number): boolean {
+  return BOSS_STAGES.includes(((stage - 1) % STAGE_COUNT) + 1);
+}
+// 每关敌军编成（普通关总数均为 STAGE_ENEMY_TOTAL，逐关升级）。
 // 出生队列按各种类剩余数轮转交错（round-robin）构建，确定性、无需 rng（见 state.ts）。
+// Boss 关（第 6 / 12 关，索引 5 / 11）为空数组：不走有限队列，小兵由 Boss 关专属逻辑无限补充
+//（见 enemy.ts updateBossMinions）。
 export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; count: number }>> = [
   // 第 1 关：基础 14 + 快速 2 + 智能 4（智能占 20%）
   [
@@ -166,42 +176,46 @@ export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; cou
     { kind: 'armor', count: 4 },
     { kind: 'smart', count: 8 },
   ],
-  // ── 后半程（第 6–10 关）──
+  // ── 第 6 关：Boss 关 A ── 空编成：小兵由 Boss 逻辑无限补充（basic / fast）。
+  [],
+  // ── 后半程（第 7–11 关，原第 6–10 关的五张图）──
   // 硬骨头（威力 + 装甲）合计逐关单调不减：8 → 8 → 9 → 10 → 11 → 12；
   // 智能坦克稳定在 45%，快速坦克逐关退场，最终由装甲与威力压满战场。
-  // 第 6 关：快速 3 + 威力 4 + 装甲 4 + 智能 9（智能占 45%）
+  // 第 7 关：快速 3 + 威力 4 + 装甲 4 + 智能 9（智能占 45%）
   [
     { kind: 'fast', count: 3 },
     { kind: 'power', count: 4 },
     { kind: 'armor', count: 4 },
     { kind: 'smart', count: 9 },
   ],
-  // 第 7 关：快速 2 + 威力 4 + 装甲 5 + 智能 9
+  // 第 8 关：快速 2 + 威力 4 + 装甲 5 + 智能 9
   [
     { kind: 'fast', count: 2 },
     { kind: 'power', count: 4 },
     { kind: 'armor', count: 5 },
     { kind: 'smart', count: 9 },
   ],
-  // 第 8 关：快速 1 + 威力 5 + 装甲 5 + 智能 9
+  // 第 9 关：快速 1 + 威力 5 + 装甲 5 + 智能 9
   [
     { kind: 'fast', count: 1 },
     { kind: 'power', count: 5 },
     { kind: 'armor', count: 5 },
     { kind: 'smart', count: 9 },
   ],
-  // 第 9 关：威力 5 + 装甲 6 + 智能 9（快速坦克退场）
+  // 第 10 关：威力 5 + 装甲 6 + 智能 9（快速坦克退场）
   [
     { kind: 'power', count: 5 },
     { kind: 'armor', count: 6 },
     { kind: 'smart', count: 9 },
   ],
-  // 第 10 关：威力 4 + 装甲 8 + 智能 8（装甲占四成，全场最难）
+  // 第 11 关：威力 4 + 装甲 8 + 智能 8（装甲占四成，普通关最难）
   [
     { kind: 'power', count: 4 },
     { kind: 'armor', count: 8 },
     { kind: 'smart', count: 8 },
   ],
+  // ── 第 12 关：Boss 关 B（最终战）── 空编成：小兵为 power / smart 对半随机。
+  [],
 ];
 // 同屏敌军上限的基数与每多一名玩家的增量。
 export const MAX_ENEMIES_BASE = 4;
@@ -361,6 +375,82 @@ export const MACHINE_MAX_BULLETS = 3;
 // 激光精灵为 8×8 逻辑（细长亮条居中于精灵），绘制时相对 4×4 弹体盒左上角的偏移。
 export const LASER_SPRITE_SIZE = 8;
 export const LASER_SPRITE_OFFSET = (LASER_SPRITE_SIZE - BULLET_SIZE) / 2; // 2
+
+// ── Boss 关（第 6 / 12 关）──
+// Boss 是一台停驻在上半场正中的 48×48 巨型坦克：对坦克是实心障碍，对小兵子弹是吸收体，
+// 只有玩家子弹能对它造成伤害（受击次数制，见 BOSS_DAMAGE_*）。全部数值以 tick 计。
+
+// 车体尺寸与固定停驻坐标（战场相对像素，48×48 盒左上角）。
+// 恰好覆盖子格 cols 17–22 × rows 6–11，两张竞技场地图在此留出空域。
+export const BOSS_SIZE = 48;
+export const BOSS_X = (FIELD_WIDTH - BOSS_SIZE) / 2; // 136
+export const BOSS_Y = 48;
+// Boss 弹幕的射手 id：任何坦克都不会取到 0（玩家 id 从 1 起），故可安全用作哨兵值。
+export const BOSS_OWNER_ID = 0;
+
+// 血量（受击次数制）：单人 100，每多一名玩家 +60 → 100 / 160 / 220 / 280。
+export const BOSS_HP_BASE = 100;
+export const BOSS_HP_PER_EXTRA_PLAYER = 60;
+export function bossMaxHp(playerCount: number): number {
+  return BOSS_HP_BASE + BOSS_HP_PER_EXTRA_PLAYER * (playerCount - 1);
+}
+// 单发伤害：激光弹 −2，其余一律 −1（drill / star 等级不改变对 Boss 的伤害）。
+export const BOSS_DAMAGE_NORMAL = 1;
+export const BOSS_DAMAGE_LASER = 2;
+// 受击白闪帧数。
+export const BOSS_HIT_FLASH_TICKS = 3;
+// 进入第二阶段的血量比例（hp < maxHp × 该比例，单向不回退）。
+export const BOSS_PHASE2_HP_RATIO = 0.5;
+
+// 攻击循环：冷却归零即从该阶段的攻击池随机（state.rng）选一发动。
+export const BOSS_ATTACK_INTERVAL_P1 = 180;
+export const BOSS_ATTACK_INTERVAL_P2 = 135;
+
+// ① 垂直粗激光（两阶段）：前摇 60 帧（红色瞄准线，不伤人）→ 激光 42 帧（宽 16px、整列贯穿）。
+export const BOSS_LASER_WINDUP_TICKS = 60;
+export const BOSS_LASER_ACTIVE_TICKS = 42;
+export const BOSS_LASER_WIDTH = TILE; // 16
+// 瞄准线闪烁周期（帧）：一半亮、一半灭。
+export const BOSS_AIM_BLINK_TICKS = 6;
+// ⑤ 双列激光（仅 phase2）：单人局无第二名玩家可锁，改用玩家列 ±该偏移的两列。
+export const BOSS_DUAL_LASER_SOLO_OFFSET = 32;
+
+// ② 8 向放射弹幕（两阶段）：45° 间隔 8 发，弹速 2px/tick。
+export const BOSS_RADIAL_BULLETS = 8;
+export const BOSS_RADIAL_SPEED = 2;
+
+// ③ 三连瞄准射（两阶段）：朝最近玩家中心连射 3 发，间隔 12 帧，弹速 2.5（发射瞬间实时瞄准）。
+export const BOSS_BURST_SHOTS = 3;
+export const BOSS_BURST_INTERVAL_TICKS = 12;
+export const BOSS_BURST_SPEED = 2.5;
+
+// ④ 16 向旋转弹幕（仅 phase2）：3 波、每波 16 发、波间 30 帧，每波起始角偏转 7.5°。
+export const BOSS_SPIN_WAVES = 3;
+export const BOSS_SPIN_BULLETS = 16;
+export const BOSS_SPIN_WAVE_INTERVAL_TICKS = 30;
+export const BOSS_SPIN_STEP_RAD = Math.PI / 24; // 7.5°
+export const BOSS_SPIN_SPEED = 2;
+
+// Boss 死亡：错落 3–5 个大爆炸（数量取 MIN + rng.int(RANGE)）。
+export const BOSS_DEATH_EXPLOSION_MIN = 3;
+export const BOSS_DEATH_EXPLOSION_RANGE = 3; // → 3..5
+
+// 小兵（Boss 关专属无限补充）：场上至多 2 只、出生间隔 600 帧、每第 4 只携带道具。
+export const BOSS_MINION_MAX = 2;
+export const BOSS_MINION_INTERVAL_TICKS = 600;
+export const BOSS_MINION_CARRIER_EVERY = 4;
+// 各 Boss 关的小兵种类池（按 state.rng 等概率取）。
+export const BOSS_MINION_KINDS_A: ReadonlyArray<EnemyKind> = ['basic', 'fast'];
+export const BOSS_MINION_KINDS_B: ReadonlyArray<EnemyKind> = ['power', 'smart'];
+
+// Boss 渲染配色：血条底 / 血条前景（按剩余比例 红 → 橙 → 黄）/ 瞄准线 / 激光芯与边。
+export const COLOR_BOSS_HP_BACK = '#3c1414';
+export const COLOR_BOSS_HP_HIGH = '#d82800';
+export const COLOR_BOSS_HP_MID = '#f85838';
+export const COLOR_BOSS_HP_LOW = '#f0c860';
+export const COLOR_BOSS_AIM = '#f85838';
+export const COLOR_BOSS_LASER_CORE = '#ffffff';
+export const COLOR_BOSS_LASER_EDGE = '#58f8f8';
 
 // 武器在 HUD 上的字母配色（与道具图标内的字母同色系；cannon 用 COLOR_HUD_ICON 黑）。
 export const COLOR_WEAPON_SPREAD = '#f0c860'; // 黄

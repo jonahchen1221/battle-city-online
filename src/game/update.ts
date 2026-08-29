@@ -12,6 +12,7 @@ import {
   makeSmallExplosion,
 } from './bullet';
 import { updateEnemies } from './enemy';
+import { collisionTanks, updateBoss, resolveBulletBoss } from './boss';
 import { updatePhase, resolveEagleHit, restartGame } from './phase';
 import {
   tryPickupPowerup,
@@ -116,16 +117,20 @@ export function update(state: GameState, inputs: InputState[]): void {
   // 敌我各自在移动后拾取。
   tryPickupPowerup(state, 'player');
 
-  // 敌方：出生闪光推进（含玩家复活）、AI 行进/开火、生成新敌人。
+  // 敌方：出生闪光推进（含玩家复活）、AI 行进/开火、生成新敌人（Boss 关另含小兵补充）。
   updateEnemies(state, level);
   tryPickupPowerup(state, 'enemy');
+
+  // Boss（仅 Boss 关）：炮塔转向、阶段转换、攻击状态机（弹幕出膛 / 激光逐帧判定）。
+  updateBoss(state);
 
   // 推进子弹并结算地形碰撞（撞地形消失时产生小爆炸）。
   advanceBullets(level, state.bullets, state.explosions, state.events);
 
-  // 战斗结算：子弹互撞相消、子弹命中鹰巢、子弹命中坦克。
+  // 战斗结算：子弹互撞相消、子弹命中鹰巢、子弹命中 Boss、子弹命中坦克。
   resolveBulletBullet(state.bullets, state.explosions, state.events);
   resolveEagleHit(state);
+  resolveBulletBoss(state);
   resolveBulletTanks(state);
 
   // 清理死亡子弹（其主人即可再次开火）与死亡坦克。
@@ -155,6 +160,8 @@ function advanceTankPowerupTimers(state: GameState): void {
 // 其余玩家的输入不会因数组塌缩而错位。
 function updatePlayers(state: GameState, inputs: InputState[]): void {
   const level = state.level;
+  // Boss 车体对玩家坦克同样是实心障碍（普通关时 obstacles 即 state.tanks 本身）。
+  const obstacles = collisionTanks(state);
   for (const tank of state.tanks) {
     if (!isPlayerTank(tank)) continue;
     if (!tank.alive) continue;
@@ -173,7 +180,7 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
       continue;
     }
 
-    applyInput(tank, input, level, state.tanks);
+    applyInput(tank, input, level, obstacles);
 
     // 开火触发方式按武器区分：
     // - 机枪：按住连发（非边沿），由 fireCooldown 节流为每 MACHINE_FIRE_INTERVAL_TICKS 帧一发；

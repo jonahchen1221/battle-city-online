@@ -406,7 +406,9 @@ function grenadeKillOpponents(state: GameState, collector: TankState): void {
 }
 
 // 敌方 shovel：清空鹰巢外围护墙环；鹰巢本体不受影响。
+// Boss 关无鹰巢，护墙相关的三个操作一律跳过（否则会在竞技场底部凭空造出一圈墙）。
 export function clearEagleRing(state: GameState): void {
+  if (state.boss) return;
   for (const { col, row } of eagleRingCells()) {
     setCell(state.level, col, row, Cell.EMPTY);
   }
@@ -414,6 +416,7 @@ export function clearEagleRing(state: GameState): void {
 
 // 把鹰巢护盾环各格设为完整钢块（shovel 生效）。
 export function fortifyEagleRing(state: GameState): void {
+  if (state.boss) return;
   for (const { col, row } of eagleRingCells()) {
     setCell(state.level, col, row, Cell.STEEL);
   }
@@ -421,6 +424,7 @@ export function fortifyEagleRing(state: GameState): void {
 
 // 把鹰巢护盾环各格恢复为完整砖块（shovel 到期；即使原先受损 / 被毁也重建 —— 经典表现）。
 export function restoreEagleRingBrick(state: GameState): void {
+  if (state.boss) return;
   for (const { col, row } of eagleRingCells()) {
     setCell(state.level, col, row, Cell.BRICK);
   }

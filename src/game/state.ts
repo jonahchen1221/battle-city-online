@@ -4,6 +4,7 @@ import {
   PLAYER_LIVES_START_MP,
   STAGE_COUNT,
   STAGE_ENEMY_MIX,
+  isBossStage,
   SPAWN_FLASH_TICKS,
   NEUTRAL_POWERUP_FIRST_TICKS,
   PLAYER_SPAWN_POINTS,
@@ -15,6 +16,8 @@ import { TankState, TankKind, EnemyKind, WeaponKind, createPlayer, isPlayerTank 
 import { BulletState } from './bullet';
 import { MVP_POWERUP_KINDS, shuffledNeutralQueue } from './powerup';
 import type { PowerupState, PowerupKind } from './powerup';
+import { createBoss } from './boss';
+import type { BossState } from './boss';
 
 // 出生中的敌方坦克：闪光结束后原样加入 tanks，期间不可碰撞、不受控。
 export interface SpawnState {
@@ -80,6 +83,9 @@ export interface GameState {
   nextEnemyId: number; // 敌方坦克 id 分配器
   nextBulletId: number; // 子弹 id 分配器（联机插值按此稳定匹配多发同源子弹）
   stage: number; // 当前关号（1-based，1..STAGE_COUNT）
+  // Boss 关（第 6 / 12 关）的 Boss 实体；普通关恒为 null。
+  // 纯数据，随快照整体下发；过关条件与败因判定见 phase.ts。
+  boss: BossState | null;
   phase: Phase; // 当前阶段
   phaseTicks: number; // 进入当前阶段以来的帧数（stagestart 幕布计时 / gameover 滑入动画等据此推算）
   eagleDestroyed: boolean; // 鹰巢（基地）是否已被摧毁
@@ -166,6 +172,8 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     nextEnemyId: playerCount + 1, // 玩家占用 id=1..N
     nextBulletId: 1,
     stage,
+    // Boss 关：幕布结束后 Boss 即已在位（不走出生闪光）。普通关为 null。
+    boss: isBossStage(stage) ? createBoss(playerCount) : null,
     phase: 'stagestart',
     phaseTicks: 0,
     eagleDestroyed: false,
@@ -242,6 +250,8 @@ export function nextStage(state: GameState): void {
   state.levelEpoch++;
   state.level = cloneLevel(STAGES[stageIndex]);
   state.enemyQueue = createStageQueue(stageIndex);
+  // Boss 关重建一台满血 Boss；普通关清空。
+  state.boss = isBossStage(nextStageNum) ? createBoss(state.playerCount) : null;
 
   // 每关独立的战斗态一律清空。
   state.tanks = [];

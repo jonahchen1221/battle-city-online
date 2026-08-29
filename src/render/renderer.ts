@@ -43,6 +43,15 @@ import {
   COLOR_WEAPON_MACHINE,
   SMART_MARKER_PULSE_TICKS,
   COLOR_SMART_MARKER,
+  BOSS_LASER_WIDTH,
+  BOSS_AIM_BLINK_TICKS,
+  COLOR_BOSS_HP_BACK,
+  COLOR_BOSS_HP_HIGH,
+  COLOR_BOSS_HP_MID,
+  COLOR_BOSS_HP_LOW,
+  COLOR_BOSS_AIM,
+  COLOR_BOSS_LASER_CORE,
+  COLOR_BOSS_LASER_EDGE,
 } from '../core/constants';
 import { GameState } from '../game/state';
 import { Cell, LevelState, cellIndex, getCell } from '../game/level';
@@ -123,8 +132,12 @@ export class Renderer {
     ctx.rect(FIELD_X * ART_SCALE, FIELD_Y * ART_SCALE, FIELD_WIDTH * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
     ctx.clip();
     this.drawSpawnStars(state);
+    // Boss 车体绘于坦克之下：玩家贴到车体边缘时仍能看清自己的坦克。
+    this.drawBoss(state);
     this.drawTanks(state, playerNames);
     this.drawBullets(state);
+    // 瞄准线 / 激光绘于坦克之上：前摇与激活相都必须一眼可辨（这是全部躲避判断的依据）。
+    this.drawBossBeams(state);
     this.drawExplosions(state);
 
     // 第二遍：树林（覆盖在实体之上，坦克可藏于其下）
@@ -133,6 +146,8 @@ export class Renderer {
     this.drawSmartTankMarkers(state);
     // 道具浮标：绘于树林之上（经典 —— 浮于一切之上），仍在战场裁剪区内。
     this.drawPowerup(state);
+    // Boss 血条：战场顶部整宽度条，压在一切战场元素之上（Boss 关地图顶部两行本就留空）。
+    this.drawBossHealth(state);
     ctx.restore();
 
     // 右侧 HUD 栏（剩余敌军 / 生命 / 关卡旗）
@@ -564,6 +579,76 @@ export class Renderer {
       default:
         return flashRed ? atlas.enemyTankRed.basic : atlas.enemyTank.basic;
     }
+  }
+
+  // Boss 车体（48×48）：按炮塔朝向取帧；阶段 2 换血红配色；受击白闪期间整体提亮。
+  private drawBoss(state: GameState): void {
+    const boss = state.boss;
+    if (!boss || boss.dead) return;
+    const { ctx, atlas } = this;
+    const frames = boss.hitFlash > 0 ? atlas.bossFlash : atlas.boss[boss.phase - 1];
+    drawTile(ctx, frames[boss.dir], snapArt(FIELD_X + boss.x), snapArt(FIELD_Y + boss.y));
+  }
+
+  // Boss 激光：前摇期为整列闪烁的半透明红瞄准线（不伤人），激活期为亮白芯 + 青边的粗光柱。
+  private drawBossBeams(state: GameState): void {
+    const boss = state.boss;
+    if (!boss || boss.dead || boss.laserCols.length === 0) return;
+    const { ctx } = this;
+    const top = FIELD_Y * ART_SCALE;
+    const height = FIELD_HEIGHT * ART_SCALE;
+    const half = BOSS_LASER_WIDTH / 2;
+
+    if (boss.windupTicks > 0) {
+      // 前摇：按 BOSS_AIM_BLINK_TICKS 周期明灭，半透明红 + 两侧 1px 实色描边。
+      const bright = Math.floor(boss.windupTicks / BOSS_AIM_BLINK_TICKS) % 2 === 0;
+      ctx.save();
+      ctx.globalAlpha = bright ? 0.45 : 0.2;
+      ctx.fillStyle = COLOR_BOSS_AIM;
+      for (const center of boss.laserCols) {
+        const x = (FIELD_X + center - half) * ART_SCALE;
+        ctx.fillRect(x, top, BOSS_LASER_WIDTH * ART_SCALE, height);
+      }
+      ctx.globalAlpha = bright ? 1 : 0.5;
+      for (const center of boss.laserCols) {
+        const x = (FIELD_X + center - half) * ART_SCALE;
+        ctx.fillRect(x, top, ART_SCALE, height);
+        ctx.fillRect(x + (BOSS_LASER_WIDTH - 1) * ART_SCALE, top, ART_SCALE, height);
+      }
+      ctx.restore();
+      return;
+    }
+
+    if (boss.activeTicks <= 0) return;
+    for (const center of boss.laserCols) {
+      const x = (FIELD_X + center - half) * ART_SCALE;
+      ctx.fillStyle = COLOR_BOSS_LASER_EDGE;
+      ctx.fillRect(x, top, BOSS_LASER_WIDTH * ART_SCALE, height);
+      // 亮白芯：居中于 16px 光柱，宽 8px。
+      ctx.fillStyle = COLOR_BOSS_LASER_CORE;
+      ctx.fillRect(x + (half / 2) * ART_SCALE, top, half * ART_SCALE, height);
+    }
+  }
+
+  // Boss 血条：战场顶部整宽度，左侧小字 "BOSS"，前景按剩余比例 红 → 橙 → 黄。
+  private drawBossHealth(state: GameState): void {
+    const boss = state.boss;
+    if (!boss) return;
+    const { ctx, atlas } = this;
+    const barX = FIELD_X + 32;
+    const barY = FIELD_Y + 3;
+    const barW = FIELD_WIDTH - 35;
+    const barH = 5;
+    drawTextOutlined(ctx, atlas, 'BOSS', FIELD_X + 3, FIELD_Y + 2, COLOR_BOSS_HP_LOW);
+    // 1px 黑描边 + 暗底槽。
+    ctx.fillStyle = '#000000';
+    ctx.fillRect((barX - 1) * ART_SCALE, (barY - 1) * ART_SCALE, (barW + 2) * ART_SCALE, (barH + 2) * ART_SCALE);
+    ctx.fillStyle = COLOR_BOSS_HP_BACK;
+    ctx.fillRect(barX * ART_SCALE, barY * ART_SCALE, barW * ART_SCALE, barH * ART_SCALE);
+    const ratio = Math.max(0, Math.min(1, boss.hp / boss.maxHp));
+    if (ratio <= 0) return;
+    ctx.fillStyle = ratio > 0.6 ? COLOR_BOSS_HP_HIGH : ratio > 0.3 ? COLOR_BOSS_HP_MID : COLOR_BOSS_HP_LOW;
+    ctx.fillRect(barX * ART_SCALE, barY * ART_SCALE, Math.round(barW * ratio) * ART_SCALE, barH * ART_SCALE);
   }
 
   // 道具浮标：场上可同时存在多枚，逐一绘制。按 32 帧周期整体闪烁（前 24 帧可见、后 8 帧隐藏），

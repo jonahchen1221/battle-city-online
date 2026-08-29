@@ -532,6 +532,121 @@ const TANK_POWER = makeTankTemplate('power');
 const TANK_ARMOR_HD = makeTankTemplate('armor');
 const TANK_SMART = makeTankTemplate('smart');
 
+// ── Boss（96×96 美术 = 48×48 逻辑，朝上基准帧）──
+// 与普通坦克使用同一套记号（H/L/S/Z/D/O/K/B/R/T/t/E），因此可以复用 recolor 换配色：
+// phase1 = 钢蓝重甲，phase2 = 血红暴走，受击白闪 = 整体提亮。其余三朝向由 rotateCW 生成。
+const BOSS_ART = 96; // 美术像素边长（= BOSS_SIZE 48 逻辑像素 × ART_SCALE 2）
+
+function bossTrack(g: CharGrid, x0: number, x1: number, y0: number, y1: number): void {
+  for (let y = y0; y <= y1; y++) {
+    const band = (y - y0) % 12;
+    const ch = band < 4 ? 'T' : band < 8 ? 't' : 'E';
+    fillRectG(g, x0, y, x1, y, ch);
+  }
+  // 履带四角切角，避免整台车读成两根矩形柱。
+  for (let i = 0; i < 2; i++) {
+    fillRectG(g, x0 + i, y0 + i, x0 + i, y0 + i, '.');
+    fillRectG(g, x1 - i, y0 + i, x1 - i, y0 + i, '.');
+    fillRectG(g, x0 + i, y1 - i, x0 + i, y1 - i, '.');
+    fillRectG(g, x1 - i, y1 - i, x1 - i, y1 - i, '.');
+  }
+}
+
+// 粗炮管：2px 黑边 + 亮色内芯（内芯色由 R 记号决定，随阶段换色）。
+function bossBarrel(g: CharGrid, x0: number, y0: number, x1: number, y1: number): void {
+  fillRectG(g, x0 - 2, y0 - 2, x1 + 2, y1, 'B');
+  fillRectG(g, x0, y0, x1, y1, 'R');
+}
+
+// 装甲板：黑轮廓 + 主体 + 顶部高光 / 左侧过渡 / 右下阴影，比例照搬 tankPlate 放大到 96 网格。
+function bossPlate(
+  g: CharGrid,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  chamfer = 2,
+): void {
+  fillRectG(g, x0, y0, x1, y1, 'O');
+  fillRectG(g, x0 + 3, y0 + 3, x1 - 3, y1 - 3, 'H');
+  fillRectG(g, x0 + 3, y0 + 3, x1 - 6, y0 + 7, 'L');
+  fillRectG(g, x0 + 3, y0 + 8, x0 + 7, y1 - 7, 'S');
+  fillRectG(g, x0 + 7, y1 - 7, x1 - 3, y1 - 3, 'D');
+  fillRectG(g, x1 - 7, y0 + 8, x1 - 3, y1 - 8, 'Z');
+  for (let i = 0; i < chamfer; i++) {
+    g[y0 + i][x0 + i] = '.';
+    g[y0 + i][x1 - i] = '.';
+    g[y1 - i][x0 + i] = '.';
+    g[y1 - i][x1 - i] = '.';
+  }
+}
+
+// 完全包在车体内部的粗黑线改用阵营最深色，使炮塔与底盘连成实心装甲（同 shadeTankInterior）。
+function shadeBossInterior(g: CharGrid): void {
+  const source = g.map((row) => [...row]);
+  for (let y = 0; y < BOSS_ART; y++) {
+    for (let x = 22; x <= BOSS_ART - 23; x++) {
+      if (source[y][x] !== 'O') continue;
+      let touchesTransparency = false;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= BOSS_ART || ny < 0 || ny >= BOSS_ART || source[ny][nx] === '.') {
+            touchesTransparency = true;
+          }
+        }
+      }
+      if (!touchesTransparency) g[y][x] = 'K';
+    }
+  }
+}
+
+// 厚重装甲大坦克：满高双履带 + 双联粗炮管 + 双层堡垒车体 + 两侧炮舱 + 中央能量核心。
+// 即使去色，仅凭轮廓也能与任何一台 16×16 小坦克区分开。
+function makeBossTemplate(): string[] {
+  const g = blankGrid(BOSS_ART);
+
+  // 满高双履带（比任何小坦克都宽，形成“压路机”体量）。
+  bossTrack(g, 2, 21, 10, 93);
+  bossTrack(g, 74, 93, 10, 93);
+
+  // 双联粗炮管，先画后被车体覆盖根部。
+  bossBarrel(g, 34, 0, 43, 34);
+  bossBarrel(g, 52, 0, 61, 34);
+
+  // 底盘（宽）+ 炮塔（窄高），双层结构。
+  bossPlate(g, 14, 30, 81, 90, 4);
+  bossPlate(g, 26, 16, 69, 70, 6);
+
+  // 两侧外挂炮舱：左亮右暗，强化立体感与“武装到牙齿”的剪影。
+  fillRectG(g, 6, 40, 22, 64, 'O');
+  fillRectG(g, 9, 43, 21, 61, 'S');
+  fillRectG(g, 73, 40, 89, 64, 'O');
+  fillRectG(g, 74, 43, 86, 61, 'Z');
+
+  // 炮塔面：两道散热槽 + 中央能量核心（核心色随阶段变化）。
+  fillRectG(g, 33, 46, 44, 52, 'B');
+  fillRectG(g, 51, 46, 62, 52, 'B');
+  ringG(g, 47.5, 62, 11, 8, 'B');
+  fillCircleG(g, 47.5, 62, 7.5, 'R');
+
+  // 底盘铆钉：四枚亮点，缩小后仍可见。
+  for (const [rx, ry] of [
+    [20, 36],
+    [75, 36],
+    [20, 84],
+    [75, 84],
+  ]) {
+    fillRectG(g, rx, ry, rx + 2, ry + 2, 'L');
+  }
+
+  shadeBossInterior(g);
+  return assertGrid(gridToRows(g), BOSS_ART, BOSS_ART, 'boss');
+}
+
+const BOSS_TEMPLATE = makeBossTemplate();
+
 // 记号 → 调色板字符 的重着色映射（'.' 与未列出的字符原样透传）。
 type ColorMap = Record<string, string>;
 // 玩家 1：黄车体（高光 Y / 过渡 h/z / 主体 y / 阴影 d），钢制履带 c/a + 黑分隔，炮管亮黄。
@@ -556,6 +671,12 @@ const MAP_ARMOR: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L:
 const MAP_ARMOR_FLASH: ColorMap = { T: 'w', t: 'c', E: 'b', H: 'w', S: 'w', Z: 'c', L: 'w', D: 'c', O: 'e', K: 'b', B: 'e', R: 'w' };
 // 携带道具敌军红闪变体：红色车体家族（高光 1 / 亮过渡 2 / 主体 3 / 暗过渡 4 / 阴影 5），履带 c/a，炮管亮红。
 const MAP_ENEMY_RED: ColorMap = { T: 'c', t: 'a', E: 'e', H: '3', S: '2', Z: '4', L: '1', D: '5', O: 'e', K: '5', B: 'e', R: '1' };
+// Boss 阶段 1：钢蓝重甲（主体 P 暗蓝 / 高光 J / 阴影 Q），炮管与能量核心亮青 I。
+const MAP_BOSS_P1: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'P', S: 'K', Z: 'Q', L: 'J', D: 'Q', O: 'e', K: 'Q', B: 'e', R: 'I' };
+// Boss 阶段 2：血红暴走（沿用携带者红色家族），能量核心转为高热黄 Y。
+const MAP_BOSS_P2: ColorMap = { T: 'c', t: 'a', E: 'e', H: '3', S: '2', Z: '4', L: '1', D: '5', O: 'e', K: '5', B: 'e', R: 'Y' };
+// Boss 受击白闪：整体提亮到白 / 浅蓝白，仅黑轮廓保留。
+const MAP_BOSS_FLASH: ColorMap = { T: 'w', t: 'c', E: 'b', H: 'w', S: 'w', Z: 'p', L: 'w', D: 'p', O: 'e', K: 'c', B: 'e', R: 'w' };
 
 // 按映射重着色一张记号图（未列出字符透传）。
 function recolor(rows: string[], map: ColorMap): string[] {
@@ -1146,6 +1267,8 @@ export interface SpriteAtlas {
   shield: [Sprite, Sprite]; // 出生护盾 2 帧（32×32）
   explosionSmall: [Sprite, Sprite, Sprite]; // 小爆炸 3 帧（32×32）
   explosionBig: [Sprite, Sprite]; // 大爆炸 2 帧（64×64）
+  boss: Array<Record<Direction, Sprite>>; // Boss 车体（48×48 逻辑）：索引 0=阶段1、1=阶段2
+  bossFlash: Record<Direction, Sprite>; // Boss 受击白闪帧
   hudEnemy: Sprite; // HUD 剩余敌军小坦克（16×16）
   hudLifeTank: Sprite[]; // HUD 玩家生命迷你坦克（16×16），按 playerIndex 着色
   hudFlag: Sprite; // HUD 关卡旗（32×32）
@@ -1193,6 +1316,10 @@ const Y_RED_SMART = 592;
 // 道具图标行（POWERUP_KINDS.length 个 32×32，x=0/32/…）。
 const Y_POWERUP = 624;
 const Y_SMART_SPAWN = 656;
+// Boss 行（各 96 高、四朝向 × 96 宽 = 384）：阶段 1 / 阶段 2 / 受击白闪。
+const Y_BOSS_P1 = 688;
+const Y_BOSS_P2 = 784;
+const Y_BOSS_FLASH = 880;
 
 // 把一台坦克的朝上两帧铺到某一行：旋转生成其余朝向，
 // 按 up0,up1,down0,down1,left0,left1,right0,right1 排布于 x=0,32,…,224。
@@ -1224,12 +1351,30 @@ function tankFramesAt(canvas: HTMLCanvasElement, y: number): TankFrames {
   };
 }
 
+// 把 Boss 的朝上帧铺到某一行：旋转生成其余朝向，按 up,down,left,right 排布于 x=0,96,192,288。
+function paintBossRow(ctx: CanvasRenderingContext2D, up: string[], y: number): void {
+  const right = rotateCW(up);
+  const down = rotateCW(right);
+  const left = rotateCW(down);
+  paint(ctx, up, 0, y);
+  paint(ctx, down, 96, y);
+  paint(ctx, left, 192, y);
+  paint(ctx, right, 288, y);
+}
+
+// 取某 Boss 行的四朝向取样矩形（96×96 美术 = 48×48 逻辑）。
+function bossFramesAt(canvas: HTMLCanvasElement, y: number): Record<Direction, Sprite> {
+  const s = (sx: number): Sprite => ({ src: canvas, sx, sy: y, w: 96, h: 96 });
+  return { up: s(0), down: s(96), left: s(192), right: s(288) };
+}
+
 // 启动时调用一次，构建离屏图集并返回带取样矩形的 API。
 export function createSpriteAtlas(): SpriteAtlas {
   // 宽度需容下最宽的一行：道具图标行（POWERUP_KINDS.length 个 32×32 —— 6 经典 + 4 武器 + 5 新道具）。
   // 其余行最宽为坦克行（8 帧 × 32 = 256），故按两者取大。
-  const width = Math.max(256, POWERUP_KINDS.length * 32);
-  const height = 688; // + 智能坦克常态/红闪、道具图标、智能出生闪光
+  // Boss 行需要 4 朝向 × 96 = 384；道具图标行为 POWERUP_KINDS.length × 32；坦克行 256。
+  const width = Math.max(256, 384, POWERUP_KINDS.length * 32);
+  const height = 976; // + 智能坦克常态/红闪、道具图标、智能出生闪光、Boss 三套配色
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -1293,6 +1438,11 @@ export function createSpriteAtlas(): SpriteAtlas {
   paintTankRow(ctx, recolor(TANK_POWER, MAP_ENEMY_RED), recolor(swapTreads(TANK_POWER), MAP_ENEMY_RED), Y_RED_POWER);
   paintTankRow(ctx, recolor(TANK_ARMOR_HD, MAP_ENEMY_RED), recolor(swapTreads(TANK_ARMOR_HD), MAP_ENEMY_RED), Y_RED_ARMOR);
   paintTankRow(ctx, recolor(TANK_SMART, MAP_ENEMY_RED), recolor(swapTreads(TANK_SMART), MAP_ENEMY_RED), Y_RED_SMART);
+
+  // Boss 三行：阶段 1（钢蓝）/ 阶段 2（血红）/ 受击白闪，各四朝向。
+  paintBossRow(ctx, recolor(BOSS_TEMPLATE, MAP_BOSS_P1), Y_BOSS_P1);
+  paintBossRow(ctx, recolor(BOSS_TEMPLATE, MAP_BOSS_P2), Y_BOSS_P2);
+  paintBossRow(ctx, recolor(BOSS_TEMPLATE, MAP_BOSS_FLASH), Y_BOSS_FLASH);
 
   // 道具图标行：按 POWERUP_KINDS 顺序铺于 x=0,32,…。
   POWERUP_KINDS.forEach((kind, i) => paint(ctx, POWERUP_ICON_ROWS[kind], i * 32, Y_POWERUP));
@@ -1371,6 +1521,8 @@ export function createSpriteAtlas(): SpriteAtlas {
     shield: [s(128, Y_BIG, 32, 32), s(160, Y_BIG, 32, 32)],
     explosionSmall: [s(128, Y_FX, 32, 32), s(160, Y_FX, 32, 32), s(192, Y_FX, 32, 32)],
     explosionBig: [s(0, Y_BIG, 64, 64), s(64, Y_BIG, 64, 64)],
+    boss: [bossFramesAt(canvas, Y_BOSS_P1), bossFramesAt(canvas, Y_BOSS_P2)],
+    bossFlash: bossFramesAt(canvas, Y_BOSS_FLASH),
     hudEnemy: s(96, Y_TERRAIN, 16, 16),
     hudLifeTank: HUD_LIFE_TANKS.map((_, i) => s(112 + i * 16, Y_TERRAIN, 16, 16)),
     hudFlag: s(64, Y_EAGLE, 32, 32),
