@@ -22,16 +22,15 @@ test('a fire press while the bullet slot is full is buffered and fires when it f
   update(state, [fireInput()]); // 第一发
   assert.equal(liveBullets(state), 1);
 
-  update(state, [emptyInput()]); // 松开
+  // 把冷却推进到输入缓冲可以覆盖的窗口，期间子弹仍占用弹位。
+  for (let i = 0; i < PLAYER_FIRE_INTERVAL_TICKS - 2; i++) {
+    update(state, [emptyInput()]);
+  }
   update(state, [fireInput()]); // 在场子弹未消：本次按下沿被缓冲而非丢弃
   assert.equal(liveBullets(state), 1);
 
-  // 子弹消亡后，缓冲会等待最短开火间隔走完，然后无需再按即自动补发。
+  // 子弹消亡后，剩余冷却走完即兑现缓冲，无需再按。
   for (const b of state.bullets) b.alive = false;
-  for (let i = 1; i < PLAYER_FIRE_INTERVAL_TICKS - 2; i++) {
-    update(state, [emptyInput()]);
-    assert.equal(liveBullets(state), 0);
-  }
   update(state, [emptyInput()]);
   assert.equal(liveBullets(state), 1);
 });

@@ -463,13 +463,16 @@ test('smart enemy can sustain a close-range duel after its shots intercept playe
   state.spawning = [];
   state.enemyQueue = [];
   const heldFire = { ...emptyInput(), fire: true };
+  const firstBulletId = state.nextBulletId;
 
   for (let tick = 0; tick < 40; tick++) update(state, [heldFire]);
 
+  const playerShots = state.events.filter((event) => event === 'playerFire').length;
+  const smartShots = state.nextBulletId - firstBulletId - playerShots;
   assert.equal(smart.alive, true, 'smart tank should keep parrying instead of dying during reload');
   assert.ok(
-    state.nextBulletId >= 10,
-    `expected repeated counter-fire after interceptions, nextBulletId=${state.nextBulletId}`,
+    playerShots >= 3 && smartShots >= 3,
+    `expected repeated fire from both sides, player=${playerShots}, smart=${smartShots}`,
   );
 
   // 玩家停止补射后，智能坦克会先绕开最后一发来弹，再从规划好的火力位完成反击。

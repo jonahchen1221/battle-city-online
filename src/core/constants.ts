@@ -121,8 +121,8 @@ export const BULLET_SIZE = 4;
 export const BULLET_SPEED = 2; // px/tick
 
 // 玩家最短开火间隔（帧）：在“在场子弹数”之外再加一层固定射速上限。
-// 避免贴脸命中 / 撞墙时弹位迅速释放，长按开火退化为每逻辑帧一发。
-export const PLAYER_FIRE_INTERVAL_TICKS = 6; // 60Hz 下最多 10 轮/秒
+// 上限对齐现有机枪的固定射速，避免贴脸命中 / 撞墙时弹位迅速释放后反而快过机枪。
+export const PLAYER_FIRE_INTERVAL_TICKS = 10; // 60Hz 下最多 6 轮/秒
 
 // 轻点开火输入缓冲（帧）：按下沿装填；在场子弹达到上限时不吞掉这次按键，
 // 缓冲窗口内一旦弹位与开火冷却都就绪就补发。长按则在两项条件都满足后持续补发。
@@ -483,7 +483,7 @@ export const LASER_MAX_BULLETS = 1;
 
 // machine（M 机枪）：按住连发（非边沿），每 MACHINE_FIRE_INTERVAL_TICKS 帧一发。
 export const MACHINE_BULLET_SPEED = 3; // 与 STAR_BULLET_SPEED 一致
-export const MACHINE_FIRE_INTERVAL_TICKS = 10;
+export const MACHINE_FIRE_INTERVAL_TICKS = PLAYER_FIRE_INTERVAL_TICKS;
 export const MACHINE_MAX_BULLETS = 3;
 
 // 激光精灵为 8×8 逻辑（细长亮条居中于精灵），绘制时相对 4×4 弹体盒左上角的偏移。
