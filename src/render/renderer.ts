@@ -72,6 +72,7 @@ import {
   DASH_TRAIL_STEPS,
   COLOR_DASH_RING,
   COLOR_DASH_READY,
+  isVersusStage,
 } from '../core/constants';
 import type { Direction } from '../core/types';
 import { GameState } from '../game/state';
@@ -580,8 +581,9 @@ export class Renderer {
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const cy = FIELD_Y + FIELD_HEIGHT / 2 - 4;
     drawText(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), cy, COLOR_HUD_ICON);
-    if (state.escort) {
-      const mission = 'ESCORT';
+    if (state.escort || isVersusStage(state.stage)) {
+      const versus = isVersusStage(state.stage);
+      const mission = versus ? 'VERSUS' : 'ESCORT';
       drawText(
         ctx,
         atlas,
@@ -590,10 +592,22 @@ export class Renderer {
         cy + 20,
         '#31472c',
       );
+      if (versus) {
+        const matchup = `${state.playerCount}P VS ${state.playerCount}AI`;
+        drawText(
+          ctx,
+          atlas,
+          matchup,
+          cx - Math.round(textWidth(matchup) / 2),
+          cy + 32,
+          '#31472c',
+        );
+      }
     }
     // 不显眼的操作提示：教会玩家 P 可暂停（每关开场都会看到，不占游戏画面）。
     const hint = 'P = PAUSE';
-    drawText(ctx, atlas, hint, cx - Math.round(textWidth(hint) / 2), cy + 40, COLOR_HUD_ICON);
+    const hintY = isVersusStage(state.stage) ? cy + 50 : cy + 40;
+    drawText(ctx, atlas, hint, cx - Math.round(textWidth(hint) / 2), hintY, COLOR_HUD_ICON);
   }
 
   // 右侧 32px 灰栏 HUD：黑色图标/文字，经典 NES 布局。
@@ -609,13 +623,31 @@ export class Renderer {
     ctx.fillStyle = '#c2c6c3';
     ctx.fillRect((hudX + 3) * ART_SCALE, FIELD_Y * ART_SCALE, 27 * ART_SCALE, ART_SCALE);
     ctx.fillRect((hudX + 3) * ART_SCALE, FIELD_Y * ART_SCALE, ART_SCALE, FIELD_HEIGHT * ART_SCALE);
-    drawText(ctx, atlas, 'LEFT', hudX + 5, FIELD_Y + 5, '#242826');
+    const versus = isVersusStage(state.stage);
+    drawText(ctx, atlas, versus ? 'AI' : 'LEFT', hudX + 5, FIELD_Y + 5, '#242826');
 
-    // 剩余敌军图标：未出生队列每台一格 8×8，2 个一行，自顶向下。
-    for (let i = 0; i < state.enemyQueue.length; i++) {
-      const col = i % 2;
-      const row = Math.floor(i / 2);
-      drawTile(ctx, atlas.hudEnemy, hudX + 5 + col * 12, FIELD_Y + 16 + row * 10);
+    if (versus) {
+      // 对战关按 AI 席位显示各自备用命，与下方玩家“lives-1”口径一致。
+      for (let i = 0; i < state.versusLivesByEnemy.length; i++) {
+        const rowY = FIELD_Y + 18 + i * 22;
+        drawText(ctx, atlas, `A${i + 1}`, hudX + 5, rowY, COLOR_SMART_MARKER);
+        drawTile(ctx, atlas.hudEnemy, hudX + 5, rowY + 8);
+        drawText(
+          ctx,
+          atlas,
+          String(Math.max(0, state.versusLivesByEnemy[i] - 1)),
+          hudX + 20,
+          rowY + 9,
+          COLOR_HUD_ICON,
+        );
+      }
+    } else {
+      // 剩余敌军图标：未出生队列每台一格 8×8，2 个一行，自顶向下。
+      for (let i = 0; i < state.enemyQueue.length; i++) {
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        drawTile(ctx, atlas.hudEnemy, hudX + 5 + col * 12, FIELD_Y + 16 + row * 10);
+      }
     }
 
     // 玩家生命：每名在场玩家一行（自上而下堆叠于 32px 栏内）。

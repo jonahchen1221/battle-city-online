@@ -22,7 +22,12 @@ import {
   restoreEagleRingBrick,
   updateNeutralPowerups,
 } from './powerup';
-import { damagePlayerTank, dropDeathStar, pushBigExplosion } from './death';
+import {
+  damagePlayerTank,
+  dropDeathStar,
+  onVersusEnemyKilled,
+  pushBigExplosion,
+} from './death';
 import { resolveEscortHits, updateEscort } from './escort';
 import {
   BULLET_SIZE,
@@ -346,6 +351,7 @@ function damageEnemyTank(state: GameState, tank: GameState['tanks'][number], own
   state.events.push('explosionBig');
   if (tank.carriesPowerup) dropPowerup(state);
   if (tank.kind === 'smart') dropDeathStar(state, tank);
+  onVersusEnemyKilled(state, tank);
 }
 
 // 所有本帧死亡且允许爆燃的 F 弹各产生一次 24×24 炎爆。伤害按阵营筛选：玩家 F 只炸敌军，

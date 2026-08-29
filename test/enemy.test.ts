@@ -20,7 +20,7 @@ import {
 } from '../src/core/constants';
 
 test('escort stages refill their enemy composition while normal stages stay finite', () => {
-  const escortState = createGameState(104, 1, 20);
+  const escortState = createGameState(104, 1, 18);
   escortState.phase = 'playing';
   escortState.level = createEmptyLevel(escortState.level.cols, escortState.level.rows);
   escortState.enemyQueue = [];
@@ -34,7 +34,7 @@ test('escort stages refill their enemy composition while normal stages stay fini
   assert.equal(escortState.spawning.filter((spawn) => spawn.tank.kind !== 'player').length, 1);
   assert.equal(escortState.enemyQueue.length, STAGE_ENEMY_TOTAL - 1);
 
-  const normalState = createGameState(105, 1, 19);
+  const normalState = createGameState(105, 1, 17);
   normalState.phase = 'playing';
   normalState.level = createEmptyLevel();
   normalState.enemyQueue = [];
@@ -91,6 +91,59 @@ test('smart enemy uses pathfinding to close the distance to the nearest player',
   const after = Math.abs(player.x - smart.x) + Math.abs(player.y - smart.y);
 
   assert.ok(after < before, `expected smart tank to approach player: ${before} -> ${after}`);
+});
+
+test('smart enemies split across opposite flanks and reach clear firing positions', () => {
+  const state = createGameState(125, 1, 1);
+  const player = state.tanks[0];
+  const leftFlanker = createEnemy('smart', 4, 0);
+  const rightFlanker = createEnemy('smart', 5, 0);
+  Object.assign(player, { x: 160, y: 160, invulnTicks: 9999 });
+  Object.assign(leftFlanker, { x: 128, y: 48, aiTicks: 0 });
+  Object.assign(rightFlanker, { x: 192, y: 48, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, leftFlanker, rightFlanker];
+  state.spawning = [];
+  state.enemyQueue = [];
+  const firstBulletId = state.nextBulletId;
+
+  for (let tick = 0; tick < 240; tick++) update(state, [emptyInput()]);
+
+  assert.ok(leftFlanker.smartGoalX < player.x);
+  assert.equal(leftFlanker.smartGoalY, player.y);
+  assert.ok(rightFlanker.smartGoalX > player.x);
+  assert.equal(rightFlanker.smartGoalY, player.y);
+  assert.deepEqual(
+    { x: leftFlanker.x, y: leftFlanker.y },
+    { x: leftFlanker.smartGoalX, y: leftFlanker.smartGoalY },
+  );
+  assert.deepEqual(
+    { x: rightFlanker.x, y: rightFlanker.y },
+    { x: rightFlanker.smartGoalX, y: rightFlanker.smartGoalY },
+  );
+  assert.ok(state.nextBulletId > firstBulletId, 'both flanks should produce real firing lanes');
+});
+
+test('smart enemy abandons its preferred flank when steel blocks that firing lane', () => {
+  const state = createGameState(126, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 4, 0); // id 4 默认偏好玩家左侧。
+  const level = createEmptyLevel();
+  Object.assign(player, { x: 160, y: 160 });
+  Object.assign(smart, { x: 128, y: 48, aiTicks: 0 });
+  // 封死玩家左侧的横向弹道，但保留右侧与上下两条可达射线。
+  for (const row of [20, 21]) setCell(level, 18, row, Cell.STEEL);
+  state.phase = 'playing';
+  state.level = level;
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  updateEnemies(state, level);
+
+  assert.ok(smart.smartGoalX > player.x, `expected clear right flank, goal=${smart.smartGoalX}`);
+  assert.equal(smart.smartGoalY, player.y);
 });
 
 test('smart enemy predicts an incoming player bullet and sidesteps its firing lane', () => {
@@ -235,7 +288,7 @@ test('smart enemy ignores collision epsilon when every escape direction is seale
   assert.equal(smart.smartEscapeTicks, 0);
 });
 
-test('smart enemy takes a real detour when tanks block a corner', () => {
+test('smart enemy turns a blocked corner into a reachable firing position', () => {
   const state = createGameState(88, 1, 1);
   const player = state.tanks[0];
   const stationary = (id: number, x: number, y: number) => {
@@ -255,12 +308,13 @@ test('smart enemy takes a real detour when tanks block a corner', () => {
   state.spawning = [];
   state.enemyQueue = [];
 
-  // 旧逻辑无视动态占位，会在 x=29.25..48、y=16 之间永久往返；动态 A* 应在抵达
-  // 死角前就选择下方通路，并越过正前方阻挡者。
+  // 不必再执着于穿过正前方车阵：左侧纵向移动即可抵达对玩家的横向火力位。
   for (let tick = 0; tick < 120; tick++) updateEnemies(state, state.level);
 
   assert.ok(smart.y > 32, `expected a vertical detour, got (${smart.x}, ${smart.y})`);
-  assert.ok(smart.x > front.x, `expected to pass the front blocker, got x=${smart.x}`);
+  assert.ok(smart.smartGoalX < player.x);
+  assert.equal(smart.smartGoalY, player.y);
+  assert.ok(state.bullets.some((bullet) => bullet.ownerId === smart.id));
 });
 
 test('smart enemy aims and fires immediately when a player enters its firing lane', () => {
@@ -414,12 +468,12 @@ test('smart enemy can sustain a close-range duel after its shots intercept playe
 
   assert.equal(smart.alive, true, 'smart tank should keep parrying instead of dying during reload');
   assert.ok(
-    state.nextBulletId >= 12,
+    state.nextBulletId >= 10,
     `expected repeated counter-fire after interceptions, nextBulletId=${state.nextBulletId}`,
   );
 
-  // 玩家停止补射后，智能坦克应把下一发反击送到目标，而不是仍卡在旧的 20 帧冷却里。
-  for (let tick = 0; tick < 20 && player.alive; tick++) update(state, [emptyInput()]);
+  // 玩家停止补射后，智能坦克会先绕开最后一发来弹，再从规划好的火力位完成反击。
+  for (let tick = 0; tick < 120 && player.alive; tick++) update(state, [emptyInput()]);
   assert.equal(player.alive, false);
 });
 test('smart enemy detours toward an eligible nearby powerup', () => {

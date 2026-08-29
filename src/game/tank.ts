@@ -51,6 +51,7 @@ export interface TankState {
   id: number;
   kind: TankKind;
   playerIndex: number; // 玩家序号 0..3（决定出生点/配色/输入映射）；敌人恒为 -1
+  versusIndex: number; // 对战关 AI 席位 0..3（决定独立命数/复活点）；其他坦克为 -1
   x: number;
   y: number;
   dir: Direction;
@@ -65,6 +66,8 @@ export interface TankState {
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
   smartStuckTicks: number; // 智能坦克连续尝试追踪却没有位移的帧数
   smartEscapeTicks: number; // 智能坦克保持当前脱困或闪避方向的剩余帧数
+  smartGoalX: number; // 智能坦克当前战术射击位 x；无目标时为 -1
+  smartGoalY: number; // 智能坦克当前战术射击位 y；无目标时为 -1
   escortFarTicks: number; // 护送关普通敌军落在车后且不在玩家视野内的连续帧数；其他情况恒为 0
   invulnTicks: number; // 护盾剩余帧：>0 时对方子弹穿过、不受伤
   level: number; // star 等级 0..3；玩家路线见 upgradePlayerTank，死亡 / 复活归 0
@@ -133,6 +136,7 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     id,
     kind: 'player',
     playerIndex,
+    versusIndex: -1,
     x: p.x,
     y: p.y,
     dir: 'up',
@@ -147,6 +151,8 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     aiTicks: 0,
     smartStuckTicks: 0,
     smartEscapeTicks: 0,
+    smartGoalX: -1,
+    smartGoalY: -1,
     escortFarTicks: 0,
     // 实体化即获无敌：开局直接入场、复活经出生闪光后入场，两条路径都从此值起算。
     invulnTicks: PLAYER_INVULN_TICKS,
@@ -203,6 +209,7 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     id,
     kind,
     playerIndex: -1, // 敌人无玩家序号
+    versusIndex: -1,
     x: p.x,
     y: p.y,
     dir: 'down',
@@ -218,6 +225,8 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     aiTicks: kind === 'smart' ? 0 : AI_DECISION_MIN_TICKS,
     smartStuckTicks: 0,
     smartEscapeTicks: 0,
+    smartGoalX: -1,
+    smartGoalY: -1,
     escortFarTicks: 0,
     invulnTicks: 0, // 敌方无出生护盾，但可拾取 helmet 获得护盾
     level: 0,
@@ -237,6 +246,15 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     dashReadyFlashTicks: 0,
     prevDash: false,
   };
+}
+
+// 对战关的智能对手：席位和 id 在多次复活间保持稳定，便于联机插值与战术分工。
+// 复活与玩家使用同样的出生护盾，避免在顶部出生点被预瞄秒杀。
+export function createVersusEnemy(versusIndex: number, id: number): TankState {
+  const tank = createEnemy('smart', id, versusIndex);
+  tank.versusIndex = versusIndex;
+  tank.invulnTicks = PLAYER_INVULN_TICKS;
+  return tank;
 }
 
 const EPS = 1e-6;

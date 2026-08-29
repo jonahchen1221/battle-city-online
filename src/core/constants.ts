@@ -20,7 +20,7 @@ export const FIELD_HEIGHT = FIELD_ROWS * SUBTILE; // 240
 export const TICKS_PER_SECOND = 60;
 
 // ── 护送关 ──
-// 关卡循环为「普通 → 护送 → Boss」三段（见 stageKind）：护送关是每组的第 2 关。
+// 关卡循环为「普通 → 护送 → Boss → 对战」（见 stageKind）：护送关是每组的第 2 关。
 // 护送关世界是普通战场的 2×3，渲染仍只展示 320×240 视口。
 export const ESCORT_FIELD_COLS = FIELD_COLS * 2; // 80 子格 = 640px
 export const ESCORT_FIELD_ROWS = FIELD_ROWS * 3; // 90 子格 = 720px
@@ -178,20 +178,29 @@ export const SMART_AI_BRICK_COST = 6;
 export const SMART_AI_DODGE_LOOKAHEAD_TICKS = 36;
 // 刚移出弹道后继续侧移片刻，避免 A* 立即把坦克拉回尚未通过的炮弹前。
 export const SMART_AI_DODGE_COMMIT_TICKS = 8;
+// 智能坦克围绕目标搜索射击位的距离带：保持中距离，避免只会贴脸追踪。
+export const SMART_AI_FIRING_MIN_DISTANCE = 48;
+export const SMART_AI_FIRING_IDEAL_DISTANCE = 80;
+export const SMART_AI_FIRING_MAX_DISTANCE = 112;
+export const SMART_AI_FIRING_DISTANCE_STEP = 16;
+// 不同 id 偏向不同侧翼；路径明显更短或首选侧无射线时仍可改走其他侧。
+export const SMART_AI_FLANK_SIDE_COST = 16;
+// 候选射线上有砖时降低优先级：可清障，但优先抢占已经打通的火力线。
+export const SMART_AI_FIRING_BRICK_PENALTY = 12;
 // 关卡敌军总数（单一可调常量；暂不随人数变化）。各档 STAGE_ENEMY_MIX 之和均等于此值。
 // Boss 关不走有限队列（编成为空），故不受此值约束。
 export const STAGE_ENEMY_TOTAL = 20;
 
-// ── 关卡编排：普通 → 护送 → Boss 三段循环 ──
-// 一个循环组（“组”）含三关，共 STAGE_GROUP_COUNT 组 = STAGE_COUNT 关；通关第 30 关回卷第 1 关。
-//   组 t 的三关关号为 3t-2（普通）/ 3t-1（护送）/ 3t（Boss）。
+// ── 关卡编排：普通 → 护送 → Boss → 对战 四段循环 ──
+// 一个循环组（“组”）含四关，共 STAGE_GROUP_COUNT 组 = STAGE_COUNT 关；通关第 40 关回卷第 1 关。
+//   组 t 的四关关号为 4t-3（普通）/ 4t-2（护送）/ 4t-1（Boss）/ 4t（对战）。
 //   普通关取第 t 张普通图与第 t 档敌军编成；护送关取第 ((t-1) % 路线数) 条路线；
-//   Boss 关竞技场 A/B 交替（t 奇 A、t 偶 B），最终战（第 30 关）用 B 池小兵。
-export const STAGE_CYCLE = 3; // 一组的关数（普通 / 护送 / Boss 各一）
+//   Boss 关竞技场按组号推进；对战关在 6 张专用竞技场中循环取图。
+export const STAGE_CYCLE = 4; // 一组的关数（普通 / 护送 / Boss / 对战各一）
 export const STAGE_GROUP_COUNT = 10; // 组数（= 普通图张数 = 敌军编成档数）
-export const STAGE_COUNT = STAGE_CYCLE * STAGE_GROUP_COUNT; // 30
+export const STAGE_COUNT = STAGE_CYCLE * STAGE_GROUP_COUNT; // 40
 
-export type StageKind = 'normal' | 'escort' | 'boss';
+export type StageKind = 'normal' | 'escort' | 'boss' | 'versus';
 
 // 把任意关号（含回卷 / 越界）归一到 1..STAGE_COUNT。
 export function normalizeStage(stage: number): number {
@@ -204,13 +213,14 @@ export function stageGroup(stage: number): number {
   return Math.ceil(normalizeStage(stage) / STAGE_CYCLE);
 }
 
-// 关卡类型：归一后按 %3 分流（1 → 普通、2 → 护送、0 → Boss）。
-// isBossStage / isEscortStage 一律派生自它，绝不再各自算关号。
+// 关卡类型：归一后按每组的 1 / 2 / 3 / 0 分流。
+// 各 is*Stage 一律派生自它，绝不再各自算关号。
 export function stageKind(stage: number): StageKind {
   const slot = normalizeStage(stage) % STAGE_CYCLE;
   if (slot === 1) return 'normal';
   if (slot === 2) return 'escort';
-  return 'boss';
+  if (slot === 3) return 'boss';
+  return 'versus';
 }
 
 export function isBossStage(stage: number): boolean {
@@ -221,10 +231,14 @@ export function isEscortStage(stage: number): boolean {
   return stageKind(stage) === 'escort';
 }
 
-// Boss 关的关号（1-based）：[3, 6, …, 30]，由编排派生，不再手写。
+export function isVersusStage(stage: number): boolean {
+  return stageKind(stage) === 'versus';
+}
+
+// Boss 关的关号（1-based）：[3, 7, …, 39]，由编排派生，不再手写。
 export const BOSS_STAGES: ReadonlyArray<number> = Array.from(
   { length: STAGE_GROUP_COUNT },
-  (_, i) => (i + 1) * STAGE_CYCLE,
+  (_, i) => i * STAGE_CYCLE + 3,
 );
 
 // 各组的敌军编成（普通关与护送关共用，总数均为 STAGE_ENEMY_TOTAL，逐组升级），按 stageGroup 取。
@@ -472,7 +486,7 @@ export const MACHINE_MAX_BULLETS = 3;
 export const LASER_SPRITE_SIZE = 8;
 export const LASER_SPRITE_OFFSET = (LASER_SPRITE_SIZE - BULLET_SIZE) / 2; // 2
 
-// ── Boss 关（每组第 3 关：3 / 6 / … / 30）──
+// ── Boss 关（每组第 3 关：3 / 7 / … / 39）──
 // Boss 是一台 32×32 巨型坦克（普通坦克的 2×2，即 4 格大小）：对坦克是实心障碍，
 // 对小兵子弹是吸收体，能在战场内四向移动，并以双发破障激光打通砖墙（钢墙打不穿，只能绕行）。
 // 只有玩家子弹能对它造成伤害（受击次数制，见 BOSS_DAMAGE_*）。全部数值以 tick 计。
@@ -497,7 +511,7 @@ export const BOSS_BREACH_BULLET_SPEED = 2;
 export const BOSS_OWNER_ID = 0;
 
 // ── Boss 序号（b）──
-// 第 b 位 Boss = 第 b 组的第 3 关（关号 3b），b ∈ 1..STAGE_GROUP_COUNT(10)。
+// 第 b 位 Boss = 第 b 组的第 3 关（关号 4b-1），b ∈ 1..STAGE_GROUP_COUNT(10)。
 // 竞技场、血量、攻击间隔、技能解锁全部按它索引，绝不再各自算关号。
 export function bossOrdinalForStage(stage: number): number {
   return stageGroup(stage);
@@ -692,12 +706,14 @@ export const BOSS_MINION_CARRIER_EVERY = 2;
 export function bossMinionsOnField(playerCount: number): number {
   return BOSS_MINION_MAX + Math.max(0, playerCount - 1);
 }
-// 各 Boss 关的小兵种类池（按 state.rng 等概率取）：最终战（第 STAGE_COUNT 关）用 B 池，其余用 A 池。
+// 各 Boss 关的小兵种类池（按 state.rng 等概率取）：第 10 组最终 Boss 用 B 池，其余用 A 池。
 export const BOSS_MINION_KINDS_A: ReadonlyArray<EnemyKind> = ['basic', 'fast'];
 export const BOSS_MINION_KINDS_B: ReadonlyArray<EnemyKind> = ['power', 'smart'];
 // 某 Boss 关的小兵池（定时补充与 summon 技能共用同一张表，绝不各自判关号）。
 export function bossMinionKindsForStage(stage: number): ReadonlyArray<EnemyKind> {
-  return normalizeStage(stage) === STAGE_COUNT ? BOSS_MINION_KINDS_B : BOSS_MINION_KINDS_A;
+  return isBossStage(stage) && stageGroup(stage) === STAGE_GROUP_COUNT
+    ? BOSS_MINION_KINDS_B
+    : BOSS_MINION_KINDS_A;
 }
 
 // 中立道具对 Boss 的控制效果（玩家拾取时生效，与敌军的冻结 / 减速另行计算）：

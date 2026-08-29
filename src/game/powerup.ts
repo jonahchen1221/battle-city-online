@@ -30,6 +30,7 @@ import {
   NEUTRAL_POWERUP_RETRY_TICKS,
   NEUTRAL_POWERUP_MAX_TRIES,
   ESCORT_TIME_BONUS_TICKS,
+  isVersusStage,
 } from '../core/constants';
 import type { Rng } from '../core/rng';
 import { Cell, setCell, getCell, levelHasWater } from './level';
@@ -38,10 +39,11 @@ import {
   EnemyKind,
   WeaponKind,
   isPlayerTank,
+  playerMaxHpForLevel,
   upgradePlayerTank,
 } from './tank';
 import type { GameState } from './state';
-import { destroyPlayerTank, dropDeathStar } from './death';
+import { destroyPlayerTank, dropDeathStar, onVersusEnemyKilled } from './death';
 
 // 道具系统（纯模拟层）：一切随机取自 state.rng，可复现；GameState 保持可序列化。
 // 六种经典道具 + 四种魂斗罗风格武器道具 + 五种“中立”道具（无水关排除船，见 updateNeutralPowerups）。
@@ -290,6 +292,8 @@ export type PowerupCollectorSide = 'player' | 'enemy' | 'any';
 export function canSmartTankPickup(tank: TankState, kind: PowerupKind): boolean {
   if (tank.kind !== 'smart' || !tank.alive) return false;
   switch (kind) {
+    case 'tank':
+      return tank.versusIndex >= 0;
     case 'helmet':
       return tank.invulnTicks <= 0;
     case 'star':
@@ -360,6 +364,9 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
     case 'tank':
       if (player) {
         state.livesByPlayer[collector.playerIndex]++;
+      } else if (collector.versusIndex >= 0) {
+        // 对战 AI 的 1UP 只增加它自己席位的命数，绝不绕过 N vs N 规则往普通敌军队列塞援军。
+        state.versusLivesByEnemy[collector.versusIndex]++;
       } else {
         // 敌军 1UP：在本关队列末尾追加一台同类型援军。
         state.enemyQueue.push(collector.kind as EnemyKind);
@@ -418,6 +425,9 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
             state.escort.timeLimitTicks,
             state.escort.timeLeftTicks + ESCORT_TIME_BONUS_TICKS,
           );
+        } else if (isVersusStage(state.stage)) {
+          // 对战关没有基地可修：扳手改为修复拾取者车体，与 AI 拾取时的自我维修对称。
+          collector.hp = playerMaxHpForLevel(collector.level);
         } else if (state.shovelTicks > 0) fortifyEagleRing(state);
         else restoreEagleRingBrick(state);
       } else {
@@ -456,6 +466,7 @@ function grenadeKillOpponents(state: GameState, collector: TankState): void {
     t.hp = 0;
     t.alive = false;
     if (t.kind === 'smart') dropDeathStar(state, t);
+    onVersusEnemyKilled(state, t);
     const kind = t.kind as EnemyKind;
     state.scoreByPlayer[collector.playerIndex] += ENEMY_SCORE[kind];
     state.killsByPlayer[collector.playerIndex][kind]++;
@@ -472,7 +483,7 @@ function grenadeKillOpponents(state: GameState, collector: TankState): void {
 // 敌方 shovel：清空鹰巢外围护墙环；鹰巢本体不受影响。
 // Boss 关无鹰巢，护墙相关的三个操作一律跳过（否则会在竞技场底部凭空造出一圈墙）。
 export function clearEagleRing(state: GameState): void {
-  if (state.boss || state.escort) return;
+  if (state.boss || state.escort || isVersusStage(state.stage)) return;
   for (const { col, row } of eagleRingCells()) {
     setCell(state.level, col, row, Cell.EMPTY);
   }
@@ -480,7 +491,7 @@ export function clearEagleRing(state: GameState): void {
 
 // 把鹰巢护盾环各格设为完整钢块（shovel 生效）。
 export function fortifyEagleRing(state: GameState): void {
-  if (state.boss || state.escort) return;
+  if (state.boss || state.escort || isVersusStage(state.stage)) return;
   for (const { col, row } of eagleRingCells()) {
     setCell(state.level, col, row, Cell.STEEL);
   }
@@ -488,7 +499,7 @@ export function fortifyEagleRing(state: GameState): void {
 
 // 把鹰巢护盾环各格恢复为完整砖块（shovel 到期；即使原先受损 / 被毁也重建 —— 经典表现）。
 export function restoreEagleRingBrick(state: GameState): void {
-  if (state.boss || state.escort) return;
+  if (state.boss || state.escort || isVersusStage(state.stage)) return;
   for (const { col, row } of eagleRingCells()) {
     setCell(state.level, col, row, Cell.BRICK);
   }

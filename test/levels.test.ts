@@ -15,14 +15,18 @@ import {
   stageGroup,
   stageKind,
 } from '../src/core/constants';
-import { LevelState, getCell, isSolidForTank } from '../src/game/level';
-import { BOSS_ARENAS, STAGES } from '../src/game/levels';
+import { Cell, LevelState, getCell, isSolidForTank } from '../src/game/level';
+import { BOSS_ARENAS, STAGES, VERSUS_ARENAS } from '../src/game/levels';
 
-// 全部 40×30 战场原型：十张普通图 + 十张 Boss 竞技场（护送关是 80×90 世界，另见 escort.test.ts）。
+// 全部 40×30 战场原型：普通图 + Boss 竞技场 + 对战图（护送关是 80×90 世界）。
 const ARENAS: Array<{ name: string; level: LevelState }> = [
   ...STAGES.map((level, i) => ({ name: `普通图 ${i + 1}（第 ${i * STAGE_CYCLE + 1} 关）`, level })),
   ...BOSS_ARENAS.map((level, i) => ({
-    name: `Boss 竞技场 ${i + 1}（第 ${(i + 1) * STAGE_CYCLE} 关）`,
+    name: `Boss 竞技场 ${i + 1}（第 ${i * STAGE_CYCLE + 3} 关）`,
+    level,
+  })),
+  ...VERSUS_ARENAS.map((level, i) => ({
+    name: `对战竞技场 ${i + 1}`,
     level,
   })),
 ];
@@ -71,13 +75,14 @@ function reachableFromSpawns(level: LevelState): Set<number> {
   return seen;
 }
 
-test('三段循环：30 关、10 张普通图 + 10 张 Boss 竞技场，全部被 parseLevel 解析成 40×30', () => {
-  assert.equal(STAGE_COUNT, 30);
-  assert.equal(STAGE_CYCLE, 3);
+test('四段循环：40 关、10 张普通图 + 10 张 Boss 图 + 6 张对战图', () => {
+  assert.equal(STAGE_COUNT, 40);
+  assert.equal(STAGE_CYCLE, 4);
   assert.equal(STAGE_GROUP_COUNT, 10);
   assert.equal(STAGES.length, STAGE_GROUP_COUNT);
   assert.equal(BOSS_ARENAS.length, STAGE_GROUP_COUNT);
-  assert.deepEqual([...BOSS_STAGES], [3, 6, 9, 12, 15, 18, 21, 24, 27, 30]);
+  assert.equal(VERSUS_ARENAS.length, 6);
+  assert.deepEqual([...BOSS_STAGES], [3, 7, 11, 15, 19, 23, 27, 31, 35, 39]);
   for (const { name, level } of ARENAS) {
     assert.equal(level.cols, FIELD_COLS, `${name} 列数`);
     assert.equal(level.rows, FIELD_ROWS, `${name} 行数`);
@@ -104,31 +109,52 @@ test('每张 40×30 战场都连通：上半场每个可站位都能从玩家出
   }
 });
 
-test('stageKind：1..30 严格按普通 → 护送 → Boss 循环，第 30 关后回卷第 1 关', () => {
+test('六张对战竞技场均无鹰巢，上下双方出生席位全部可站立', () => {
+  const enemySpawnCols = [0, 13, 25, 38];
+  for (let i = 0; i < VERSUS_ARENAS.length; i++) {
+    const level = VERSUS_ARENAS[i];
+    assert.equal(level.cells.includes(Cell.EAGLE), false, `对战图 ${i + 1} 不应有鹰巢`);
+    for (const col of enemySpawnCols) {
+      assert.equal(tankFits(level, col, 0), true, `对战图 ${i + 1} AI 出生席 ${col}`);
+    }
+    for (const spawn of PLAYER_SPAWN_POINTS) {
+      assert.equal(
+        tankFits(level, spawn.x / SUBTILE, spawn.y / SUBTILE),
+        true,
+        `对战图 ${i + 1} 玩家出生席`,
+      );
+    }
+  }
+});
+
+test('stageKind：1..40 严格按普通 → 护送 → Boss → 对战循环', () => {
   const sequence = Array.from({ length: STAGE_COUNT }, (_, i) => stageKind(i + 1));
   const expected = Array.from({ length: STAGE_COUNT }, (_, i) => {
     const slot = (i + 1) % STAGE_CYCLE;
-    return slot === 1 ? 'normal' : slot === 2 ? 'escort' : 'boss';
+    return slot === 1 ? 'normal' : slot === 2 ? 'escort' : slot === 3 ? 'boss' : 'versus';
   });
   assert.deepEqual(sequence, expected);
-  assert.deepEqual(sequence.slice(0, 6), [
+  assert.deepEqual(sequence.slice(0, 8), [
     'normal',
     'escort',
     'boss',
+    'versus',
     'normal',
     'escort',
     'boss',
+    'versus',
   ]);
   assert.equal(sequence.filter((k) => k === 'normal').length, STAGE_GROUP_COUNT);
   assert.equal(sequence.filter((k) => k === 'escort').length, STAGE_GROUP_COUNT);
   assert.equal(sequence.filter((k) => k === 'boss').length, STAGE_GROUP_COUNT);
-  assert.equal(sequence[STAGE_COUNT - 1], 'boss', '第 30 关是最终战');
+  assert.equal(sequence.filter((k) => k === 'versus').length, STAGE_GROUP_COUNT);
+  assert.equal(sequence[STAGE_COUNT - 1], 'versus', '第 40 关是对战');
 
-  // 回卷：第 31 关 = 第 1 关，第 60 关 = 第 30 关；组号一并归一。
+  // 回卷：第 41 关 = 第 1 关；组号一并归一。
   for (let stage = 1; stage <= STAGE_COUNT; stage++) {
     assert.equal(normalizeStage(stage + STAGE_COUNT), stage);
-    assert.equal(stageKind(stage + STAGE_COUNT), stageKind(stage), `第 ${stage + 30} 关类型`);
-    assert.equal(stageGroup(stage + STAGE_COUNT), stageGroup(stage), `第 ${stage + 30} 关组号`);
+    assert.equal(stageKind(stage + STAGE_COUNT), stageKind(stage), `第 ${stage + STAGE_COUNT} 关类型`);
+    assert.equal(stageGroup(stage + STAGE_COUNT), stageGroup(stage), `第 ${stage + STAGE_COUNT} 关组号`);
   }
   assert.equal(stageKind(STAGE_COUNT + 1), 'normal');
   assert.equal(stageGroup(STAGE_COUNT + 1), 1);

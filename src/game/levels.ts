@@ -47,7 +47,7 @@ export function parseLevel(rows: string[]): LevelState {
 //（列 18-21 行 27 / 列 18,21 行 28-29）；顶部两行（0-1）全空供敌军出生；
 // 底部玩家出生列（6/14/24/32）在行 28-29 留空。
 // Boss 竞技场（每组第 3 关）的差异见文件末尾 STAGE_BOSS_* 的注释：无鹰巢、上半场正中留 Boss 空域。
-// 命名的数字是“第几张普通图”（= 组号 t），对应关号为 3t-2：STAGE_1 → 第 1 关、STAGE_10 → 第 28 关。
+// 命名的数字是“第几张普通图”（= 组号 t），对应关号为 4t-3：STAGE_1 → 第 1 关、STAGE_10 → 第 37 关。
 
 // 第 1 张（第 1 关）：经典竖直砖柱走廊 —— 9 对 2 子格宽砖柱成上、中两带；正中 2×2 钢块，两侧各一段横向砖墙。
 // prettier-ignore
@@ -84,7 +84,7 @@ export const STAGE_1_ROWS = [ // 经典第 1 关
   '..................BEEB..................', // 29
 ];
 
-// 第 2 张（第 4 关）：砖块迷宫 + 树林簇（坦克可藏身）+ 两块小钢块（列 2-3 / 36-37 行 13-14）。
+// 第 2 张（第 5 关）：砖块迷宫 + 树林簇（坦克可藏身）+ 两块小钢块（列 2-3 / 36-37 行 13-14）。
 // prettier-ignore
 const STAGE_2_ROWS = [
   '........................................', // 0
@@ -119,7 +119,7 @@ const STAGE_2_ROWS = [
   '..................BEEB..................', // 29
 ];
 
-// 第 3 张（第 7 关）：横向水道大河（行 13-14，含 3 座桥：列 8-9 / 18-21 / 30-31）+ 砖块 + 钢块。
+// 第 3 张（第 9 关）：横向水道大河（行 13-14，含 3 座桥：列 8-9 / 18-21 / 30-31）+ 砖块 + 钢块。
 // prettier-ignore
 const STAGE_3_ROWS = [
   '........................................', // 0
@@ -154,7 +154,7 @@ const STAGE_3_ROWS = [
   '..................BEEB..................', // 29
 ];
 
-// 第 4 张（第 10 关）：正中一大片冰面（列 8-31 行 6-19，坦克在其上滑行）+ 四周砖块结构。
+// 第 4 张（第 13 关）：正中一大片冰面（列 8-31 行 6-19，坦克在其上滑行）+ 四周砖块结构。
 // prettier-ignore
 const STAGE_4_ROWS = [
   '........................................', // 0
@@ -189,7 +189,7 @@ const STAGE_4_ROWS = [
   '..................BEEB..................', // 29
 ];
 
-// 第 5 张（第 13 关）：要塞终局 —— 重钢块 + 砖块，小水沟护城河，少量树林。
+// 第 5 张（第 17 关）：要塞终局 —— 重钢块 + 砖块，小水沟护城河，少量树林。
 // prettier-ignore
 const STAGE_5_ROWS = [
   '........................................', // 0
@@ -232,7 +232,7 @@ const STAGE_5_ROWS = [
 // 缺口，全图即天然连通、不会出现把敌军困死的死袋（见 test/levels.test.ts 的 BFS 校验）。
 // 底部三行沿用经典鹰巢 + 砖环；行 24–26 留空，供玩家在基地前机动。
 
-// 第 6 张（第 16 关）：钢骨阵地 —— 砖带中成对嵌入钢柱（钢块自本关起明显增多），
+// 第 6 张（第 21 关）：钢骨阵地 —— 砖带中成对嵌入钢柱（钢块自本关起明显增多），
 // 最后一道墙带（行 22-23）把鹰巢正上方封成整片砖墙，进攻只能绕侧翼。
 // prettier-ignore
 const STAGE_6_ROWS = [
@@ -268,7 +268,7 @@ const STAGE_6_ROWS = [
   '..................BEEB..................', // 29
 ];
 
-// 第 7 张（第 19 关）：断流河谷 —— 两道水路把战场切成三段。
+// 第 7 张（第 25 关）：断流河谷 —— 两道水路把战场切成三段。
 // 主河（行 12-13）留 3 条陆桥（列 4-7 / 18-21 / 32-35）；
 // 二号河（行 20-21）只在两侧留口（列 8-13 / 26-31）与主河错开，逼迫南北往返绕行。
 // prettier-ignore
@@ -305,7 +305,7 @@ const STAGE_7_ROWS = [
   '..................BEEB..................', // 29
 ];
 
-// 第 8 张（第 22 关）：冰原密林 —— 中央一整片冰面（行 4-18）让坦克刹不住车，
+// 第 8 张（第 29 关）：冰原密林 —— 中央一整片冰面（行 4-18）让坦克刹不住车，
 // 冰面上散布砖 / 钢障碍与树丛，进出口两侧各有树林遮蔽，视野与走位双重考验。
 // prettier-ignore
 const STAGE_8_ROWS = [
@@ -341,7 +341,7 @@ const STAGE_8_ROWS = [
   '..................BEEB..................', // 29
 ];
 
-// 第 9 张（第 25 关）：钢铁迷宫 —— 六道几乎全钢的厚墙，缺口逐层错位且只有 2 子格宽，
+// 第 9 张（第 33 关）：钢铁迷宫 —— 六道几乎全钢的厚墙，缺口逐层错位且只有 2 子格宽，
 // 机动空间被压到最小；普通炮打不穿钢，只能靠走位、满级星或钻头开路。
 // prettier-ignore
 const STAGE_9_ROWS = [
@@ -377,7 +377,7 @@ const STAGE_9_ROWS = [
   '..................BEEB..................', // 29
 ];
 
-// 第 10 张（第 28 关）：决战要塞 —— 上半场钢 / 水 / 冰 / 树四种地形混编，
+// 第 10 张（第 37 关）：决战要塞 —— 上半场钢 / 水 / 冰 / 树四种地形混编，
 // 鹰巢前是两道封死中路的厚墙（行 18-19 与 22-23，缺口左右错位）外加行 26 的钢顶盖：
 // 正上方完全打不进，必须从两翼窄口迂回，是全场最硬的一关。
 // prettier-ignore
@@ -414,7 +414,7 @@ const STAGE_10_ROWS = [
   '..................BEEB..................', // 29
 ];
 
-// ── Boss 竞技场（每组第 3 关：3 / 6 / … / 30；第 b 张对应第 b 位 Boss）──
+// ── Boss 竞技场（每组第 3 关：3 / 7 / … / 39；第 b 张对应第 b 位 Boss）──
 // 与普通关的三条差异：
 //   1. **没有鹰巢**（无 E 字符）—— 因而没有“鹰巢被毁”这条败因，过关条件改为击杀 Boss；
 //   2. 上半场正中留出 Boss 的初始空域（子格 cols 17–22 × rows 5–12 全空 = 32×32 车体 + 1 格边距）；
@@ -464,7 +464,7 @@ const STAGE_BOSS_1_ROWS = [
   '..........BB......BBBB......BB..........', // 29
 ];
 
-// 竞技场 2「残垣角斗场」（第 6 关）：第 1 张的残破版 —— 中路掩体被打薄成两根短柱，
+// 竞技场 2「残垣角斗场」（第 7 关）：第 1 张的残破版 —— 中路掩体被打薄成两根短柱，
 // 底部只剩一块孤立砖墩，钢柱位置不变但砖块开始退场。
 // prettier-ignore
 const STAGE_BOSS_2_ROWS = [
@@ -500,7 +500,7 @@ const STAGE_BOSS_2_ROWS = [
   '..................BBBB..................', // 29
 ];
 
-// 竞技场 3「交叉火网」（第 9 关）：掩体带互相错开成十字通道，钢块首次占到四成 ——
+// 竞技场 3「交叉火网」（第 11 关）：掩体带互相错开成十字通道，钢块首次占到四成 ——
 // 每条通道都能被整列激光顺着打通，砖墩只够挡一次弹幕。
 // prettier-ignore
 const STAGE_BOSS_3_ROWS = [
@@ -536,7 +536,7 @@ const STAGE_BOSS_3_ROWS = [
   '..................BBBB..................', // 29
 ];
 
-// 竞技场 4「钢齿回廊」（第 12 关）：钢占比过半 —— 两翼全钢的“齿”把左右通道咬成窄口，
+// 竞技场 4「钢齿回廊」（第 15 关）：钢占比过半 —— 两翼全钢的“齿”把左右通道咬成窄口，
 // 砖块只剩中路几墩，Boss 的破障激光在这里基本无用武之地（钢打不穿），玩家也一样。
 // prettier-ignore
 const STAGE_BOSS_4_ROWS = [
@@ -572,7 +572,7 @@ const STAGE_BOSS_4_ROWS = [
   '..................BBBB..................', // 29
 ];
 
-// 竞技场 5「断桥水岸」（第 15 关）：首次引入水域 —— 行 16-17 两道宽河把战场腰斩，
+// 竞技场 5「断桥水岸」（第 19 关）：首次引入水域 —— 行 16-17 两道宽河把战场腰斩，
 // 只留正中一座 12 子格的桥；被弹幕逼下桥就得绕整整半张图回来。
 // prettier-ignore
 const STAGE_BOSS_5_ROWS = [
@@ -608,7 +608,7 @@ const STAGE_BOSS_5_ROWS = [
   '..................BBBB..................', // 29
 ];
 
-// 竞技场 6「寒霜擂台」（第 18 关）：下半场两条整幅冰带 —— 躲弹幕时刹不住车，
+// 竞技场 6「寒霜擂台」（第 23 关）：下半场两条整幅冰带 —— 躲弹幕时刹不住车，
 // 一个急停就滑进下一发弹道；掩体同时再减一档。
 // prettier-ignore
 const STAGE_BOSS_6_ROWS = [
@@ -644,7 +644,7 @@ const STAGE_BOSS_6_ROWS = [
   '..................BBBB..................', // 29
 ];
 
-// 竞技场 7「钢铁囚笼」（第 21 关）：钢占比逼近四分之三 —— 掩体几乎全是打不穿的钢柱，
+// 竞技场 7「钢铁囚笼」（第 27 关）：钢占比逼近四分之三 —— 掩体几乎全是打不穿的钢柱，
 // 冰带扩到 12 子格宽，机动空间被彻底压死。
 // prettier-ignore
 const STAGE_BOSS_7_ROWS = [
@@ -680,7 +680,7 @@ const STAGE_BOSS_7_ROWS = [
   '..................BBBB..................', // 29
 ];
 
-// 竞技场 8「冰河裂谷」（第 24 关）：水与冰同场 —— 行 16-17 的裂谷只留两处窄渡口，
+// 竞技场 8「冰河裂谷」（第 31 关）：水与冰同场 —— 行 16-17 的裂谷只留两处窄渡口，
 // 渡口两端全是冰面，抢渡时既没掩体也停不住。
 // prettier-ignore
 const STAGE_BOSS_8_ROWS = [
@@ -716,7 +716,7 @@ const STAGE_BOSS_8_ROWS = [
   '..................BBBB..................', // 29
 ];
 
-// 竞技场 9「熔渣孤岛」（第 27 关）：两道水沟把战场切成三段孤岛，中间夹一整幅冰带，
+// 竞技场 9「熔渣孤岛」（第 35 关）：两道水沟把战场切成三段孤岛，中间夹一整幅冰带，
 // 掩体只剩零星钢柱（砖块几近绝迹）—— 全技能解锁的 9 号 Boss 在此几乎无处可躲。
 // prettier-ignore
 const STAGE_BOSS_9_ROWS = [
@@ -752,7 +752,7 @@ const STAGE_BOSS_9_ROWS = [
   '........................................', // 29
 ];
 
-// 竞技场 10「末日王座」（第 30 关，最终战）：正中一座全钢王座平台（cols 17-22 / rows 19-22），
+// 竞技场 10「末日王座」（第 39 关，最终战）：正中一座全钢王座平台（cols 17-22 / rows 19-22），
 // 四周环形水沟（cols 10-29 / rows 16-25）只在正上、正下留两座 4 子格宽的桥；
 // 王座外圈铺冰，全图除王座与两根钢柱外再无任何掩体 —— 狂暴 Boss 的最终舞台。
 // prettier-ignore
@@ -789,7 +789,7 @@ const STAGE_BOSS_10_ROWS = [
   '........................................', // 29
 ];
 
-// 十张普通关地形，按组号取（STAGES[t-1] = 第 t 组的普通关 = 第 3t-2 关）。
+// 十张普通关地形，按组号取（STAGES[t-1] = 第 t 组的普通关 = 第 4t-3 关）。
 // 启动时一次性解析，越界/长度错误会立即抛出。
 export const STAGES: ReadonlyArray<LevelState> = [
   STAGE_1_ROWS,
@@ -818,6 +818,136 @@ export const BOSS_ARENAS: ReadonlyArray<LevelState> = [
   STAGE_BOSS_10_ROWS,
 ].map(parseLevel);
 
+// ── 对战竞技场 ──
+// 对战关不设鹰巢，上方四个敌方席位与下方四个玩家席位镜像对峙。地图用程序化的
+// 对称矩形构造，便于明确保证 2×2 子格车体的通路宽度；最后统一清理出生区和入场通道。
+type VersusCellChar = '.' | 'B' | 'S' | 'W' | 'T' | 'I';
+type VersusArenaPainter = (
+  fill: (cell: VersusCellChar, col: number, row: number, width: number, height: number) => void,
+) => void;
+
+function buildVersusArena(paint: VersusArenaPainter): LevelState {
+  const grid: VersusCellChar[][] = Array.from(
+    { length: FIELD_ROWS },
+    () => new Array<VersusCellChar>(FIELD_COLS).fill('.'),
+  );
+  const fill = (
+    cell: VersusCellChar,
+    col: number,
+    row: number,
+    width: number,
+    height: number,
+  ): void => {
+    for (let r = Math.max(0, row); r < Math.min(FIELD_ROWS, row + height); r++) {
+      for (let c = Math.max(0, col); c < Math.min(FIELD_COLS, col + width); c++) {
+        grid[r][c] = cell;
+      }
+    }
+  };
+  paint(fill);
+
+  // AI 顶部四席与玩家底部四席各留 4 行纵深，防止出生闪光被地形卡住。
+  for (const col of [0, 13, 25, 38]) fill('.', col, 0, 2, 4);
+  for (const col of [6, 14, 24, 32]) fill('.', col, FIELD_ROWS - 4, 2, 4);
+  return parseLevel(grid.map((row) => row.join('')));
+}
+
+// 1. 十字火网：中心钢骨把直冲路线分成四条侧翼，队友需要交叉架枪和轮转掩护。
+const VERSUS_1 = buildVersusArena((fill) => {
+  fill('S', 19, 5, 2, 7);
+  fill('S', 19, 18, 2, 7);
+  fill('S', 5, 14, 10, 2);
+  fill('S', 25, 14, 10, 2);
+  for (const col of [7, 29]) {
+    fill('B', col, 6, 4, 2);
+    fill('B', col, 22, 4, 2);
+  }
+  fill('T', 14, 10, 3, 3);
+  fill('T', 23, 17, 3, 3);
+});
+
+// 2. 三桥争夺：河道只有三座桥，中路最短但暴露，两侧桥适合双人包抄。
+const VERSUS_2 = buildVersusArena((fill) => {
+  fill('W', 0, 13, 40, 4);
+  for (const col of [3, 18, 33]) fill('.', col, 13, 4, 4);
+  for (const col of [8, 28]) {
+    fill('S', col, 10, 2, 2);
+    fill('S', col, 18, 2, 2);
+  }
+  fill('B', 12, 8, 6, 2);
+  fill('B', 22, 8, 6, 2);
+  fill('B', 12, 20, 6, 2);
+  fill('B', 22, 20, 6, 2);
+  fill('T', 1, 9, 5, 3);
+  fill('T', 34, 18, 5, 3);
+});
+
+// 3. 迷雾棋盘：树林遮挡视野、钢柱切断长射线，需要一人探路、一人从相邻走廊接应。
+const VERSUS_3 = buildVersusArena((fill) => {
+  for (const row of [6, 12, 18, 24]) {
+    fill('T', 4, row, 8, 3);
+    fill('T', 28, 27 - row, 8, 3);
+  }
+  for (const [col, row] of [[13, 7], [25, 7], [7, 14], [31, 14], [13, 21], [25, 21]] as const) {
+    fill('S', col, row, 2, 2);
+  }
+  fill('B', 17, 10, 6, 2);
+  fill('B', 17, 18, 6, 2);
+  fill('T', 16, 13, 8, 4);
+});
+
+// 4. 冰环换位：中央高速冰面适合快速支援，四个钢堡逼迫玩家提前规划刹车与交叉角度。
+const VERSUS_4 = buildVersusArena((fill) => {
+  fill('I', 6, 7, 28, 16);
+  for (const [col, row] of [[8, 9], [28, 9], [8, 19], [28, 19]] as const) {
+    fill('S', col, row, 4, 2);
+  }
+  fill('B', 17, 7, 6, 2);
+  fill('B', 17, 21, 6, 2);
+  fill('S', 19, 12, 2, 6);
+  fill('T', 2, 13, 4, 4);
+  fill('T', 34, 13, 4, 4);
+});
+
+// 5. 阶梯突破：三道错位砖墙可以绕行也可集火破口，考验队伍是否能共享突破口。
+const VERSUS_5 = buildVersusArena((fill) => {
+  fill('B', 0, 6, 15, 2);
+  fill('B', 21, 6, 19, 2);
+  fill('B', 0, 14, 7, 2);
+  fill('B', 13, 14, 14, 2);
+  fill('B', 33, 14, 7, 2);
+  fill('B', 0, 22, 19, 2);
+  fill('B', 25, 22, 15, 2);
+  for (const [col, row] of [[17, 5], [21, 9], [9, 13], [29, 17], [17, 21], [21, 25]] as const) {
+    fill('S', col, row, 2, 2);
+  }
+  fill('T', 8, 9, 5, 3);
+  fill('T', 27, 18, 5, 3);
+});
+
+// 6. 四堡夺点：四座开口钢堡围绕中央水池，单人守堡容易被两翼夹击，必须交替换防。
+const VERSUS_6 = buildVersusArena((fill) => {
+  fill('W', 16, 11, 8, 8);
+  for (const [col, row] of [[5, 6], [29, 6], [5, 20], [29, 20]] as const) {
+    fill('S', col, row, 6, 2);
+    fill('S', col, row + 2, 2, 4);
+    fill('B', col + 4, row + 2, 2, 4);
+  }
+  fill('B', 14, 7, 12, 2);
+  fill('B', 14, 21, 12, 2);
+  fill('T', 12, 12, 4, 6);
+  fill('T', 24, 12, 4, 6);
+});
+
+export const VERSUS_ARENAS: ReadonlyArray<LevelState> = [
+  VERSUS_1,
+  VERSUS_2,
+  VERSUS_3,
+  VERSUS_4,
+  VERSUS_5,
+  VERSUS_6,
+];
+
 // 某普通关的地形（只读原型；调用方需 cloneLevel 后再改）。
 export function normalLevelForStage(stage: number): LevelState {
   return STAGES[(stageGroup(stage) - 1) % STAGES.length];
@@ -826,4 +956,9 @@ export function normalLevelForStage(stage: number): LevelState {
 // 某 Boss 关的竞技场（只读原型）：第 b 位 Boss（b = 组号）取第 b 张竞技场。
 export function bossArenaForStage(stage: number): LevelState {
   return BOSS_ARENAS[(stageGroup(stage) - 1) % BOSS_ARENAS.length];
+}
+
+// 某对战关的竞技场（只读原型）：10 个循环组在 6 张图中顺序轮换。
+export function versusArenaForStage(stage: number): LevelState {
+  return VERSUS_ARENAS[(stageGroup(stage) - 1) % VERSUS_ARENAS.length];
 }

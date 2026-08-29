@@ -12,13 +12,14 @@ import {
   TANK_SIZE,
 } from '../core/constants';
 import { LevelState, cloneLevel, levelHasWater } from './level';
-import { bossArenaForStage, normalLevelForStage } from './levels';
+import { bossArenaForStage, normalLevelForStage, versusArenaForStage } from './levels';
 import {
   TankState,
   TankKind,
   EnemyKind,
   WeaponKind,
   createPlayer,
+  createVersusEnemy,
   isPlayerTank,
   restorePlayerUpgrade,
 } from './tank';
@@ -99,7 +100,7 @@ export interface GameState {
   nextEnemyId: number; // 敌方坦克 id 分配器
   nextBulletId: number; // 子弹 id 分配器（联机插值按此稳定匹配多发同源子弹）
   stage: number; // 当前关号（1-based，1..STAGE_COUNT）
-  // Boss 关（每组第 3 关：3 / 6 / … / 30）的 Boss 实体；普通关 / 护送关恒为 null。
+  // Boss 关（每组第 3 关：3 / 7 / … / 39）的 Boss 实体；其他关恒为 null。
   // 纯数据，随快照整体下发；过关条件与败因判定见 phase.ts。
   boss: BossState | null;
   // Boss 沿途布下的地雷（仅第 6 位起的 Boss 会布雷）：普通关 / 护送关恒为空数组，
@@ -115,6 +116,8 @@ export interface GameState {
   // 护送关据此调整护卫位数，渲染层也能显示与规则一致的标记。
   activePlayerCount: number;
   livesByPlayer: number[]; // 每名玩家的剩余生命（含当前在场坦克），按 playerIndex 索引
+  // 对战关每个 AI 席位的剩余生命（含当前在场/复活中坦克）；非对战关恒为空。
+  versusLivesByEnemy: number[];
   // 待定结果：某触发（鹰毁 / 玩家阵亡 / 全歼）已武装但仍在延迟模拟中；
   // resultTimer 归零后 phase 切到 pendingResult。null 表示未武装。
   pendingResult: Exclude<Phase, 'playing'> | null;
@@ -186,7 +189,8 @@ function emptyKillsByPlayer(playerCount: number): Array<Record<EnemyKind, number
 // 某关的敌军出生队列。普通关 / 护送关取本组编成（STAGE_ENEMY_MIX[组号-1]）；
 // Boss 关不走有限队列（返回空数组），小兵由 enemy.ts updateBossMinions 无限补充。
 function createStageQueue(stage: number): TankKind[] {
-  if (stageKind(stage) === 'boss') return [];
+  const kind = stageKind(stage);
+  if (kind === 'boss' || kind === 'versus') return [];
   const mix = STAGE_ENEMY_MIX[(stageGroup(stage) - 1) % STAGE_ENEMY_MIX.length];
   const remaining = mix.map((m) => ({ kind: m.kind, count: m.count }));
   const total = remaining.reduce((s, m) => s + m.count, 0);
@@ -214,10 +218,19 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   const kind = stageKind(stage);
   const escortStage = kind === 'escort';
   const bossStage = kind === 'boss';
+  const versusStage = kind === 'versus';
   const level = escortStage
     ? createEscortLevel(stage)
-    : cloneLevel(bossStage ? bossArenaForStage(stage) : normalLevelForStage(stage));
+    : cloneLevel(
+        bossStage
+          ? bossArenaForStage(stage)
+          : versusStage
+            ? versusArenaForStage(stage)
+            : normalLevelForStage(stage),
+      );
   const escort = escortStage ? createEscortState(level, stage) : null;
+  const startingLives = playerCount > 1 ? PLAYER_LIVES_START_MP : PLAYER_LIVES_START;
+  const livesByPlayer = new Array<number>(playerCount).fill(startingLives);
   // 玩家坦克：id 为 1..N，playerIndex 为 0..N-1。
   const tanks: TankState[] = [];
   for (let i = 0; i < playerCount; i++) {
@@ -226,6 +239,12 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     tank.x = spawn.x;
     tank.y = spawn.y;
     tanks.push(tank);
+  }
+  // 对战关不走敌军队列：与玩家同时在场的 N 台智能坦克各占一个稳定席位。
+  if (versusStage) {
+    for (let i = 0; i < playerCount; i++) {
+      tanks.push(createVersusEnemy(i, playerCount + i + 1));
+    }
   }
   // rng 先行创建：本关中立道具队列的洗牌即取自它（必须在 state 组装前完成）。
   const rng = createRng(seed);
@@ -248,7 +267,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     explosions: [],
     enemyQueue: createStageQueue(stage),
     enemySpawnTimer: 0, // 开局即可出生第一台
-    nextEnemyId: playerCount + 1, // 玩家占用 id=1..N
+    nextEnemyId: versusStage ? playerCount * 2 + 1 : playerCount + 1, // 对战 AI 紧随玩家 id
     nextBulletId: 1,
     stage,
     // Boss 关：幕布结束后 Boss 即已在位（不走出生闪光）。普通关为 null。
@@ -262,10 +281,10 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     escort,
     playerCount,
     activePlayerCount: playerCount,
-    // 单机 3 条（NES 原版）；多人合作 5 条（且可向队友借命，见 update.ts onPlayerKilled）。
-    livesByPlayer: new Array<number>(playerCount).fill(
-      playerCount > 1 ? PLAYER_LIVES_START_MP : PLAYER_LIVES_START,
-    ),
+    // 单机 3 条（NES 原版）；多人合作 5 条（且可向队友借命，见 death.ts onPlayerKilled）。
+    livesByPlayer,
+    // 对战双方开局命数完全一致，一一对应；普通/护送/Boss 关不使用。
+    versusLivesByEnemy: versusStage ? livesByPlayer.slice() : [],
     pendingResult: null,
     resultTimer: 0,
     scoreByPlayer: new Array<number>(playerCount).fill(0),
@@ -344,7 +363,9 @@ export function nextStage(state: GameState): void {
       : cloneLevel(
           nextKind === 'boss'
             ? bossArenaForStage(nextStageNum)
-            : normalLevelForStage(nextStageNum),
+            : nextKind === 'versus'
+              ? versusArenaForStage(nextStageNum)
+              : normalLevelForStage(nextStageNum),
         );
   state.escort = nextKind === 'escort' ? createEscortState(state.level, nextStageNum) : null;
   state.enemyQueue = createStageQueue(nextStageNum);
@@ -360,6 +381,7 @@ export function nextStage(state: GameState): void {
   state.explosions = [];
   state.enemySpawnTimer = 0;
   state.nextEnemyId = state.playerCount + 1;
+  state.versusLivesByEnemy = [];
   state.eagleDestroyed = false;
   state.pendingResult = null;
   state.resultTimer = 0;
@@ -414,6 +436,17 @@ export function nextStage(state: GameState): void {
     tank.weapon = weaponByPlayer[i];
     tank.drill = drillByPlayer[i];
     state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
+  }
+
+  // 对战关为每名玩家建立一名独立 AI 对手。AI 命数复制对应玩家进入本关时的命数，
+  // 两边都经过同样的出生闪光入场；后续复活由 death.ts 按席位单独结算。
+  if (nextKind === 'versus') {
+    state.versusLivesByEnemy = state.livesByPlayer.slice();
+    for (let i = 0; i < state.playerCount; i++) {
+      const tank = createVersusEnemy(i, state.playerCount + i + 1);
+      state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
+    }
+    state.nextEnemyId = state.playerCount * 2 + 1;
   }
 
   // 记录新关开始时的累计分快照（下一次 nextStage 据此算本关得分差、评 MVP）。

@@ -30,6 +30,12 @@ import {
   SMART_AI_BRICK_COST,
   SMART_AI_DODGE_LOOKAHEAD_TICKS,
   SMART_AI_DODGE_COMMIT_TICKS,
+  SMART_AI_FIRING_MIN_DISTANCE,
+  SMART_AI_FIRING_IDEAL_DISTANCE,
+  SMART_AI_FIRING_MAX_DISTANCE,
+  SMART_AI_FIRING_DISTANCE_STEP,
+  SMART_AI_FLANK_SIDE_COST,
+  SMART_AI_FIRING_BRICK_PENALTY,
   SMART_POWERUP_SEEK_RADIUS,
   SPIRAL_RADIUS,
   SPIRAL_PERIOD_TICKS,
@@ -38,6 +44,7 @@ import {
   BOSS_MINION_CARRIER_EVERY,
   bossMinionKindsForStage,
   STAGE_ENEMY_TOTAL,
+  isVersusStage,
 } from '../core/constants';
 import { Cell, LevelState, brickMaskOverlapsRect, getCell } from './level';
 import {
@@ -633,8 +640,233 @@ function findSmartDirection(
   return firstSteps[closestIndex];
 }
 
-// 多人局按直线距离选择最近存活玩家；完全同距时 playerIndex 小者优先，结果稳定可复现。
+type SmartFiringSide = Direction;
+
+interface SmartFiringCandidate {
+  col: number;
+  row: number;
+  index: number;
+  x: number;
+  y: number;
+  side: SmartFiringSide;
+  distance: number;
+  shotPath: SmartShotPath;
+}
+
+interface SmartFiringPlan {
+  dir: Direction | null;
+  x: number;
+  y: number;
+  side: SmartFiringSide;
+}
+
+const SMART_FIRING_SIDES: ReadonlyArray<SmartFiringSide> = [
+  'left',
+  'right',
+  'up',
+  'down',
+];
+
+// id 将同一批智能坦克稳定分散到目标四周；多人局再叠加 playerIndex，避免换目标后仍整队同侧。
+function preferredSmartFiringSide(tank: TankState, target: TankState): SmartFiringSide {
+  const index = Math.abs(tank.id + target.playerIndex) % SMART_FIRING_SIDES.length;
+  return SMART_FIRING_SIDES[index];
+}
+
+function smartFiringSideCost(side: SmartFiringSide, preferred: SmartFiringSide): number {
+  if (side === preferred) return 0;
+  if (side === oppositeDirection(preferred)) return SMART_AI_FLANK_SIDE_COST / 2;
+  return SMART_AI_FLANK_SIDE_COST;
+}
+
+function smartFiringCandidate(
+  tank: TankState,
+  target: TankState,
+  state: GameState,
+  level: LevelState,
+  obstacles: TankState[],
+  navCols: number,
+  navRows: number,
+  targetCol: number,
+  targetRow: number,
+  side: SmartFiringSide,
+  distance: number,
+): SmartFiringCandidate | null {
+  const cells = distance / SUBTILE;
+  let col = targetCol;
+  let row = targetRow;
+  if (side === 'left') col -= cells;
+  else if (side === 'right') col += cells;
+  else if (side === 'up') row -= cells;
+  else row += cells;
+  if (col < 0 || row < 0 || col >= navCols || row >= navRows) return null;
+  // 射击位本身必须能立即站住；沿途砖块仍由后面的 Dijkstra 以较高代价纳入路线。
+  if (navigationCost(tank, level, col, row) > 1) return null;
+
+  const x = col * SUBTILE;
+  const y = row * SUBTILE;
+  const navTarget = { x: target.x, y: target.y };
+  if (
+    dynamicNavigationBlocked(
+      tank,
+      navTarget,
+      col,
+      row,
+      obstacles,
+      state.escort ?? undefined,
+    )
+  ) return null;
+
+  const probe = { ...tank, x, y };
+  const aim = aimDirection(probe, target);
+  if (aim === null || shotThreatensEagle(probe, aim, state)) return null;
+  probe.dir = aim;
+  const shotPath = smartShotPath(probe, target, aim, state);
+  if (shotPath === 'hard') return null;
+  return {
+    col,
+    row,
+    index: row * navCols + col,
+    x,
+    y,
+    side,
+    distance,
+    shotPath,
+  };
+}
+
+// 一次 Dijkstra 同时得到全部候选射击位的真实路径代价。这样钢墙、水面、动态占位和可清砖
+// 都参与决策，而不是只按直线距离挑一个看似很近、实际到不了的位置。
+function findSmartFiringPlan(
+  tank: TankState,
+  target: TankState,
+  state: GameState,
+  level: LevelState,
+  obstacles: TankState[],
+): SmartFiringPlan | null {
+  const navCols = level.cols - NAV_TANK_CELLS + 1;
+  const navRows = level.rows - NAV_TANK_CELLS + 1;
+  const clampCol = (x: number): number => Math.max(0, Math.min(navCols - 1, Math.round(x / SUBTILE)));
+  const clampRow = (y: number): number => Math.max(0, Math.min(navRows - 1, Math.round(y / SUBTILE)));
+  const startCol = clampCol(tank.x);
+  const startRow = clampRow(tank.y);
+  const targetCol = clampCol(target.x);
+  const targetRow = clampRow(target.y);
+  const startIndex = startRow * navCols + startCol;
+  const size = navCols * navRows;
+  const candidates: SmartFiringCandidate[] = [];
+  const seen = new Set<number>();
+  for (const side of SMART_FIRING_SIDES) {
+    for (
+      let distance = SMART_AI_FIRING_MIN_DISTANCE;
+      distance <= SMART_AI_FIRING_MAX_DISTANCE;
+      distance += SMART_AI_FIRING_DISTANCE_STEP
+    ) {
+      const candidate = smartFiringCandidate(
+        tank,
+        target,
+        state,
+        level,
+        obstacles,
+        navCols,
+        navRows,
+        targetCol,
+        targetRow,
+        side,
+        distance,
+      );
+      if (!candidate || seen.has(candidate.index)) continue;
+      seen.add(candidate.index);
+      candidates.push(candidate);
+    }
+  }
+  if (candidates.length === 0) return null;
+
+  const costs = new Array<number>(size).fill(Infinity);
+  const firstSteps = new Array<Direction | null>(size).fill(null);
+  const closed = new Array<boolean>(size).fill(false);
+  const open: OpenNode[] = [];
+  const navTarget = { x: target.x, y: target.y };
+  costs[startIndex] = 0;
+  pushOpen(open, { index: startIndex, f: 0, h: 0 });
+  while (open.length > 0) {
+    const current = popOpen(open)!;
+    if (closed[current.index]) continue;
+    closed[current.index] = true;
+    const col = current.index % navCols;
+    const row = Math.floor(current.index / navCols);
+    for (const step of NAV_DIRECTIONS) {
+      const nextCol = col + step.dc;
+      const nextRow = row + step.dr;
+      if (nextCol < 0 || nextRow < 0 || nextCol >= navCols || nextRow >= navRows) continue;
+      const stepCost = navigationCost(tank, level, nextCol, nextRow);
+      if (!Number.isFinite(stepCost)) continue;
+      if (
+        dynamicNavigationBlocked(
+          tank,
+          navTarget,
+          nextCol,
+          nextRow,
+          obstacles,
+          state.escort ?? undefined,
+        )
+      ) continue;
+      const nextIndex = nextRow * navCols + nextCol;
+      const nextCost = costs[current.index] + stepCost;
+      if (nextCost >= costs[nextIndex]) continue;
+      costs[nextIndex] = nextCost;
+      firstSteps[nextIndex] = current.index === startIndex ? step.dir : firstSteps[current.index];
+      pushOpen(open, { index: nextIndex, f: nextCost, h: 0 });
+    }
+  }
+
+  const preferred = preferredSmartFiringSide(tank, target);
+  let best: SmartFiringCandidate | null = null;
+  let bestScore = Infinity;
+  for (const candidate of candidates) {
+    const routeCost = costs[candidate.index];
+    if (!Number.isFinite(routeCost)) continue;
+    const rangeCost =
+      Math.abs(candidate.distance - SMART_AI_FIRING_IDEAL_DISTANCE) / SUBTILE;
+    const brickCost = candidate.shotPath === 'brick' ? SMART_AI_FIRING_BRICK_PENALTY : 0;
+    const score =
+      routeCost +
+      rangeCost +
+      smartFiringSideCost(candidate.side, preferred) +
+      brickCost;
+    if (
+      score < bestScore ||
+      (score === bestScore && best !== null && candidate.index < best.index)
+    ) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  if (!best) return null;
+  return {
+    dir: firstSteps[best.index],
+    x: best.x,
+    y: best.y,
+    side: best.side,
+  };
+}
+
+// 对战关先按席位一一分配对手，避免 N 台 AI 全部追着同一名玩家。
+// 自己的对位玩家暂时不在场时，才按 AI 席位均匀分流到其他存活目标上参与包抄。
+function versusAssignedPlayer(tank: TankState, state: GameState): TankState | null {
+  if (!isVersusStage(state.stage) || tank.versusIndex < 0) return null;
+  const players = state.tanks
+    .filter((candidate) => candidate.alive && isPlayerTank(candidate))
+    .sort((a, b) => a.playerIndex - b.playerIndex);
+  if (players.length === 0) return null;
+  const assigned = players.find((candidate) => candidate.playerIndex === tank.versusIndex);
+  return assigned ?? players[tank.versusIndex % players.length];
+}
+
+// 普通多人局按直线距离选择最近存活玩家；完全同距时 playerIndex 小者优先，结果稳定可复现。
 function nearestPlayer(tank: TankState, state: GameState): TankState | null {
+  const assigned = versusAssignedPlayer(tank, state);
+  if (assigned) return assigned;
   let target: TankState | null = null;
   let bestDistance = Infinity;
   for (const candidate of state.tanks) {
@@ -656,6 +888,7 @@ function nearestPlayer(tank: TankState, state: GameState): TankState | null {
 // 严格优先级：无敌 > 合适武器 > 星星 > 修复 > 临时机动 > 船。
 // 分数只用于当前坦克在自己拥有的候选中择优；同一道具的归属由距离单独决定。
 const SMART_POWERUP_PRIORITY: Partial<Record<PowerupKind, number>> = {
+  tank: 9,
   helmet: 8,
   wpnSpread: 7,
   wpnSpiral: 7,
@@ -841,7 +1074,7 @@ function smartShotPath(
 // 只要炮弹沿当前射线继续飞行有可能触及鹰巢，就禁止智能坦克开火。该检查不依赖中间墙体，
 // 因而即使砖墙稍后被其他炮弹打掉，已发射的智能坦克炮弹也不会误伤基地。
 function shotThreatensEagle(tank: TankState, dir: Direction, state: GameState): boolean {
-  if (state.boss || state.escort) return false; // 两种特殊关都没有固定鹰巢
+  if (state.boss || state.escort || isVersusStage(state.stage)) return false; // 特殊关没有固定鹰巢
   const cx = tank.x + TANK_SIZE / 2;
   const cy = tank.y + TANK_SIZE / 2;
   const halfBullet = BULLET_SIZE / 2;
@@ -895,7 +1128,7 @@ function fireSmartTank(
   tank: TankState,
   state: GameState,
   targetPath?: SmartShotPath,
-): void {
+): boolean {
   const canFire = tank.fireCooldown === 0 &&
     liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
   if (
@@ -904,11 +1137,12 @@ function fireSmartTank(
     (targetPath === undefined
       ? shotThreatensEscort(tank, tank.dir, state)
       : targetPath === 'hard')
-  ) return;
+  ) return false;
   const spawned = spawnWeaponBullets(tank, state.nextBulletId, state.level);
   state.nextBulletId += spawned.length;
   for (const bullet of spawned) state.bullets.push(bullet);
   tank.fireCooldown = Math.max(MACHINE_FIRE_INTERVAL_TICKS, SMART_AI_FIRE_COOLDOWN_TICKS);
+  return true;
 }
 
 function oppositeDirection(dir: Direction): Direction {
@@ -1149,6 +1383,8 @@ function recycleEscapedEscortEnemies(state: GameState): void {
     tank.aiTicks = AI_DECISION_MIN_TICKS;
     tank.smartStuckTicks = 0;
     tank.smartEscapeTicks = 0;
+    tank.smartGoalX = -1;
+    tank.smartGoalY = -1;
     tank.escortFarTicks = 0;
     tank.slideTicks = 0;
     state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
@@ -1210,8 +1446,61 @@ function updateOneEnemy(
   }
 }
 
-// 智能坦克：锁定最近玩家，以 A* 主动追踪；玩家进入直线火力走廊后停车瞄准并持续压制。
-// 撞上路径中的砖墙时向规划方向清障。所有开火都经过鹰巢射线检查，不参与传统的随机向下攻击。
+function clearSmartFiringGoal(tank: TankState): void {
+  tank.smartGoalX = -1;
+  tank.smartGoalY = -1;
+}
+
+function smartFiringGoalReached(tank: TankState): boolean {
+  return (
+    tank.smartGoalX >= 0 &&
+    tank.smartGoalY >= 0 &&
+    Math.abs(tank.x - tank.smartGoalX) <= SUBTILE / 2 &&
+    Math.abs(tank.y - tank.smartGoalY) <= SUBTILE / 2
+  );
+}
+
+function planSmartMovement(
+  tank: TankState,
+  target: TankState | null,
+  powerupTarget: PowerupState | null,
+  state: GameState,
+  level: LevelState,
+  obstacles: TankState[],
+): Direction | null {
+  if (powerupTarget) {
+    clearSmartFiringGoal(tank);
+    return findSmartDirection(
+      tank,
+      powerupTarget,
+      level,
+      obstacles,
+      state.escort ?? undefined,
+    );
+  }
+  if (!target) {
+    clearSmartFiringGoal(tank);
+    return null;
+  }
+
+  const firingPlan = findSmartFiringPlan(tank, target, state, level, obstacles);
+  if (firingPlan) {
+    tank.smartGoalX = firingPlan.x;
+    tank.smartGoalY = firingPlan.y;
+    return firingPlan.dir;
+  }
+  clearSmartFiringGoal(tank);
+  return findSmartDirection(
+    tank,
+    target,
+    level,
+    obstacles,
+    state.escort ?? undefined,
+  );
+}
+
+// 智能坦克：锁定最近玩家，规划可达的中距离射击位并按 id 分散到不同侧翼。
+// 途中遇到火力线会机会射击；若尚未抵达战术位，装填期间继续包抄而不是原地露头等待。
 function updateSmartEnemy(
   tank: TankState,
   state: GameState,
@@ -1237,6 +1526,7 @@ function updateSmartEnemy(
     tank.moving = false;
     tank.smartStuckTicks = 0;
     tank.smartEscapeTicks = 0;
+    clearSmartFiringGoal(tank);
     return;
   }
 
@@ -1256,32 +1546,54 @@ function updateSmartEnemy(
   }
 
   tank.aiTicks--;
+  let desired = tank.dir;
+  if (tank.aiTicks <= 0) {
+    desired = planSmartMovement(
+      tank,
+      target,
+      powerupTarget,
+      state,
+      level,
+      obstacles,
+    ) ?? desired;
+    tank.aiTicks = SMART_AI_REPLAN_TICKS;
+  }
+
   if (target) {
     const aim = aimDirection(tank, target);
     if (aim !== null && !shotThreatensEagle(tank, aim, state)) {
       const targetPath = smartShotPath(tank, target, aim, state);
       if (targetPath !== 'hard') {
-        tank.moving = false;
-        tank.smartStuckTicks = 0;
-        tank.smartEscapeTicks = 0;
-        // 转向必然生效（吸附不可用时原地转车头，见 tank.ts turnTank），转完即可开火压制。
-        turnTank(tank, aim, level, obstacles, state.escort ?? undefined);
-        fireSmartTank(tank, state, targetPath);
-        return;
+        const atFiringGoal = !powerupTarget && smartFiringGoalReached(tank);
+        const readyToFire = tank.fireCooldown === 0 &&
+          liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
+        // 路过火力线但尚未装填好时不反复转头，否则横向吸附会把每帧侧移重置成 0.75px。
+        if (readyToFire || atFiringGoal) {
+          tank.moving = false;
+          tank.smartStuckTicks = 0;
+          tank.smartEscapeTicks = 0;
+          // 转向必然生效（吸附不可用时原地转车头，见 tank.ts turnTank），转完即可开火压制。
+          turnTank(tank, aim, level, obstacles, state.escort ?? undefined);
+          if (fireSmartTank(tank, state, targetPath)) {
+            // 路过的射线只打一发就继续包抄；抵达选定射击位后才稳定压制。
+            if (!atFiringGoal) tank.aiTicks = 0;
+            return;
+          }
+          if (atFiringGoal) return;
+        }
       }
     }
   }
 
-  const chaseTarget = powerupTarget ?? target!;
-
-  let desired = tank.dir;
-  if (tank.aiTicks <= 0) {
-    desired = findSmartDirection(
+  // 玩家移动后，旧射击位可能不再形成火力线；到点却无法瞄准时立即更新目标位。
+  if (!powerupTarget && target && smartFiringGoalReached(tank)) {
+    desired = planSmartMovement(
       tank,
-      chaseTarget,
+      target,
+      null,
+      state,
       level,
       obstacles,
-      state.escort ?? undefined,
     ) ?? desired;
     tank.aiTicks = SMART_AI_REPLAN_TICKS;
   }
@@ -1296,12 +1608,13 @@ function updateSmartEnemy(
 
   // 动态障碍或砖墙使本步失败：立即重算。若替代首步存在则原地转向并尝试；仍失败时开炮清障。
   tank.aiTicks = SMART_AI_REPLAN_TICKS;
-  const retry = findSmartDirection(
+  const retry = planSmartMovement(
     tank,
-    chaseTarget,
+    target,
+    powerupTarget,
+    state,
     level,
     obstacles,
-    state.escort ?? undefined,
   );
   let blockedDir = desired;
   if (retry !== null && retry !== desired) {

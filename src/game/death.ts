@@ -6,7 +6,7 @@ import {
   SPAWN_FLASH_TICKS,
   TANK_SIZE,
 } from '../core/constants';
-import { createPlayer, type TankState } from './tank';
+import { createPlayer, createVersusEnemy, type TankState } from './tank';
 import { makeSmallExplosion } from './bullet';
 import type { GameState } from './state';
 import { escortPlayerSpawn } from './escort';
@@ -28,6 +28,19 @@ export function dropDeathStar(state: GameState, tank: TankState): void {
   state.powerups.push({ kind: 'star', x: tank.x, y: tank.y });
   while (state.powerups.length > MAX_POWERUPS_ON_FIELD) state.powerups.shift();
   state.events.push('powerupSpawn');
+}
+
+// 对战 AI 被击毁：扣减它自己席位的一条命，仍有余命则以同 id、同席位重建。
+// 命数在出生闪光开始前已经扣除，因此阶段判定不会在复活窗口误报全歼。
+export function onVersusEnemyKilled(state: GameState, tank: TankState): void {
+  const index = tank.versusIndex;
+  if (index < 0 || index >= state.versusLivesByEnemy.length) return;
+  if (state.versusLivesByEnemy[index] <= 0) return;
+
+  state.versusLivesByEnemy[index]--;
+  if (state.versusLivesByEnemy[index] <= 0) return;
+  const revived = createVersusEnemy(index, tank.id);
+  state.spawning.push({ tank: revived, ticksLeft: SPAWN_FLASH_TICKS });
 }
 
 // 玩家坦克被击毁：扣该玩家一条生命；若其仍有剩余则走出生闪光复活。

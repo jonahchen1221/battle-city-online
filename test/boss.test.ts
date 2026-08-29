@@ -62,9 +62,9 @@ import { createEnemy, isPlayerTank } from '../src/game/tank';
 import type { BulletState } from '../src/game/bullet';
 import { Cell, createEmptyLevel, getCell, setCell } from '../src/game/level';
 
-// 三段循环下的代表关号：Boss A = 第 3 关（组 1）、Boss B / 最终战 = 第 30 关（组 10）。
+// 四段循环下的代表关号：Boss A = 第 3 关（组 1）、Boss B / 最终战 = 第 39 关（组 10）。
 const BOSS_A_STAGE = 3;
-const BOSS_B_STAGE = STAGE_COUNT; // 30
+const BOSS_B_STAGE = BOSS_STAGES[BOSS_STAGES.length - 1]; // 39
 
 // ── 测试工具 ──
 
@@ -121,19 +121,19 @@ function enemiesOnField(state: GameState): number {
 
 // ── 关卡序列 ──
 
-test('30 关三段循环：每组第 3 关为 Boss 关，通关第 30 关回到第 1 关（普通关）', () => {
-  assert.equal(STAGE_COUNT, 30);
-  assert.deepEqual([...BOSS_STAGES], [3, 6, 9, 12, 15, 18, 21, 24, 27, 30]);
+test('40 关四段循环：每组第 3 关为 Boss，对战关后回到第 1 关', () => {
+  assert.equal(STAGE_COUNT, 40);
+  assert.deepEqual([...BOSS_STAGES], [3, 7, 11, 15, 19, 23, 27, 31, 35, 39]);
   for (let stage = 1; stage <= STAGE_COUNT; stage++) {
-    assert.equal(isBossStage(stage), stage % 3 === 0, `第 ${stage} 关 isBossStage`);
+    assert.equal(isBossStage(stage), stage % 4 === 3, `第 ${stage} 关 isBossStage`);
   }
-  // 回卷关号同样归一：第 31 关 = 第 1 关（普通），第 33 关 = 第 3 关（Boss）。
-  assert.equal(isBossStage(31), false);
-  assert.equal(isBossStage(33), true);
+  // 回卷关号同样归一：第 41 关 = 第 1 关，第 43 关 = 第 3 关（Boss）。
+  assert.equal(isBossStage(41), false);
+  assert.equal(isBossStage(43), true);
 
   const state = createGameState(1, 1, STAGE_COUNT);
-  assert.ok(state.boss, '第 30 关应有 Boss');
-  assert.equal(state.escort, null, 'Boss 关不应同时是护送关');
+  assert.equal(state.boss, null, '第 40 关是对战关');
+  assert.equal(state.versusLivesByEnemy.length, 1);
   nextStage(state);
   assert.equal(state.stage, 1);
   assert.equal(state.boss, null, '第 1 关是普通关，回卷后不应生成 Boss');
@@ -141,7 +141,7 @@ test('30 关三段循环：每组第 3 关为 Boss 关，通关第 30 关回到�
   assert.equal(state.level.cols, FIELD_COLS);
 });
 
-test('三类关的 createGameState 冒烟：boss / escort 互斥，地图尺寸各就各位', () => {
+test('四类关的 createGameState 冒烟：boss / escort / versus 互斥', () => {
   const normal = createGameState(7, 1, 1);
   assert.equal(stageKind(1), 'normal');
   assert.equal(normal.boss, null);
@@ -165,14 +165,21 @@ test('三类关的 createGameState 冒烟：boss / escort 互斥，地图尺寸�
   assert.equal(boss.level.cols, FIELD_COLS);
   assert.equal(boss.level.rows, FIELD_ROWS);
   assert.equal(boss.enemyQueue.length, 0, 'Boss 关不走有限出生队列');
+
+  const versus = createGameState(7, 2, 4);
+  assert.equal(stageKind(4), 'versus');
+  assert.equal(versus.boss, null);
+  assert.equal(versus.escort, null);
+  assert.equal(versus.enemyQueue.length, 0);
+  assert.deepEqual(versus.versusLivesByEnemy, versus.livesByPlayer);
 });
 
 // ── Boss 生成 ──
 
 test('Boss 只在 Boss 关生成，血量随人数与序号放大', () => {
-  assert.equal(createGameState(1, 1, 4).boss, null, '普通关不应有 Boss');
-  assert.equal(createGameState(1, 1, 7).boss, null, '普通关不应有 Boss');
-  assert.equal(createGameState(1, 1, 5).boss, null, '护送关不应有 Boss');
+  assert.equal(createGameState(1, 1, 4).boss, null, '对战关不应有 Boss');
+  assert.equal(createGameState(1, 1, 9).boss, null, '普通关不应有 Boss');
+  assert.equal(createGameState(1, 1, 6).boss, null, '护送关不应有 Boss');
 
   const solo = createGameState(1, 1, BOSS_A_STAGE).boss;
   assert.ok(solo);
@@ -188,7 +195,7 @@ test('Boss 只在 Boss 关生成，血量随人数与序号放大', () => {
   assert.equal(trio.hp, 220); // 100 + 2×60
   assert.equal(bossMaxHp(4), 280);
 
-  // 跨关进入 Boss 关时同样生成（第 29 关护送 → 第 30 关最终战）。
+  // 跨关进入 Boss 关时同样生成（第 38 关护送 → 第 39 关最终战）。
   const state = createGameState(1, 2, BOSS_B_STAGE - 1);
   assert.equal(state.boss, null);
   nextStage(state);
@@ -388,7 +395,7 @@ test('phase 2 的 16 向旋转弹幕：2 波、每波 16 发、波间 30 帧', (
 
 test('弹幕墙：整排 16px 间隔的子弹，随机留一个 32px 缺口，朝目标半场飞', () => {
   // 第 6 关 = 第 2 位 Boss（弹幕墙解锁关）。
-  const state = playingAt(61, 1, 6);
+  const state = playingAt(61, 1, 7);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   boss.x = 144;
@@ -427,7 +434,7 @@ test('弹幕墙：整排 16px 间隔的子弹，随机留一个 32px 缺口，�
 
 test('蓄力冲撞：预警 45 帧后 4px/帧冲锋，粉碎沿途砖块、碾毁玩家，撞钢眩晕 90 帧', () => {
   // 第 9 关 = 第 3 位 Boss（冲撞解锁关）。双人局：一名诱饵、一名挡在路上。
-  const state = playingAt(62, 2, 9);
+  const state = playingAt(62, 2, 11);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   boss.x = 0;
@@ -496,7 +503,7 @@ test('蓄力冲撞：预警 45 帧后 4px/帧冲锋，粉碎沿途砖块、碾�
 
 test('迫击炮雨：4 个落点、48 帧引信，起爆清砖并击毁站桩玩家（钢不毁）', () => {
   // 第 12 关 = 第 4 位 Boss（迫击炮解锁关）。
-  const state = playingAt(64, 1, 12);
+  const state = playingAt(64, 1, 15);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   const player = state.tanks.find(isPlayerTank)!;
@@ -542,7 +549,7 @@ test('迫击炮雨：4 个落点、48 帧引信，起爆清砖并击毁站桩玩
 
 test('召唤援军：两侧各闪现一只小兵，且全场敌军不超过硬上限 6 只', () => {
   // 第 15 关 = 第 5 位 Boss（召唤解锁关）。
-  const state = playingAt(65, 1, 15);
+  const state = playingAt(65, 1, 19);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   state.spawning = state.spawning.filter((s) => isPlayerTank(s.tank));
@@ -561,7 +568,7 @@ test('召唤援军：两侧各闪现一只小兵，且全场敌军不超过硬�
     );
   }
   // 硬上限：先把场上塞到 5 只，再召唤只能补进 1 只。
-  const filler = playingAt(66, 1, 15);
+  const filler = playingAt(66, 1, 19);
   filler.level = createEmptyLevel();
   filler.spawning = filler.spawning.filter((s) => isPlayerTank(s.tank));
   filler.tanks = filler.tanks.filter(isPlayerTank);
@@ -578,7 +585,7 @@ test('召唤援军：两侧各闪现一只小兵，且全场敌军不超过硬�
 
 test('沿途布雷：移动时定时铺雷，武装后触之即死；子弹引爆与到期自爆都不伤人', () => {
   // 第 18 关 = 第 6 位 Boss（布雷解锁关）。双人局保证 Boss 一阶段就会移动。
-  const state = playingAt(67, 2, 18);
+  const state = playingAt(67, 2, 23);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   assert.equal(boss.ordinal, 6);
@@ -598,7 +605,7 @@ test('沿途布雷：移动时定时铺雷，武装后触之即死；子弹引�
   assert.equal(boss.mineTimer, BOSS_MINE_INTERVAL_TICKS, '铺完重置为固定间隔');
 
   // 未解锁的 Boss（序号 <6）永不布雷。
-  const early = playingAt(68, 2, 9); // 第 3 位
+  const early = playingAt(68, 2, 11); // 第 3 位
   early.level = createEmptyLevel();
   for (const p of early.tanks.filter(isPlayerTank)) {
     p.x = early.boss!.x;
@@ -609,14 +616,14 @@ test('沿途布雷：移动时定时铺雷，武装后触之即死；子弹引�
   assert.equal(early.mines.length, 0, '第 3 位 Boss 不该布雷');
 
   // 武装：60 帧后 armTicks 归零。
-  const arm = playingAt(69, 1, 18);
+  const arm = playingAt(69, 1, 23);
   arm.level = createEmptyLevel();
   arm.mines = [{ id: 1, x: 100, y: 100, armTicks: BOSS_MINE_ARM_TICKS, lifeTicks: BOSS_MINE_LIFE_TICKS }];
   for (let i = 0; i < BOSS_MINE_ARM_TICKS; i++) updateMines(arm);
   assert.equal(arm.mines[0].armTicks, 0, '60 帧后武装完毕');
 
   // 触雷：武装后的雷碰到玩家即爆，玩家阵亡、雷消失。
-  const trip = playingAt(70, 1, 18);
+  const trip = playingAt(70, 1, 23);
   trip.level = createEmptyLevel();
   const victim = trip.tanks.find(isPlayerTank)!;
   victim.invulnTicks = 0;
@@ -630,7 +637,7 @@ test('沿途布雷：移动时定时铺雷，武装后触之即死；子弹引�
   assert.equal(trip.mines.length, 0, '爆炸后地雷消失');
 
   // 未武装的雷踩上去无害。
-  const safe = playingAt(71, 1, 18);
+  const safe = playingAt(71, 1, 23);
   safe.level = createEmptyLevel();
   const walker = safe.tanks.find(isPlayerTank)!;
   walker.invulnTicks = 0;
@@ -642,7 +649,7 @@ test('沿途布雷：移动时定时铺雷，武装后触之即死；子弹引�
   assert.equal(safe.mines.length, 1);
 
   // 子弹引爆（安全排雷）：即便玩家正踩在上面也不受伤，子弹一并消亡。
-  const defuse = playingAt(72, 1, 18);
+  const defuse = playingAt(72, 1, 23);
   defuse.level = createEmptyLevel();
   const sapper = defuse.tanks.find(isPlayerTank)!;
   sapper.invulnTicks = 0;
@@ -659,7 +666,7 @@ test('沿途布雷：移动时定时铺雷，武装后触之即死；子弹引�
   assert.equal(sapper.alive, true, '安全排雷不该炸到自己人');
 
   // 到期自爆：240 帧后自行消失，不伤人。
-  const expire = playingAt(73, 1, 18);
+  const expire = playingAt(73, 1, 23);
   expire.level = createEmptyLevel();
   const bystander = expire.tanks.find(isPlayerTank)!;
   bystander.invulnTicks = 0;
@@ -671,7 +678,7 @@ test('沿途布雷：移动时定时铺雷，武装后触之即死；子弹引�
   assert.equal(bystander.alive, true);
 
   // 场上上限：满 6 枚时不再铺设。
-  const full = playingAt(74, 2, 18);
+  const full = playingAt(74, 2, 23);
   full.level = createEmptyLevel();
   for (const p of full.tanks.filter(isPlayerTank)) {
     p.x = full.boss!.x;
@@ -692,7 +699,7 @@ test('沿途布雷：移动时定时铺雷，武装后触之即死；子弹引�
 
 test('磁力牵引：预警 30 帧后把玩家拉向 Boss、每 30 帧一圈弹幕，且绝不穿墙', () => {
   // 第 21 关 = 第 7 位 Boss（磁力解锁关）。
-  const state = playingAt(75, 1, 21);
+  const state = playingAt(75, 1, 27);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   boss.x = 144;
@@ -715,7 +722,7 @@ test('磁力牵引：预警 30 帧后把玩家拉向 Boss、每 30 帧一圈弹�
   assert.equal(boss.attack, 'none', '牵引结束回到冷却');
 
   // 不穿墙：玩家与 Boss 之间横一道钢墙时，牵引只能把人贴到墙前。
-  const walled = playingAt(76, 1, 21);
+  const walled = playingAt(76, 1, 27);
   walled.level = createEmptyLevel();
   const wboss = walled.boss!;
   wboss.x = 144;
@@ -733,7 +740,7 @@ test('磁力牵引：预警 30 帧后把玩家拉向 Boss、每 30 帧一圈弹�
 
 test('横扫激光：扫过目标列只结算一次，另一半场的玩家全程安全', () => {
   // 第 24 关 = 第 8 位 Boss（横扫解锁关）。
-  const state = playingAt(77, 2, 24);
+  const state = playingAt(77, 2, 31);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   boss.x = 144;
@@ -830,7 +837,7 @@ test('Boss 关中立道具队列：2 星 + 头盔 + 战靴 + 1 件随机武器',
   }
 
   // 有水普通关维持原 5 种中立池。
-  const normal = createGameState(1, 1, 7).neutralQueue;
+  const normal = createGameState(1, 1, 9).neutralQueue;
   assert.deepEqual([...normal].sort(), [...NEUTRAL_POWERUP_KINDS].sort());
 
   // 护送关同样用普通池（只是把扳手换到队首，见 state.ts）。

@@ -16,7 +16,7 @@ function boatSeekingRng(): Rng {
 }
 
 test('无水场景的中立道具队列不包含船，有水场景仍会出现船', () => {
-  for (let stage = 1; stage <= 30; stage++) {
+  for (let stage = 1; stage <= 40; stage++) {
     const state = createGameState(stage, 1, stage);
     if (!levelHasWater(state.level)) {
       assert.equal(state.neutralQueue.includes('boat'), false, `第 ${stage} 关不应生成船`);
@@ -27,7 +27,7 @@ test('无水场景的中立道具队列不包含船，有水场景仍会出现�
   assert.equal(levelHasWater(dry.level), false);
   assert.equal(dry.neutralQueue.includes('boat'), false);
 
-  const wet = createGameState(1, 1, 7);
+  const wet = createGameState(1, 1, 9);
   assert.equal(levelHasWater(wet.level), true);
   assert.equal(wet.neutralQueue.includes('boat'), true);
 });

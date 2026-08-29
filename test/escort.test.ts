@@ -21,8 +21,8 @@ import { spawnBullet } from '../src/game/bullet';
 import { tryPickupPowerup } from '../src/game/powerup';
 import { updatePhase } from '../src/game/phase';
 
-// 三段循环下的护送关号：每组第 2 关，十次护送各用一张独立地图与路线。
-const ESCORT_STAGES = [2, 5, 8, 11, 14, 17, 20, 23, 26, 29];
+// 四段循环下的护送关号：每组第 2 关，十次护送各用一张独立地图与路线。
+const ESCORT_STAGES = [2, 6, 10, 14, 18, 22, 26, 30, 34, 38];
 
 test('all ten tactical escort maps can be completed after destructible roadblocks are cleared', () => {
   for (const stage of ESCORT_STAGES) {
