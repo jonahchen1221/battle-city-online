@@ -3,7 +3,7 @@ import {
   BULLET_SIZE,
   ESCORT_FIELD_COLS,
   ESCORT_FIELD_ROWS,
-  ESCORT_PUSH_BONUS_PER_TANK,
+  ESCORT_PUSH_SPEED_PER_TANK,
   ESCORT_PUSH_MAX_TANKS,
   ESCORT_SIZE,
   ESCORT_SPEED,
@@ -190,12 +190,14 @@ export function escortPusherCount(
   );
 }
 
-// 推车加速系数：每名推车手 +ESCORT_PUSH_BONUS_PER_TANK。无人推车时为 1（车速不变）。
+
+// 推车是独立动力：每名推车手贡献 ESCORT_PUSH_SPEED_PER_TANK 档车速，
+// 与护卫位占比相加构成总动力（见 updateEscort）。
 function escortPushSpeedScale(
   state: GameState,
   activePlayers?: readonly boolean[],
 ): number {
-  return 1 + ESCORT_PUSH_BONUS_PER_TANK * escortPusherCount(state, activePlayers);
+  return ESCORT_PUSH_SPEED_PER_TANK * escortPusherCount(state, activePlayers);
 }
 
 export function escortHasGuard(
@@ -907,8 +909,11 @@ export function updateEscort(state: GameState, activePlayers?: readonly boolean[
     }
   }
 
-  const guardSpeedScale = escortGuardSpeedScale(state, activePlayers);
-  if (guardSpeedScale === 0) {
+  // 总动力 = 护卫位占比 + 推车贡献：护航与推车都是独立动力源，任一有人车即可走 ——
+  // 车尾 1 人推 = 半速、2 人推 = 全速，满护航 + 2 人推 = 2 倍速。
+  const driveScale =
+    escortGuardSpeedScale(state, activePlayers) + escortPushSpeedScale(state, activePlayers);
+  if (driveScale === 0) {
     escort.moving = false;
     return;
   }
@@ -922,9 +927,8 @@ export function updateEscort(state: GameState, activePlayers?: readonly boolean[
   escort.dir = routeDirection(escort, target);
   const dx = target.x - escort.x;
   const dy = target.y - escort.y;
-  // 车速 = 基础速度 × 护卫位占比 × 推车加成；护卫位没人时上面已提前返回，
-  // 因此单纯站在车尾（或车辆被路障 / 敌军挡住、已到站）不会产生任何位移。
-  const step = escort.speed * guardSpeedScale * escortPushSpeedScale(state, activePlayers);
+  // 车速 = 基础速度 × 总动力（护卫 + 推车）；被路障 / 敌军挡住、已到站时仍不会位移。
+  const step = escort.speed * driveScale;
   const nextX = escort.x + Math.sign(dx) * Math.min(Math.abs(dx), step);
   const nextY = escort.y + Math.sign(dy) * Math.min(Math.abs(dy), step);
   let blocked = rectHitsSolid(state.level, nextX, nextY, ESCORT_SIZE);

@@ -233,7 +233,7 @@ test('the push slot sits behind the convoy and rotates with its heading', () => 
   });
 });
 
-test('pushers at the tail add 25% speed each, capped at two', () => {
+test('pushers add half-speed drive each and stack with guards, capped at two', () => {
   const state = createGameState(601, 4, 2);
   const escort = state.escort!;
   state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
@@ -252,35 +252,35 @@ test('pushers at the tail add 25% speed each, capped at two', () => {
   assert.equal(escortPusherCount(state), 1);
   before = escort.y;
   updateEscort(state);
-  assert.equal(before - escort.y, escort.speed * 1.25);
+  assert.equal(before - escort.y, escort.speed * 1.5); // 满护航 1.0 + 1 名推车 0.5
 
   Object.assign(state.tanks[3], { x: push.x + TANK_SIZE, y: push.y });
   assert.equal(escortPusherCount(state), 2);
   before = escort.y;
   updateEscort(state);
-  assert.equal(before - escort.y, escort.speed * 1.5);
+  assert.equal(before - escort.y, escort.speed * 2); // 满护航 1.0 + 2 名推车 1.0
 
   // 第三名玩家离开护卫位挤进车尾：推车手封顶 2 名，护卫位占比同时掉到一半。
   Object.assign(state.tanks[1], { x: push.x + TANK_SIZE / 2, y: push.y });
   assert.equal(escortPusherCount(state), 2);
   before = escort.y;
   updateEscort(state);
-  assert.equal(before - escort.y, escort.speed * 0.5 * 1.5);
+  assert.equal(before - escort.y, escort.speed * (0.5 + 1)); // 半护航 0.5 + 2 名推车 1.0
 });
 
-test('pushing alone never moves the convoy while the guard slot is empty', () => {
+test('pushing alone drives the convoy at half speed per pusher', () => {
   const state = createGameState(602, 1, 2);
   const escort = state.escort!;
   state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
   const push = escortPushSlot(escort);
   Object.assign(state.tanks[0], { x: push.x, y: push.y });
 
+  // 护卫位空着也能推：1 名推车手 = 半速前进（推车是独立动力）。
   assert.equal(escortPusherCount(state), 1);
   assert.equal(escortHasGuard(state), false);
   const before = escort.y;
   updateEscort(state);
-  assert.equal(escort.y, before);
-  assert.equal(escort.moving, false);
+  assert.equal(before - escort.y, escort.speed * 0.5);
 });
 
 test('disconnected tanks parked at the tail contribute no push bonus', () => {
