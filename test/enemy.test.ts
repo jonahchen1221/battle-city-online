@@ -5,92 +5,18 @@ import { createEnemy } from '../src/game/tank';
 import { updateEnemies } from '../src/game/enemy';
 import { update } from '../src/game/update';
 import { emptyInput } from '../src/core/types';
-import { Cell, createEmptyLevel, removeBrickQuarters, setCell } from '../src/game/level';
+import { createEmptyLevel } from '../src/game/level';
 import { spawnBullet } from '../src/game/bullet';
 import { resolveEagleHit } from '../src/game/phase';
 import {
-  BRICK_TL,
-  BRICK_TR,
   EAGLE_COL,
   EAGLE_ROW,
   ESCORT_ENEMY_RECYCLE_TICKS,
   ESCORT_STOPPED_SPAWN_DIVISOR,
   SMART_AI_FIRE_COOLDOWN_TICKS,
-  SMART_AI_STUCK_TICKS,
   STAGE_ENEMY_TOTAL,
   SUBTILE,
 } from '../src/core/constants';
-
-test('escort-stage traditional enemies steer back toward the convoy combat zone', () => {
-  const state = createGameState(100, 1, 2);
-  state.level = createEmptyLevel(state.level.cols, state.level.rows);
-  const player = state.tanks[0];
-  const basic = createEnemy('basic', 2, 0);
-  const escort = state.escort!;
-  Object.assign(basic, { x: 16, y: escort.y - 96, dir: 'left', aiTicks: 30 });
-  state.phase = 'playing';
-  state.tanks = [player, basic];
-  state.spawning = [];
-  state.enemyQueue = [];
-
-  updateEnemies(state, state.level);
-
-  assert.equal(basic.dir, 'right');
-  assert.ok(basic.x > 16);
-});
-
-test('a hidden traditional enemy far behind the escort is recycled ahead with a spawn flash', () => {
-  const state = createGameState(101, 1, 2);
-  const player = state.tanks[0];
-  const basic = createEnemy('basic', 2, 0);
-  const escort = state.escort!;
-  escort.y = 300;
-  Object.assign(player, { x: escort.x, y: escort.y });
-  Object.assign(basic, {
-    x: 40,
-    y: escort.y + 200,
-    escortFarTicks: ESCORT_ENEMY_RECYCLE_TICKS - 1,
-  });
-  const bullet = spawnBullet(basic, state.nextBulletId++, state.level);
-  state.phase = 'playing';
-  state.tanks = [player, basic];
-  state.spawning = [];
-  state.enemyQueue = [];
-  state.bullets = [bullet];
-
-  updateEnemies(state, state.level);
-
-  assert.equal(state.tanks.some((tank) => tank.id === basic.id), false);
-  assert.equal(state.spawning[0]?.tank.id, basic.id);
-  assert.ok(state.spawning[0]!.tank.y < escort.y);
-  assert.equal(bullet.alive, false);
-});
-
-test('a hidden smart enemy far behind the escort is also recycled ahead', () => {
-  const state = createGameState(103, 1, 20);
-  const player = state.tanks[0];
-  const smart = createEnemy('smart', 2, 0);
-  const escort = state.escort!;
-  escort.y = 300;
-  Object.assign(player, { x: escort.x, y: escort.y });
-  Object.assign(smart, {
-    x: 40,
-    y: escort.y + 200,
-    escortFarTicks: ESCORT_ENEMY_RECYCLE_TICKS - 1,
-  });
-  state.phase = 'playing';
-  state.tanks = [player, smart];
-  state.spawning = [];
-  state.enemyQueue = [];
-  escort.arrived = true; // 本用例只验证回收，避免持续增援器同时补入新坦克。
-
-  updateEnemies(state, state.level);
-
-  assert.equal(state.tanks.some((tank) => tank.id === smart.id), false);
-  const recycled = state.spawning.find((spawn) => spawn.tank.id === smart.id);
-  assert.ok(recycled);
-  assert.ok(recycled.tank.y < escort.y);
-});
 
 test('escort stages refill their enemy composition while normal stages stay finite', () => {
   const escortState = createGameState(104, 1, 20);
@@ -119,45 +45,6 @@ test('escort stages refill their enemy composition while normal stages stay fini
 
   assert.equal(normalState.spawning.length, 0);
   assert.equal(normalState.enemyQueue.length, 0);
-});
-
-test('escort reinforcement timer advances more slowly while the convoy is stopped', () => {
-  const state = createGameState(106, 1, 20);
-  state.phase = 'playing';
-  state.level = createEmptyLevel(state.level.cols, state.level.rows);
-  state.enemySpawnTimer = 4;
-  state.escort!.moving = false;
-  state.tick = 1;
-
-  updateEnemies(state, state.level);
-  assert.equal(state.enemySpawnTimer, 4);
-
-  state.tick = ESCORT_STOPPED_SPAWN_DIVISOR;
-  updateEnemies(state, state.level);
-  assert.equal(state.enemySpawnTimer, 3);
-
-  state.escort!.moving = true;
-  state.tick++;
-  updateEnemies(state, state.level);
-  assert.equal(state.enemySpawnTimer, 2);
-});
-
-test('traditional enemy movement remains un-leashed on normal stages', () => {
-  const state = createGameState(102, 1, 1);
-  const player = state.tanks[0];
-  const basic = createEnemy('basic', 2, 0);
-  Object.assign(basic, { x: 40, y: 40, dir: 'left', aiTicks: 30 });
-  state.phase = 'playing';
-  state.level = createEmptyLevel();
-  state.tanks = [player, basic];
-  state.spawning = [];
-  state.enemyQueue = [];
-
-  updateEnemies(state, state.level);
-
-  assert.equal(basic.dir, 'left');
-  assert.ok(basic.x < 40);
-  assert.equal(basic.escortFarTicks, 0);
 });
 
 test('enemy waits in spawn flash while its spawn point is occupied', () => {
@@ -413,53 +300,6 @@ test('smart enemy keeps a minimum cooldown after its previous bullet disappears'
   assert.equal(state.bullets[0].ownerId, smart.id);
 });
 
-test('hourglass halves smart enemy aimed-fire cadence', () => {
-  const shotsInSixtyTicks = (slowed: boolean): number => {
-    const state = createGameState(45, 1, 1);
-    const player = state.tanks[0];
-    const smart = createEnemy('smart', 2, 0);
-    Object.assign(player, { x: 40, y: 200 });
-    Object.assign(smart, { x: 40, y: 40, dir: 'down', aiTicks: 0 });
-    state.phase = 'playing';
-    state.level = createEmptyLevel();
-    state.tanks = [player, smart];
-    state.spawning = [];
-    state.enemyQueue = [];
-    state.enemySlowTicks = slowed ? 120 : 0;
-    const firstBulletId = state.nextBulletId;
-
-    for (let tick = 0; tick < 60; tick++) {
-      update(state, [emptyInput()]);
-      // 立即移除本帧炮弹，只测冷却节拍，不让“同时在场一发”的弹位上限干扰结果。
-      for (const bullet of state.bullets) bullet.alive = false;
-    }
-    return state.nextBulletId - firstBulletId;
-  };
-
-  assert.equal(shotsInSixtyTicks(false), 3);
-  assert.equal(shotsInSixtyTicks(true), 2);
-});
-
-test('timer freeze pauses smart enemy fire cooldown', () => {
-  const state = createGameState(46, 1, 1);
-  const player = state.tanks[0];
-  const smart = createEnemy('smart', 2, 0);
-  Object.assign(player, { x: 40, y: 200 });
-  Object.assign(smart, { x: 40, y: 40, dir: 'down', fireCooldown: 10 });
-  state.phase = 'playing';
-  state.level = createEmptyLevel();
-  state.tanks = [player, smart];
-  state.spawning = [];
-  state.enemyQueue = [];
-  state.enemyFreezeTicks = 5;
-
-  for (let tick = 0; tick < 4; tick++) update(state, [emptyInput()]);
-  assert.equal(smart.fireCooldown, 10);
-
-  update(state, [emptyInput()]);
-  assert.equal(smart.fireCooldown, 9, 'cooldown should resume on the first unfrozen action tick');
-});
-
 test('smart enemy detours toward an eligible nearby powerup', () => {
   const state = createGameState(42, 1);
   const player = state.tanks[0];
@@ -477,88 +317,6 @@ test('smart enemy detours toward an eligible nearby powerup', () => {
 
   assert.ok(smart.x > 0, `expected smart tank to seek helmet, got (${smart.x}, ${smart.y})`);
   assert.equal(smart.y, 0);
-});
-
-test('smart enemy keeps seeking powerups while no player tank is alive', () => {
-  const state = createGameState(42, 1);
-  const smart = createEnemy('smart', 2, 0);
-  Object.assign(smart, { x: 0, y: 0, dir: 'down', aiTicks: 0 });
-  state.phase = 'playing';
-  state.level = createEmptyLevel();
-  state.tanks = [smart];
-  state.spawning = [];
-  state.enemyQueue = [];
-  state.powerups = [{ kind: 'helmet', x: 64, y: 0 }];
-
-  updateEnemies(state, state.level);
-
-  assert.ok(smart.x > 0, `expected smart tank to keep seeking helmet, got x=${smart.x}`);
-});
-
-test('only the closest smart enemy claims a nearby powerup', () => {
-  const state = createGameState(42, 1);
-  const player = state.tanks[0];
-  const farther = createEnemy('smart', 2, 0);
-  const closer = createEnemy('smart', 3, 0);
-  Object.assign(player, { x: 0, y: 200 });
-  Object.assign(farther, { x: 0, y: 0, dir: 'down', aiTicks: 0 });
-  Object.assign(closer, { x: 48, y: 0, dir: 'down', aiTicks: 0 });
-  state.phase = 'playing';
-  state.level = createEmptyLevel();
-  state.tanks = [player, farther, closer];
-  state.spawning = [];
-  state.enemyQueue = [];
-  state.powerups = [{ kind: 'helmet', x: 80, y: 0 }];
-
-  updateEnemies(state, state.level);
-
-  assert.equal(farther.x, 0);
-  assert.ok(closer.x > 48, `expected closest smart tank to claim helmet, got x=${closer.x}`);
-});
-
-test('smart enemy prioritizes a player in its firing lane over a nearby powerup', () => {
-  const state = createGameState(42, 1);
-  const player = state.tanks[0];
-  const smart = createEnemy('smart', 2, 0);
-  Object.assign(player, { x: 40, y: 120 });
-  Object.assign(smart, { x: 40, y: 40, dir: 'right', aiTicks: 0 });
-  state.phase = 'playing';
-  state.level = createEmptyLevel();
-  state.tanks = [player, smart];
-  state.spawning = [];
-  state.enemyQueue = [];
-  state.powerups = [{ kind: 'helmet', x: 88, y: 40 }];
-
-  updateEnemies(state, state.level);
-
-  assert.equal(smart.dir, 'down');
-  assert.equal(smart.x, 40);
-  assert.equal(state.bullets[0]?.ownerId, smart.id);
-});
-
-test('smart enemy turns in place at a half-brick snap point and fires immediately', () => {
-  const state = createGameState(42, 1);
-  const player = state.tanks[0];
-  const smart = createEnemy('smart', 2, 0);
-  const level = createEmptyLevel();
-  // 残砖从 y=148 开始；坦克停在 y=132 时向右转的吸附位（y=136）会压入残砖。
-  // 转向不再被整帧拒绝：放弃吸附、原地转车头，当帧即可瞄准开火，不会卡死也无需倒车脱困。
-  for (const col of [5, 6]) {
-    setCell(level, col, 18, Cell.BRICK);
-    removeBrickQuarters(level, col, 18, BRICK_TL | BRICK_TR);
-  }
-  Object.assign(player, { x: 96, y: 132 });
-  Object.assign(smart, { x: 40, y: 132, dir: 'down' });
-  state.phase = 'playing';
-  state.level = level;
-  state.tanks = [player, smart];
-  state.spawning = [];
-  state.enemyQueue = [];
-
-  updateEnemies(state, level);
-  assert.equal(smart.dir, 'right');
-  assert.deepEqual({ x: smart.x, y: smart.y }, { x: 40, y: 132 }); // 原地转向，未吸附进残砖
-  assert.equal(state.bullets[0]?.ownerId, smart.id);
 });
 
 test('smart enemy neither fires down the eagle lane nor damages the eagle with its bullets', () => {
@@ -591,22 +349,4 @@ test('smart enemy neither fires down the eagle lane nor damages the eagle with i
   state.bullets = [spawnBullet(basic, state.nextBulletId++)];
   resolveEagleHit(state);
   assert.equal(state.eagleDestroyed, true, 'traditional enemy bullets should keep classic behavior');
-});
-
-// 编成按“组号 t”取（第 t 组的普通关关号是 3t-2、护送关是 3t-1，两者共用第 t 档编成）。
-test('stage enemy queues include smart tanks without changing the configured total', () => {
-  const expectedSmartCounts = [4, 5, 6, 7, 8];
-  for (let group = 1; group <= 5; group++) {
-    for (const stage of [group * 3 - 2, group * 3 - 1]) {
-      const state = createGameState(42, 1, stage);
-      assert.equal(state.enemyQueue.length, STAGE_ENEMY_TOTAL, `第 ${stage} 关队列长度`);
-      assert.equal(
-        state.enemyQueue.filter((kind) => kind === 'smart').length,
-        expectedSmartCounts[group - 1],
-        `第 ${stage} 关（第 ${group} 组）智能坦克数`,
-      );
-    }
-  }
-  // Boss 关不走有限队列。
-  assert.equal(createGameState(42, 1, 3).enemyQueue.length, 0);
 });

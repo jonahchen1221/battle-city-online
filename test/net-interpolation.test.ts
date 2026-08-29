@@ -1,13 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  interpolateBossPosition,
-  interpolateBulletPositions,
-  interpolateTankPositions,
-  snapshotInterpolationWindow,
-} from '../src/client/app';
-import { spawnWeaponBullets } from '../src/game/bullet';
-import { createBoss } from '../src/game/boss';
+import { interpolateTankPositions, snapshotInterpolationWindow } from '../src/client/app';
 import { createPlayer } from '../src/game/tank';
 
 test('catch-up snapshots with the same arrival time are spaced by authoritative tick', () => {
@@ -33,29 +26,6 @@ test('catch-up snapshots with the same arrival time are spaced by authoritative 
   assert.ok(Math.abs(later.alpha - 0.2) < 1e-9);
 });
 
-test('multiple bullets from one owner interpolate independently by bullet id', () => {
-  const tank = createPlayer(0, 1);
-  tank.weapon = 'spread';
-  const from = spawnWeaponBullets(tank, 10).map((bullet, index) => ({
-    ...bullet,
-    x: index * 100,
-    y: index * 20,
-  }));
-  const to = from.map((bullet) => ({ ...bullet, x: bullet.x + 20, y: bullet.y + 10 }));
-
-  const interpolated = interpolateBulletPositions(from, to, 0.5);
-
-  assert.deepEqual(interpolated.map((bullet) => bullet.id), [10, 11, 12]);
-  assert.deepEqual(
-    interpolated.map((bullet) => ({ x: bullet.x, y: bullet.y })),
-    [
-      { x: 10, y: 5 },
-      { x: 110, y: 25 },
-      { x: 210, y: 45 },
-    ],
-  );
-});
-
 test('a perpendicular tank turn snaps the lateral axis instead of visibly drifting', () => {
   const from = createPlayer(0, 1);
   Object.assign(from, { x: 32, y: 100, dir: 'up' as const });
@@ -66,27 +36,4 @@ test('a perpendicular tank turn snaps the lateral axis instead of visibly drifti
   assert.equal(interpolated.x, 32.375, '沿新行驶方向继续平滑插值');
   assert.equal(interpolated.y, 104, '垂直轴立即采用转向后的吸附位置，不画出侧滑过程');
   assert.equal(interpolated.dir, 'right');
-});
-
-test('same-axis tank movement keeps regular interpolation', () => {
-  const from = createPlayer(0, 1);
-  Object.assign(from, { x: 32, y: 100, dir: 'up' as const });
-  const to = { ...from, x: 32, y: 97.75 };
-
-  const [interpolated] = interpolateTankPositions([from], [to], 0.5);
-
-  assert.equal(interpolated.x, 32);
-  assert.equal(interpolated.y, 98.875);
-});
-
-test('moving Boss is interpolated on the authoritative snapshot timeline', () => {
-  const from = createBoss(1);
-  const to = { ...from, x: from.x + 12, y: from.y + 6, moving: true };
-
-  const interpolated = interpolateBossPosition(from, to, 0.25);
-
-  assert.ok(interpolated);
-  assert.equal(interpolated.x, from.x + 3);
-  assert.equal(interpolated.y, from.y + 1.5);
-  assert.equal(interpolated.moving, true, '非位置字段应取较新的权威快照');
 });

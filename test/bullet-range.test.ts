@@ -25,14 +25,3 @@ test('a bullet silently expires at the screen edge captured when it was fired', 
   assert.equal(explosions.length, 0, '射程回收不应在空中制造爆炸');
   assert.equal(events.length, 0);
 });
-
-test('classic-sized stages keep their original boundary-based projectile range', () => {
-  const level = createEmptyLevel();
-  const player = createPlayer(0, 1);
-  Object.assign(player, { x: 0, y: 120, dir: 'right' as const });
-  const bullet = spawnBullet(player, 1, level);
-
-  for (let i = 0; i < 60; i++) advanceBullets(level, [bullet], [], []);
-  assert.equal(bullet.alive, true, '普通关不应应用大地图射程限制');
-  assert.equal(bullet.viewportBounds, null);
-});

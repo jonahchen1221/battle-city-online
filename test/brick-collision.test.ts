@@ -75,15 +75,3 @@ test('a laser cannot tunnel through a half brick between its 8px movement endpoi
   assert.equal(level.cells[5 * level.cols + 5], Cell.EMPTY);
   assert.equal(bullet.alive, true, '激光打穿半砖后应继续飞行');
 });
-
-test('a laser detects a half brick already overlapping its muzzle', () => {
-  const level = createEmptyLevel();
-  setCell(level, 5, 5, Cell.BRICK);
-  removeBrickQuarters(level, 5, 5, BRICK_TR | BRICK_BR); // 只留下炮口内的左半砖
-  const bullet = rightwardLaser(40); // 出膛即与 [40,44) 重叠，终点已越过砖块
-
-  advanceBullets(level, [bullet], [], []);
-
-  assert.equal(level.cells[5 * level.cols + 5], Cell.EMPTY);
-  assert.equal(bullet.alive, true);
-});

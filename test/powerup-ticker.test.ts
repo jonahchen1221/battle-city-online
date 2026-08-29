@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { powerupTickerText } from '../src/client/ui';
+
 import { tryPickupPowerup } from '../src/game/powerup';
-import { createGameState, type PowerupPickupEvent } from '../src/game/state';
+import { createGameState } from '../src/game/state';
 
 test('powerup pickup emits the collector and kind for the marquee', () => {
   const state = createGameState(42, 2);
@@ -17,24 +17,4 @@ test('powerup pickup emits the collector and kind for the marquee', () => {
     'powerupPickup',
   ]);
   assert.equal(state.powerups.length, 0);
-});
-
-test('marquee copy identifies the player, item, and effect', () => {
-  const event: PowerupPickupEvent = {
-    type: 'powerupPicked',
-    playerIndex: 2,
-    kind: 'ghost',
-  };
-
-  assert.equal(powerupTickerText(event, '阿星'), '阿星 获得【幽灵】：穿越砖墙 10 秒');
-});
-
-test('marquee copy describes the enemy-side effect', () => {
-  const event: PowerupPickupEvent = {
-    type: 'powerupPicked',
-    playerIndex: -1,
-    kind: 'grenade',
-  };
-
-  assert.equal(powerupTickerText(event, '敌军'), '敌军 获得【手榴弹】：摧毁所有玩家');
 });

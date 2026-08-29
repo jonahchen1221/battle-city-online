@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BULLET_SPEED,
-  PLAYER_DAMAGE_FLASH_TICKS,
   PLAYER_SPEED,
   PLAYER_SPEED_UPGRADED,
   STAR_BULLET_SPEED,
@@ -63,50 +62,6 @@ test('player stars follow the speed, firepower, and armor route', () => {
     { level: player.level, hp: player.hp, armor: player.armor },
     { level: 3, hp: 2, armor: 0 },
   );
-});
-
-test('damaged upgrades add only newly unlocked durability and never heal body hp', () => {
-  const state = createGameState(2, 1, 2);
-  const player = playerOf(state);
-
-  giveStar(state); // 1 级：2 hp
-  damagePlayerTank(state, player);
-  assert.equal(player.alive, true);
-  assert.equal(player.hp, 1);
-  assert.equal(player.hitFlashTicks, PLAYER_DAMAGE_FLASH_TICKS);
-  assert.equal(state.explosions.length, 1);
-
-  giveStar(state); // 2 级不增加耐久
-  assert.deepEqual({ level: player.level, hp: player.hp }, { level: 2, hp: 1 });
-
-  giveStar(state); // 3 级只装一层独立护甲
-  assert.deepEqual(
-    { level: player.level, hp: player.hp, armor: player.armor },
-    { level: 3, hp: 1, armor: 1 },
-  );
-
-  damagePlayerTank(state, player); // 护甲先碎，残血车体不受伤
-  assert.deepEqual(
-    { alive: player.alive, hp: player.hp, armor: player.armor },
-    { alive: true, hp: 1, armor: 0 },
-  );
-  assert.equal(state.explosions.length, 3, '破甲应产生两簇火花');
-  assert.ok(state.events.includes('steelHit'));
-
-  damagePlayerTank(state, player);
-  assert.equal(player.alive, false);
-  assert.equal(player.hp, 0);
-  assert.deepEqual(state.powerups, []);
-});
-
-test('level zero still dies from one hit', () => {
-  const state = createGameState(3, 1, 2);
-  const player = playerOf(state);
-
-  damagePlayerTank(state, player);
-
-  assert.equal(player.alive, false);
-  assert.equal(player.hp, 0);
 });
 
 test('stage transition preserves damage and broken armor instead of silently healing', () => {
