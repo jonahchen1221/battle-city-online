@@ -76,7 +76,7 @@ import {
 import type { Direction } from '../core/types';
 import { TankState, canTankOccupy, createEnemy, isPlayerTank } from './tank';
 import { BulletState, makeSmallExplosion } from './bullet';
-import { destroyPlayerTank } from './death';
+import { damagePlayerTank, destroyPlayerTank } from './death';
 import { Cell, brickMaskOverlapsRect, getCell, setCell } from './level';
 import type { GameState } from './state';
 
@@ -1063,7 +1063,7 @@ function resolveLaserHits(state: GameState, boss: BossState): void {
     for (const center of boss.laserCols) {
       if (t.x < center + half && t.x + TANK_SIZE > center - half) {
         boss.laserHitPlayers.push(t.playerIndex);
-        destroyPlayerTank(state, t);
+        damagePlayerTank(state, t);
         break;
       }
     }

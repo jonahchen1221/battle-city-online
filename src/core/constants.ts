@@ -70,8 +70,9 @@ export const WATER_ANIM_TICKS = 32;
 // 坦克尺寸（= 一个大格）
 export const TANK_SIZE = TILE; // 16
 
-// 玩家坦克移动速度（px/tick）
+// 玩家坦克基础移动速度（px/tick）；取得第一颗星后提升到 PLAYER_SPEED_UPGRADED。
 export const PLAYER_SPEED = 0.75;
+export const PLAYER_SPEED_UPGRADED = 1;
 
 // ── 冲刺技能（玩家专属）──
 // 按下冲刺键后沿当前朝向高速位移 2 个大格，随后进入 5 秒冷却；期间车身周围渲染倒计时圆环。
@@ -387,12 +388,15 @@ export const PLAYER_FREEZE_TICKS = 3 * TICKS_PER_SECOND;
 export const SHOVEL_TICKS = 1200;
 // helmet 道具：无敌帧数（复用出生护盾机制 / 渲染）。
 export const HELMET_INVULN_TICKS = 600;
-// star 道具：坦克等级上限；等级 ≥1 提升弹速、≥2 可双弹在场、=3 可击穿钢块。
+// star 道具：玩家等级上限。1 级提升移动/弹速并增加 1 点车体生命，
+// 2 级开放双弹与破钢，3 级增加一层独立护甲。
 export const PLAYER_MAX_LEVEL = 3;
 // star 等级 ≥1 时的玩家弹速（px/tick，原为 BULLET_SPEED=2）。
 export const STAR_BULLET_SPEED = 3;
 // star 等级 ≥2 时同屏可存在的玩家子弹数（原为 1）。
 export const PLAYER_MAX_BULLETS_UPGRADED = 2;
+// 玩家受到非致命伤害后的白闪持续时间；残血会另有持续冒烟反馈。
+export const PLAYER_DAMAGE_FLASH_TICKS = 18;
 // 道具浮标闪烁：一个周期 32 帧内前 24 帧可见、后 8 帧隐藏。
 export const POWERUP_BLINK_CYCLE_TICKS = 32;
 export const POWERUP_BLINK_VISIBLE_TICKS = 24;

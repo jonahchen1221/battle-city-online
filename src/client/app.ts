@@ -16,6 +16,7 @@ import { update } from '../game/update';
 import type { LevelState } from '../game/level';
 import type { BulletState } from '../game/bullet';
 import type { BossState } from '../game/boss';
+import type { TankState } from '../game/tank';
 import { Renderer } from '../render/renderer';
 import { Sfx } from '../audio/sfx';
 import { Keyboard } from '../input/keyboard';
@@ -939,7 +940,7 @@ export class App {
     drawTextCentered(ctx, atlas, 'ONLINE CO-OP', cx, 99, '#d08b32');
 
     // 两台对向坦克做成小徽标，同时说明“合作对战”的核心主题。
-    drawTile(ctx, atlas.playerTank[0].right[0], cx - 76, 95);
+    drawTile(ctx, atlas.playerTank[0][0].right[0], cx - 76, 95);
     drawTile(ctx, atlas.enemyTank.basic.left[0], cx + 60, 95);
 
     const items = this.titleItems();
@@ -1153,13 +1154,7 @@ export class App {
     const level = to.level; // 增量地形：始终用已解析出的完整 level
 
     // 全部坦克（含本地玩家）：以 to 为准，按 id 匹配 from 旧位置插值。本地与远程走同一路径。
-    const fromTankById = new Map<number, { x: number; y: number }>();
-    for (const t of from.snap.tanks) fromTankById.set(t.id, { x: t.x, y: t.y });
-    const tanks = base.tanks.map((t) => {
-      const p = fromTankById.get(t.id);
-      if (!p) return t; // 新出生：直接取 to 位置
-      return { ...t, x: lerp(p.x, t.x, alpha), y: lerp(p.y, t.y, alpha) };
-    });
+    const tanks = interpolateTankPositions(from.snap.tanks, base.tanks, alpha);
 
     // 每发子弹都有稳定 id；星级双弹、散弹与机枪弹即使 ownerId 相同也能各自正确插值。
     const bullets = interpolateBulletPositions(from.snap.bullets, base.bullets, alpha);
@@ -1416,6 +1411,37 @@ function clamp01(v: number): number {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+function verticalDirection(dir: TankState['dir']): boolean {
+  return dir === 'up' || dir === 'down';
+}
+
+// 坦克插值需特别处理垂直↔水平转向：逻辑层会在转向瞬间把旧轴吸附到 8px 网格，
+// 若仍对 x/y 双轴缓动，就会用新朝向沿旧轴横滑，看起来像“漂移”。转向帧只沿新行驶轴
+// 插值，垂直轴直接采用新快照的吸附坐标；同轴移动与掉头保持普通双轴插值。
+export function interpolateTankPositions(
+  fromTanks: ReadonlyArray<TankState>,
+  toTanks: ReadonlyArray<TankState>,
+  alpha: number,
+): TankState[] {
+  const fromById = new Map<number, TankState>();
+  for (const tank of fromTanks) fromById.set(tank.id, tank);
+  return toTanks.map((tank) => {
+    const previous = fromById.get(tank.id);
+    if (!previous) return tank;
+    const changedAxis = verticalDirection(previous.dir) !== verticalDirection(tank.dir);
+    if (!changedAxis) {
+      return {
+        ...tank,
+        x: lerp(previous.x, tank.x, alpha),
+        y: lerp(previous.y, tank.y, alpha),
+      };
+    }
+    return verticalDirection(tank.dir)
+      ? { ...tank, x: tank.x, y: lerp(previous.y, tank.y, alpha) }
+      : { ...tank, x: lerp(previous.x, tank.x, alpha), y: tank.y };
+  });
 }
 
 // 按唯一 bullet.id 匹配前后快照。导出纯函数，覆盖同一射手多发子弹的回归测试。

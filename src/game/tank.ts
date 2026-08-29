@@ -3,6 +3,8 @@ import {
   SUBTILE,
   TANK_SIZE,
   PLAYER_SPEED,
+  PLAYER_SPEED_UPGRADED,
+  PLAYER_MAX_LEVEL,
   PLAYER_SPAWN_POINTS,
   BULLET_SPEED,
   ENEMY_SPEED_BASIC,
@@ -58,12 +60,14 @@ export interface TankState {
   prevFire: boolean; // 上一帧开火键状态（轻点输入缓冲的按下沿检测用）
   alive: boolean;
   hp: number; // 剩余血量：常规 1，装甲 4；≤0 即毁
+  armor: number; // 玩家 3 级的一次性外层护甲（0/1）；敌军恒为 0
+  hitFlashTicks: number; // 玩家非致命受击白闪；敌军恒为 0（装甲敌军沿用 hp 周期闪烁）
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
   smartStuckTicks: number; // 智能坦克连续尝试追踪却没有位移的帧数
   smartEscapeTicks: number; // 智能坦克保持当前脱困方向的剩余帧数
   escortFarTicks: number; // 护送关普通敌军落在车后且不在玩家视野内的连续帧数；其他情况恒为 0
   invulnTicks: number; // 护盾剩余帧：>0 时对方子弹穿过、不受伤
-  level: number; // star 等级 0..3：影响弹速 / 双弹 / 破钢；死亡 / 复活归 0
+  level: number; // star 等级 0..3；玩家路线见 upgradePlayerTank，死亡 / 复活归 0
   carriesPowerup: boolean; // 是否为“携带道具”的敌军（第 4/11/18 台出队者）：红色闪烁，死亡掉落道具
   slideTicks: number; // 冰面滑行剩余帧：在冰面上移动时装填为 ICE_SLIDE_TICKS，松开方向键后据此继续滑行
   freezeTicks: number; // 友军冻结剩余帧：被队友子弹击中后 >0，期间不能移动 / 开火（敌人恒为 0）
@@ -86,6 +90,42 @@ export function isPlayerTank(t: TankState): boolean {
   return t.kind === 'player';
 }
 
+// 玩家车体生命上限：0 级 1 点，1 级起 2 点；3 级护甲单独记录在 armor，不混入 hp。
+export function playerMaxHpForLevel(level: number): number {
+  return level >= 1 ? 2 : 1;
+}
+
+export function playerSpeedForLevel(level: number): number {
+  return level >= 1 ? PLAYER_SPEED_UPGRADED : PLAYER_SPEED;
+}
+
+// 星星只补充“该级新解锁的耐久”，不承担回血功能：
+// 0→1 增加的一点车体上限会立即兑现；1→2 不回血；2→3 只装上一层新护甲。
+// 返回 false 表示已经满级，拾取者属性保持不变。
+export function upgradePlayerTank(tank: TankState): boolean {
+  if (!isPlayerTank(tank) || tank.level >= PLAYER_MAX_LEVEL) return false;
+  const oldMaxHp = playerMaxHpForLevel(tank.level);
+  tank.level++;
+  const newMaxHp = playerMaxHpForLevel(tank.level);
+  tank.speed = playerSpeedForLevel(tank.level);
+  tank.hp = Math.min(newMaxHp, tank.hp + (newMaxHp - oldMaxHp));
+  if (tank.level === 3) tank.armor = 1;
+  return true;
+}
+
+// 跨关恢复已捕获的升级状态，但不治疗既有车体伤害，也不补回已经打掉的护甲。
+export function restorePlayerUpgrade(
+  tank: TankState,
+  level: number,
+  hp: number,
+  armor: number,
+): void {
+  tank.level = Math.max(0, Math.min(PLAYER_MAX_LEVEL, level));
+  tank.speed = playerSpeedForLevel(tank.level);
+  tank.hp = Math.max(1, Math.min(playerMaxHpForLevel(tank.level), hp));
+  tank.armor = tank.level >= 3 ? Math.max(0, Math.min(1, armor)) : 0;
+}
+
 // 建立一名玩家坦克：按 playerIndex 取出生点，出生朝上。
 export function createPlayer(playerIndex: number, id: number): TankState {
   const p = PLAYER_SPAWN_POINTS[playerIndex];
@@ -102,6 +142,8 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     prevFire: false,
     alive: true,
     hp: 1,
+    armor: 0,
+    hitFlashTicks: 0,
     aiTicks: 0,
     smartStuckTicks: 0,
     smartEscapeTicks: 0,
@@ -170,6 +212,8 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     prevFire: false,
     alive: true,
     hp: enemyHp(kind),
+    armor: 0,
+    hitFlashTicks: 0,
     // 智能坦克出生后立即规划路径；传统敌人仍沿出生朝向行进半秒再做首次随机决策。
     aiTicks: kind === 'smart' ? 0 : AI_DECISION_MIN_TICKS,
     smartStuckTicks: 0,

@@ -33,9 +33,15 @@ import {
 } from '../core/constants';
 import type { Rng } from '../core/rng';
 import { Cell, setCell, getCell } from './level';
-import { TankState, EnemyKind, WeaponKind, isPlayerTank } from './tank';
+import {
+  TankState,
+  EnemyKind,
+  WeaponKind,
+  isPlayerTank,
+  upgradePlayerTank,
+} from './tank';
 import type { GameState } from './state';
-import { destroyPlayerTank } from './death';
+import { destroyPlayerTank, dropDeathStar } from './death';
 
 // 道具系统（纯模拟层）：一切随机取自 state.rng，可复现；GameState 保持可序列化。
 // 六种经典道具 + 四种魂斗罗风格武器道具 + 五种“中立”道具（每关必出，见 updateNeutralPowerups）。
@@ -99,19 +105,6 @@ export const BOSS_NEUTRAL_WEAPONS: ReadonlyArray<PowerupKind> = [
   'wpnSpiral',
   'wpnLaser',
   'wpnMachine',
-];
-
-// MVP 开局奖励可选的“强力道具”池（仅多人局，见 state.ts nextStage）。
-export const MVP_POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
-  'star',
-  'grenade',
-  'tank',
-  'helmet',
-  'wpnSpread',
-  'wpnSpiral',
-  'wpnLaser',
-  'wpnMachine',
-  'drill',
 ];
 
 // 武器道具 → 武器种类的映射（拾取即替换旧武器）。
@@ -335,11 +328,15 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
   const player = isPlayerTank(collector);
   switch (kind) {
     case 'star':
-      // 智能坦克只升到 1 级（提升弹速，不开放双弹 / 破钢）；其他坦克仍封顶 3。
-      collector.level = Math.min(
-        collector.kind === 'smart' ? SMART_MAX_LEVEL : PLAYER_MAX_LEVEL,
-        collector.level + 1,
-      );
+      if (player) {
+        upgradePlayerTank(collector);
+      } else {
+        // 智能坦克只升到 1 级（提升弹速，不开放双弹 / 破钢）；其他敌军仍封顶 3。
+        collector.level = Math.min(
+          collector.kind === 'smart' ? SMART_MAX_LEVEL : PLAYER_MAX_LEVEL,
+          collector.level + 1,
+        );
+      }
       break;
     case 'grenade':
       grenadeKillOpponents(state, collector);
@@ -442,6 +439,7 @@ function grenadeKillOpponents(state: GameState, collector: TankState): void {
     if (!t.alive || isPlayerTank(t)) continue;
     t.hp = 0;
     t.alive = false;
+    if (t.kind === 'smart') dropDeathStar(state, t);
     const kind = t.kind as EnemyKind;
     state.scoreByPlayer[collector.playerIndex] += ENEMY_SCORE[kind];
     state.killsByPlayer[collector.playerIndex][kind]++;

@@ -13,9 +13,17 @@ import {
 } from '../core/constants';
 import { LevelState, cloneLevel } from './level';
 import { bossArenaForStage, normalLevelForStage } from './levels';
-import { TankState, TankKind, EnemyKind, WeaponKind, createPlayer, isPlayerTank } from './tank';
+import {
+  TankState,
+  TankKind,
+  EnemyKind,
+  WeaponKind,
+  createPlayer,
+  isPlayerTank,
+  restorePlayerUpgrade,
+} from './tank';
 import { BulletState } from './bullet';
-import { MVP_POWERUP_KINDS, shuffledNeutralQueue } from './powerup';
+import { shuffledNeutralQueue } from './powerup';
 import type { PowerupState, PowerupKind } from './powerup';
 import { createBoss } from './boss';
 import type { BossState, MineState } from './boss';
@@ -228,7 +236,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     tick: 0,
     rng,
     levelEpoch: 0,
-    // 拷贝一份，避免就地破坏砖块时污染 STAGES 常量。
+    // 拷贝一份，避免就地破坏砖块时污染关卡模板。
     level,
     tanks,
     bullets: [],
@@ -291,7 +299,7 @@ export function nextStage(state: GameState): void {
   // ── MVP 开局奖励（仅多人局）──
   // 规则：以「本关得分差」评 MVP —— delta[i] = 当前累计分 − 本关开始时的累计分快照；
   // 取 delta 最高者，并列时取 playerIndex 最小者（全员 delta 为 0 也照发，由并列规则兜底）。
-  // 奖励为一枚随机“强力道具”，刷在 MVP 下一关出生点的正前方（朝上一个坦克身位）。
+  // 奖励固定为一枚五角星，刷在 MVP 下一关出生点的正前方（朝上一个坦克身位）。
   // 必须在下方重置 powerups 之前算出 MVP（重置会清空场上道具），实际投放在重置之后。
   let mvpIndex = -1;
   if (state.playerCount > 1) {
@@ -305,15 +313,18 @@ export function nextStage(state: GameState): void {
     }
   }
 
-  // 先捕获每名玩家当前 star 等级 / 武器 / 钻头（三者跨关保留）：来源为在场坦克或复活闪光中的
-  // 坦克，缺席者按 0 / 'cannon' / false。注意这只影响“过关”这一条路径 —— 关内被击毁后复活仍
-  // 走 createPlayer，等级、武器、钻头照旧清零。
+  // 先捕获每名玩家当前 star 等级、剩余车体生命、护甲、武器与钻头（均跨关保留）。
+  // 关内被击毁后复活仍走 createPlayer，所有升级照旧清零。
   const levelByPlayer = new Array<number>(state.playerCount).fill(0);
+  const hpByPlayer = new Array<number>(state.playerCount).fill(1);
+  const armorByPlayer = new Array<number>(state.playerCount).fill(0);
   const weaponByPlayer = new Array<WeaponKind>(state.playerCount).fill('cannon');
   const drillByPlayer = new Array<boolean>(state.playerCount).fill(false);
   const capture = (t: TankState): void => {
     if (!isPlayerTank(t)) return;
     levelByPlayer[t.playerIndex] = t.level;
+    hpByPlayer[t.playerIndex] = t.hp;
+    armorByPlayer[t.playerIndex] = t.armor;
     weaponByPlayer[t.playerIndex] = t.weapon;
     drillByPlayer[t.playerIndex] = t.drill;
   };
@@ -370,12 +381,11 @@ export function nextStage(state: GameState): void {
   state.pausedBy = -1;
   state.prevPause = false;
 
-  // MVP 奖励投放（多人局）：种类由 state.rng 从强力道具池随机取，位置为该玩家出生点正上方
-  // 一个坦克身位（y−16，越界钳到 0），一进关卡就能顺手吃到。单机局 mvpIndex 恒为 -1，不发。
+  // MVP 奖励投放（多人局）：固定五角星，位置为该玩家出生点正上方一个坦克身位
+  //（y−16，越界钳到 0），一进关卡就能顺手吃到。单机局 mvpIndex 恒为 -1，不发。
   if (mvpIndex >= 0) {
-    const kind = MVP_POWERUP_KINDS[state.rng.int(MVP_POWERUP_KINDS.length)];
     const spawn = escortPlayerSpawn(state.escort, mvpIndex, state.level);
-    state.powerups.push({ kind, x: spawn.x, y: Math.max(0, spawn.y - TANK_SIZE) });
+    state.powerups.push({ kind: 'star', x: spawn.x, y: Math.max(0, spawn.y - TANK_SIZE) });
   }
 
   // 多人合作：团队过关 = 全队一起进下一关 —— 新关卡全员生命恢复到初始值，阵亡者重新入场
@@ -391,7 +401,7 @@ export function nextStage(state: GameState): void {
     const spawn = escortPlayerSpawn(state.escort, i, state.level);
     tank.x = spawn.x;
     tank.y = spawn.y;
-    tank.level = levelByPlayer[i];
+    restorePlayerUpgrade(tank, levelByPlayer[i], hpByPlayer[i], armorByPlayer[i]);
     tank.weapon = weaponByPlayer[i];
     tank.drill = drillByPlayer[i];
     state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });

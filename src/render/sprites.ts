@@ -475,7 +475,7 @@ function shadeTankInterior(g: TankGrid): void {
   }
 }
 
-function makeTankTemplate(kind: TankSilhouette): string[] {
+function makeTankTemplate(kind: TankSilhouette, playerLevel = 0): string[] {
   const g = tankBlank();
 
   if (kind === 'player') {
@@ -493,6 +493,51 @@ function makeTankTemplate(kind: TankSilhouette): string[] {
     g[14][14] = 'L'; g[14][17] = 'S';
     g[15][15] = 'L'; g[15][16] = 'H';
     g[16][15] = 'Z'; g[16][16] = 'Z';
+    if (playerLevel >= 1) {
+      // 1 级高速型：外扩履带、长炮管、前肩翼与后导流翼，和 0 级拉开明显剪影差。
+      tankTrack(g, 1, 8, 7, 30);
+      tankTrack(g, 23, 30, 7, 30);
+      tankBarrel(g, 14, 0, 17, 12);
+      tankRect(g, 4, 11, 9, 14, 'O');
+      tankRect(g, 6, 12, 9, 13, 'L');
+      tankRect(g, 22, 11, 27, 14, 'O');
+      tankRect(g, 22, 12, 25, 13, 'Z');
+      g[11][4] = '.'; g[14][4] = '.';
+      g[11][27] = '.'; g[14][27] = '.';
+      tankRect(g, 5, 24, 9, 27, 'O');
+      tankRect(g, 6, 24, 9, 25, 'L');
+      tankRect(g, 22, 24, 26, 27, 'O');
+      tankRect(g, 22, 24, 25, 25, 'Z');
+    }
+    if (playerLevel >= 2) {
+      // 2 级突击型：收窄斜切炮塔，侧舱改成短刀翼；炮口制退器强调双弹/破钢而不显笨重。
+      tankBarrel(g, 14, 0, 17, 13);
+      tankRect(g, 11, 2, 20, 5, 'B');
+      tankRect(g, 12, 3, 19, 4, 'R');
+      tankPlate(g, 9, 8, 22, 21, 4);
+      tankRect(g, 5, 15, 8, 18, 'O');
+      tankRect(g, 6, 15, 8, 16, 'L');
+      tankRect(g, 23, 15, 26, 18, 'O');
+      tankRect(g, 23, 15, 25, 16, 'Z');
+      g[15][5] = '.'; g[18][5] = '.';
+      g[15][26] = '.'; g[18][26] = '.';
+      // 炮盾上的双亮线形成向前的 V 形视觉重心。
+      g[11][13] = 'L'; g[12][14] = 'L';
+      g[11][18] = 'S'; g[12][17] = 'S';
+    }
+    if (playerLevel >= 3) {
+      // 3 级：满宽侧裙、外层装甲板和四枚铆钉；破甲后渲染层会退回 2 级剪影。
+      tankTrack(g, 0, 8, 6, 31);
+      tankTrack(g, 23, 31, 6, 31);
+      tankRect(g, 4, 10, 9, 29, 'O');
+      tankRect(g, 5, 12, 9, 27, 'H');
+      tankRect(g, 22, 10, 27, 29, 'O');
+      tankRect(g, 22, 12, 26, 27, 'D');
+      tankPlate(g, 7, 10, 24, 29, 1);
+      tankPlate(g, 8, 7, 23, 22, 1);
+      g[12][10] = 'L'; g[12][21] = 'L';
+      g[25][9] = 'S'; g[25][22] = 'Z';
+    }
   } else if (kind === 'basic') {
     tankTrack(g, 2, 8, 9, 29);
     tankTrack(g, 23, 29, 9, 29);
@@ -557,7 +602,7 @@ function makeTankTemplate(kind: TankSilhouette): string[] {
   return assertGrid(g.map((row) => row.join('')), 32, 32, `tank-${kind}`);
 }
 
-const TANK_PLAYER = makeTankTemplate('player');
+const TANK_PLAYER_LEVELS = [0, 1, 2, 3].map((level) => makeTankTemplate('player', level));
 const TANK_BASIC = makeTankTemplate('basic');
 const TANK_FAST_HD = makeTankTemplate('fast');
 const TANK_POWER = makeTankTemplate('power');
@@ -691,6 +736,8 @@ const MAP_PLAYER3: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'K', S: 'J', Z: 'P', 
 const MAP_PLAYER4: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'W', S: 'V', Z: 'X', L: 'U', D: 'F', O: 'e', K: 'F', B: 'e', R: 'U' };
 // 按 playerIndex 索引的四套玩家配色。
 const MAP_PLAYERS: ColorMap[] = [MAP_PLAYER1, MAP_PLAYER2, MAP_PLAYER3, MAP_PLAYER4];
+// 玩家非致命受击：保留深色轮廓，其余整体提亮成白色。
+const MAP_PLAYER_HIT: ColorMap = { T: 'w', t: 'c', E: 'b', H: 'w', S: 'w', Z: 'c', L: 'w', D: 'c', O: 'e', K: 'b', B: 'e', R: 'w' };
 // 全体普通敌军共用冷灰钢材；类型差异主要由剪影表达，彩色仅作为小面积功能核心。
 const MAP_ENEMY_STEEL: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
 const MAP_BASIC: ColorMap = MAP_ENEMY_STEEL;
@@ -1301,7 +1348,8 @@ export interface SpriteAtlas {
   ice: Sprite;
   eagle: Sprite;
   eagleDestroyed: Sprite;
-  playerTank: TankFrames[]; // 按 playerIndex（0..3）索引：4 套配色 × 4 朝向 × 2 帧
+  playerTank: TankFrames[][]; // [playerIndex][level]：四套配色 × 四等级 × 四朝向 × 两帧
+  playerTankHit: TankFrames[]; // 按等级索引的受击白闪剪影
   enemyTank: {
     basic: TankFrames;
     fast: TankFrames;
@@ -1380,6 +1428,16 @@ const Y_SMART_SPAWN = 656;
 const Y_BOSS_P1 = 688;
 const Y_BOSS_P2 = 752;
 const Y_BOSS_FLASH = 816;
+// 玩家升级行追加在既有图集末尾：每位玩家补 1/2/3 级三行，随后四行受击白闪。
+const Y_PLAYER_LEVEL_EXTRA = 880;
+const PLAYER_LEVEL_ROW_Y = PLAYER_ROW_Y.map((base, playerIndex) => [
+  base,
+  Y_PLAYER_LEVEL_EXTRA + (playerIndex * 3) * 32,
+  Y_PLAYER_LEVEL_EXTRA + (playerIndex * 3 + 1) * 32,
+  Y_PLAYER_LEVEL_EXTRA + (playerIndex * 3 + 2) * 32,
+]);
+const Y_PLAYER_HIT = Y_PLAYER_LEVEL_EXTRA + 12 * 32;
+const PLAYER_HIT_ROW_Y = [0, 1, 2, 3].map((level) => Y_PLAYER_HIT + level * 32);
 
 // 把一台坦克的朝上两帧铺到某一行：旋转生成其余朝向，
 // 按 up0,up1,down0,down1,left0,left1,right0,right1 排布于 x=0,32,…,224。
@@ -1434,7 +1492,7 @@ export function createSpriteAtlas(): SpriteAtlas {
   // 其余行最宽为坦克行（8 帧 × 32 = 256），故按两者取大。
   // Boss 行需要 4 朝向 × 64 = 256；道具图标行为 POWERUP_KINDS.length × 32；坦克行 256。
   const width = Math.max(256, BOSS_ART * 4, POWERUP_KINDS.length * 32);
-  const height = 880; // + 智能坦克常态/红闪、道具图标、智能出生闪光、Boss 三套配色
+  const height = Y_PLAYER_HIT + 4 * 32;
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -1476,10 +1534,27 @@ export function createSpriteAtlas(): SpriteAtlas {
   paint(ctx, MINE, 176, Y_EAGLE);
   paint(ctx, MINE_ARMED, 192, Y_EAGLE);
 
-  // 玩家坦克行：四套配色，各占一行（P1 在 Y_PLAYER，P2/P3/P4 在图集底部追加行）。
+  // 玩家坦克：四套玩家配色 × 四级逐步增强的剪影。
   for (let i = 0; i < MAP_PLAYERS.length; i++) {
     const map = MAP_PLAYERS[i];
-    paintTankRow(ctx, recolor(TANK_PLAYER, map), recolor(swapTreads(TANK_PLAYER), map), PLAYER_ROW_Y[i]);
+    for (let level = 0; level < TANK_PLAYER_LEVELS.length; level++) {
+      const template = TANK_PLAYER_LEVELS[level];
+      paintTankRow(
+        ctx,
+        recolor(template, map),
+        recolor(swapTreads(template), map),
+        PLAYER_LEVEL_ROW_Y[i][level],
+      );
+    }
+  }
+  for (let level = 0; level < TANK_PLAYER_LEVELS.length; level++) {
+    const template = TANK_PLAYER_LEVELS[level];
+    paintTankRow(
+      ctx,
+      recolor(template, MAP_PLAYER_HIT),
+      recolor(swapTreads(template), MAP_PLAYER_HIT),
+      PLAYER_HIT_ROW_Y[level],
+    );
   }
 
   // 敌方坦克各行：五种独立剪影 + 履带第二帧。
@@ -1538,7 +1613,8 @@ export function createSpriteAtlas(): SpriteAtlas {
     ice: s(80, Y_TERRAIN, 16, 16),
     eagle: s(0, Y_EAGLE, 32, 32),
     eagleDestroyed: s(32, Y_EAGLE, 32, 32),
-    playerTank: PLAYER_ROW_Y.map((y) => tankFramesAt(canvas, y)),
+    playerTank: PLAYER_LEVEL_ROW_Y.map((rows) => rows.map((y) => tankFramesAt(canvas, y))),
+    playerTankHit: PLAYER_HIT_ROW_Y.map((y) => tankFramesAt(canvas, y)),
     enemyTank: {
       basic: tankFramesAt(canvas, Y_BASIC),
       fast: tankFramesAt(canvas, Y_FAST),

@@ -879,6 +879,16 @@ export class Renderer {
             Math.floor(tank.dashReadyFlashTicks / DASH_READY_BLINK_TICKS) % 2 === 0;
           if (on) this.drawDashRing(cx, cy, 1, COLOR_DASH_READY);
         }
+        if (!freezeBlinkOff) {
+          // 车尾的 1–3 枚亮色等级标记，让实际游戏尺寸下的升级模型仍能快速辨级。
+          this.drawPlayerLevelPips(tank, px, py);
+          if (tank.level >= 3) {
+            if (tank.armor > 0) this.drawPlayerArmorPlates(px, py, state.tick);
+            else this.drawPlayerBrokenArmor(px, py, state.tick);
+          }
+          // 车体生命只剩 1 点时持续冒烟并闪烁红色故障核心。
+          if (tank.level >= 1 && tank.hp === 1) this.drawPlayerDamageSmoke(px, py, state.tick);
+        }
       }
 
       // 出生护盾：每 SHIELD_ANIM_TICKS 帧切换两帧流光，覆盖在坦克之上。
@@ -931,6 +941,70 @@ export class Renderer {
     for (const p of pts) ctx.fillRect(p.x * ART_SCALE, p.y * ART_SCALE, ART_SCALE, ART_SCALE);
   }
 
+  private drawArtRect(x: number, y: number, w: number, h: number, color: string): void {
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(
+      Math.round(x * ART_SCALE),
+      Math.round(y * ART_SCALE),
+      Math.max(1, Math.round(w * ART_SCALE)),
+      Math.max(1, Math.round(h * ART_SCALE)),
+    );
+  }
+
+  private drawPlayerLevelPips(tank: TankState, px: number, py: number): void {
+    const count = Math.max(0, Math.min(3, tank.level));
+    const color = PLAYER_LABEL_COLORS[tank.playerIndex] ?? '#ffffff';
+    const startX = px + 8 - (count * 2 - 0.5) / 2;
+    for (let i = 0; i < count; i++) {
+      this.drawArtRect(startX + i * 2, py + 13.5, 1.5, 1, '#101010');
+      this.drawArtRect(startX + i * 2, py + 13, 1.5, 1, color);
+    }
+  }
+
+  // 完整的 3 级护甲使用高亮银蓝外挂侧板；与 helmet 的环形流光护盾明显区分。
+  private drawPlayerArmorPlates(px: number, py: number, tick: number): void {
+    const bright = Math.floor(tick / 8) % 2 === 0;
+    const steel = bright ? '#e8f8ff' : '#78c8e8';
+    const shadow = '#305878';
+    this.drawArtRect(px - 1, py + 3, 1.5, 10, shadow);
+    this.drawArtRect(px - 1, py + 3, 1, 8.5, steel);
+    this.drawArtRect(px + 15.5, py + 3, 1.5, 10, shadow);
+    this.drawArtRect(px + 16, py + 3, 1, 8.5, steel);
+    this.drawArtRect(px + 2, py - 0.5, 4, 1, steel);
+    this.drawArtRect(px + 10, py - 0.5, 4, 1, steel);
+    this.drawArtRect(px - 0.5, py + 5, 1, 1, '#ffffff');
+    this.drawArtRect(px + 15.5, py + 5, 1, 1, '#ffffff');
+  }
+
+  // 护甲已碎时保留四段暗色断口，并偶尔冒出橙色电火花，避免只靠换回 2 级车身来表达。
+  private drawPlayerBrokenArmor(px: number, py: number, tick: number): void {
+    const metal = '#586068';
+    this.drawArtRect(px - 0.5, py + 4, 1, 3, metal);
+    this.drawArtRect(px - 0.5, py + 10, 1, 2, metal);
+    this.drawArtRect(px + 15.5, py + 4, 1, 2, metal);
+    this.drawArtRect(px + 15.5, py + 9, 1, 3, metal);
+    if (Math.floor(tick / 6) % 3 === 0) {
+      this.drawArtRect(px + 16.5, py + 7, 1, 1, '#ffb830');
+      this.drawArtRect(px - 1.5, py + 8, 1, 1, '#ff5038');
+    }
+  }
+
+  // 残血烟雾直接以美术像素绘制，三相循环向上漂移；红色核心在车体中央持续闪烁。
+  private drawPlayerDamageSmoke(px: number, py: number, tick: number): void {
+    const phase = Math.floor(tick / 6) % 3;
+    const puffs = [
+      { x: 10 + (phase % 2), y: 2 - phase, size: 2.5, color: '#505050' },
+      { x: 12 - (phase % 2), y: -1 - phase, size: 2, color: '#989898' },
+      { x: 8, y: -3 - phase, size: 1.5, color: '#383838' },
+    ];
+    for (const puff of puffs) {
+      this.drawArtRect(px + puff.x, py + puff.y, puff.size, puff.size, puff.color);
+    }
+    const warning = Math.floor(tick / 5) % 2 === 0 ? '#ff3828' : '#ffb830';
+    this.drawArtRect(px + 6.5, py + 8.5, 3, 2, '#301008');
+    this.drawArtRect(px + 7, py + 8, 2, 2, warning);
+  }
+
   // 智能坦克的高辨识度覆盖标记：青色四角瞄准框，轻微脉冲但不闪灭。
   // 该层位于树林之上，避免只有车身配色时被地形完全遮住。
   private drawSmartTankMarkers(state: GameState): void {
@@ -968,7 +1042,17 @@ export class Renderer {
   // 根据坦克种类（及装甲受损闪烁 / 携带者红闪）取对应精灵组。
   private tankFrames(tank: TankState, tick: number): TankFrames {
     const { atlas } = this;
-    if (tank.kind === 'player') return atlas.playerTank[tank.playerIndex];
+    if (tank.kind === 'player') {
+      // 3 级外层护甲被击破后，持续显示 2 级无甲车体；短暂白闪强调本次命中。
+      const visualLevel = Math.max(
+        0,
+        Math.min(3, tank.level >= 3 && tank.armor <= 0 ? 2 : tank.level),
+      );
+      const hitFlash = tank.hitFlashTicks > 0 && Math.floor(tank.hitFlashTicks / 3) % 2 === 1;
+      return hitFlash
+        ? atlas.playerTankHit[visualLevel]
+        : atlas.playerTank[tank.playerIndex][visualLevel];
+    }
 
     // 携带道具敌军：每 CARRIER_FLASH_TICKS 帧在常态 / 红色变体间交替（红色相优先于装甲受损闪烁）。
     const flashRed = tank.carriesPowerup && Math.floor(tick / CARRIER_FLASH_TICKS) % 2 === 1;

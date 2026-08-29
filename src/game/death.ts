@@ -1,10 +1,13 @@
 import {
   EXPLOSION_BIG_SIZE,
   EXPLOSION_BIG_TICKS,
+  MAX_POWERUPS_ON_FIELD,
+  PLAYER_DAMAGE_FLASH_TICKS,
   SPAWN_FLASH_TICKS,
   TANK_SIZE,
 } from '../core/constants';
 import { createPlayer, type TankState } from './tank';
+import { makeSmallExplosion } from './bullet';
 import type { GameState } from './state';
 import { escortPlayerSpawn } from './escort';
 
@@ -17,6 +20,14 @@ export function pushBigExplosion(state: GameState, tank: TankState): void {
     ticksLeft: EXPLOSION_BIG_TICKS,
     big: true,
   });
+}
+
+// 智能坦克死亡时，在车体原位置生成一颗五角星。沿用全局场上道具上限，
+// 并发出标准道具出现事件；普通玩家死亡不再掉星。
+export function dropDeathStar(state: GameState, tank: TankState): void {
+  state.powerups.push({ kind: 'star', x: tank.x, y: tank.y });
+  while (state.powerups.length > MAX_POWERUPS_ON_FIELD) state.powerups.shift();
+  state.events.push('powerupSpawn');
 }
 
 // 玩家坦克被击毁：扣该玩家一条生命；若其仍有剩余则走出生闪光复活。
@@ -54,4 +65,32 @@ export function destroyPlayerTank(state: GameState, tank: TankState): void {
   pushBigExplosion(state, tank);
   state.events.push('playerDeath');
   onPlayerKilled(state, tank);
+}
+
+// 玩家统一受伤入口：3 级护甲优先吸收一次伤害；之后才扣车体生命。
+// 非致命命中产生白闪与火花，护甲破裂额外产生一簇火花并播放金属音。
+export function damagePlayerTank(state: GameState, tank: TankState): void {
+  if (!tank.alive) return;
+  const armorBroken = tank.armor > 0;
+  if (armorBroken) tank.armor--;
+  else tank.hp--;
+
+  if (tank.hp <= 0) {
+    destroyPlayerTank(state, tank);
+    return;
+  }
+
+  tank.hitFlashTicks = PLAYER_DAMAGE_FLASH_TICKS;
+  // 受伤发生在本帧输入处理之后。释放开火边沿锁，保证玩家按住开火跨过破甲帧时，
+  // 下一帧仍能重新触发经典炮，而不会一直等到松键后才恢复。
+  tank.prevFire = false;
+  const cx = tank.x + TANK_SIZE / 2;
+  const cy = tank.y + TANK_SIZE / 2;
+  state.explosions.push(makeSmallExplosion(cx, cy));
+  if (armorBroken) {
+    state.explosions.push(makeSmallExplosion(cx + 5, cy - 3));
+    state.events.push('steelHit');
+  } else {
+    state.events.push('explosionSmall');
+  }
 }

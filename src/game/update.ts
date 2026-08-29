@@ -20,7 +20,7 @@ import {
   restoreEagleRingBrick,
   updateNeutralPowerups,
 } from './powerup';
-import { destroyPlayerTank, pushBigExplosion } from './death';
+import { damagePlayerTank, dropDeathStar, pushBigExplosion } from './death';
 import { resolveEscortHits, updateEscort } from './escort';
 import {
   BULLET_SIZE,
@@ -170,6 +170,7 @@ function advanceTankPowerupTimers(state: GameState): void {
         (state.enemyFreezeTicks > 0 || (state.enemySlowTicks > 0 && state.tick % 2 !== 0));
       if (!enemyActionBlocked) tank.fireCooldown--;
     }
+    if (tank.hitFlashTicks > 0) tank.hitFlashTicks--;
   }
 }
 
@@ -277,11 +278,11 @@ function resolveBulletTanks(state: GameState): void {
 
       if (!pierces) b.alive = false;
 
-      t.hp--;
-      if (t.hp <= 0) {
-        if (isPlayerTank(t)) {
-          destroyPlayerTank(state, t);
-        } else {
+      if (isPlayerTank(t)) {
+        damagePlayerTank(state, t);
+      } else {
+        t.hp--;
+        if (t.hp <= 0) {
           pushBigExplosion(state, t);
           t.alive = false;
           // 敌方坦克被击毁：把得分与击毁数归属给射手（敌弹不打敌人，故此处必为玩家弹，
@@ -295,6 +296,8 @@ function resolveBulletTanks(state: GameState): void {
           // 携带者被击毁：用一枚新随机道具替换场上现有道具（随机落点）。
           // 仅子弹击杀触发掉落；grenade 群灭不掉落（在 powerup.ts 内直接置死，不经此分支）。
           if (t.carriesPowerup) dropPowerup(state);
+          // 智能坦克无论是否为随机道具携带者，死亡位置都必定额外生成一颗五角星。
+          if (t.kind === 'smart') dropDeathStar(state, t);
         }
       }
       // 装甲坦克 hp>0 时仅扣血（渲染层据 hp<ARMOR_HP 闪烁），子弹已消亡。

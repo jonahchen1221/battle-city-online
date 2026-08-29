@@ -71,7 +71,7 @@ export interface BulletState {
   // 大地图中记录开火瞬间的逻辑视口；子弹越过该固定边界即静默销毁。
   // 普通单屏关为 null，继续由地图实体边界按经典规则处理。
   viewportBounds: BulletViewportBounds | null;
-  // 可击穿钢块（击中钢块时整格清除）。两条来源：star 满级（3 级）的 cannon 弹，或射手持有
+  // 可击穿钢块（击中钢块时整格清除）。两条来源：玩家 star 2 级、敌军 star 3 级的 cannon 弹，或射手持有
   // drill 钻头（此时任何武器、任何等级都带破钢）。鹰巢与战场边界永不可穿。
   steelPiercing: boolean;
 }
@@ -175,8 +175,9 @@ function firingViewportBounds(tank: TankState, level: LevelState): BulletViewpor
 // 速度取自该坦克（威力坦克更快；敌我 star 等级 ≥1 均提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
 export function spawnBullet(tank: TankState, bulletId: number, level?: LevelState): BulletState {
   const speed = tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
-  // 破钢条件取“或”：star 满级（仅 cannon）或持有钻头（任何武器、任何等级）。
-  return makeBullet(tank, bulletId, 'normal', speed, tank.level >= 3 || tank.drill, level);
+  // 玩家 2 级开放破钢；敌军保留原 3 级门槛。钻头仍让任何阵营、任何等级破钢。
+  const starPiercing = isPlayerTank(tank) ? tank.level >= 2 : tank.level >= 3;
+  return makeBullet(tank, bulletId, 'normal', speed, starPiercing || tank.drill, level);
 }
 
 // 按坦克当前武器生成一次开火的全部子弹（cannon / 机枪各一发，散弹一轮三发）。

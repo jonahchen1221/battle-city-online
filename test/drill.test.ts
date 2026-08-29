@@ -4,7 +4,7 @@ import { SPAWN_FLASH_TICKS, SUBTILE, TANK_SIZE } from '../src/core/constants';
 import { Cell, createEmptyLevel, getCell, setCell } from '../src/game/level';
 import { createPlayer, isPlayerTank, type TankState } from '../src/game/tank';
 import { advanceBullets, spawnWeaponBullets, type BulletState } from '../src/game/bullet';
-import { tryPickupPowerup, POWERUP_KINDS, MVP_POWERUP_KINDS } from '../src/game/powerup';
+import { tryPickupPowerup, POWERUP_KINDS } from '../src/game/powerup';
 import { createGameState, nextStage, type GameState } from '../src/game/state';
 import { destroyPlayerTank } from '../src/game/death';
 
@@ -28,9 +28,8 @@ function fireRightAtSteel(tank: TankState, steelCol: number, steelRow: number, t
   return { level, bullet: bullets[0] };
 }
 
-test('钻头道具在 POWERUP_KINDS 尾部，并进入 MVP 奖励池', () => {
+test('钻头道具位于 POWERUP_KINDS 尾部', () => {
   assert.equal(POWERUP_KINDS[POWERUP_KINDS.length - 1], 'drill');
-  assert.ok(MVP_POWERUP_KINDS.includes('drill'));
 });
 
 test('新建坦克的 drill 为 false', () => {
