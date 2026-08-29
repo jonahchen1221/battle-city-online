@@ -373,12 +373,13 @@ export class Renderer {
       drawTextOutlined(ctx, atlas, label, colLeft(i) + cellPadL, headerY, color);
     }
 
-    // 四种敌军行：左侧种类名（白），随后每列该玩家 "X<击毁数>"（白）。
+    // 五种敌军行：左侧种类名（白），随后每列该玩家 "X<击毁数>"（白）。
     const kinds: Array<[EnemyKind, string]> = [
       ['basic', 'BASIC'],
       ['fast', 'FAST'],
       ['power', 'POWER'],
       ['armor', 'ARMOR'],
+      ['smart', 'SMART'],
     ];
     let y = FIELD_Y + 76;
     for (const [kind, label] of kinds) {
@@ -515,6 +516,8 @@ export class Renderer {
         const flash = damaged && Math.floor(tick / ARMOR_FLASH_TICKS) % 2 === 1;
         return flash ? atlas.enemyTank.armorFlash : atlas.enemyTank.armor;
       }
+      case 'smart':
+        return flashRed ? atlas.enemyTankRed.smart : atlas.enemyTank.smart;
       default:
         return flashRed ? atlas.enemyTankRed.basic : atlas.enemyTank.basic;
     }

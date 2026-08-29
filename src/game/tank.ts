@@ -11,6 +11,7 @@ import {
   ENEMY_SPEED_FAST,
   ENEMY_SPEED_POWER,
   ENEMY_SPEED_ARMOR,
+  ENEMY_SPEED_SMART,
   ENEMY_HP_DEFAULT,
   ARMOR_HP,
   ENEMY_BULLET_SPEED_POWER,
@@ -31,9 +32,9 @@ import {
 } from './level';
 
 // 敌方坦克种类（用于计分/计数等以种类为键的表）。
-export type EnemyKind = 'basic' | 'fast' | 'power' | 'armor';
+export type EnemyKind = 'basic' | 'fast' | 'power' | 'armor' | 'smart';
 
-// 坦克种类：玩家 + 四种敌方。移动/碰撞逻辑敌我复用，靠 kind 区分外观与属性。
+// 坦克种类：玩家 + 五种敌方。移动/碰撞逻辑敌我复用，靠 kind 区分外观与属性。
 // 玩家不再区分 player1/2/…，统一为 'player'，具体序号见 playerIndex。
 export type TankKind = 'player' | EnemyKind;
 
@@ -58,12 +59,12 @@ export interface TankState {
   alive: boolean;
   hp: number; // 剩余血量：常规 1，装甲 4；≤0 即毁
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
-  invulnTicks: number; // 出生护盾剩余帧：>0 时敌弹穿过、不受伤（敌人恒为 0）
-  level: number; // 玩家 star 等级 0..3（敌人恒为 0）：影响弹速 / 双弹 / 破钢；死亡 / 复活归 0
+  invulnTicks: number; // 护盾剩余帧：>0 时对方子弹穿过、不受伤
+  level: number; // star 等级 0..3：影响弹速 / 双弹 / 破钢；死亡 / 复活归 0
   carriesPowerup: boolean; // 是否为“携带道具”的敌军（第 4/11/18 台出队者）：红色闪烁，死亡掉落道具
   slideTicks: number; // 冰面滑行剩余帧：在冰面上移动时装填为 ICE_SLIDE_TICKS，松开方向键后据此继续滑行
   freezeTicks: number; // 友军冻结剩余帧：被队友子弹击中后 >0，期间不能移动 / 开火（敌人恒为 0）
-  weapon: WeaponKind; // 当前武器：初始 / 死亡复活均为 'cannon'，由武器道具替换（敌人恒为 'cannon'）
+  weapon: WeaponKind; // 当前武器：初始 / 死亡复活均为 'cannon'，由武器道具替换
   fireCooldown: number; // 连发冷却剩余帧（仅机枪使用：>0 时不能再射，逐帧递减）
   speedBoostTicks: number; // boots 快靴剩余帧：>0 时移动速度 ×BOOTS_SPEED_MULT（speed 基值不变）
   hasBoat: boolean; // boat 船：true 时移动碰撞把水面视为可通行（子弹不受影响），死亡即失
@@ -116,6 +117,8 @@ function enemySpeed(kind: TankKind): number {
       return ENEMY_SPEED_POWER;
     case 'armor':
       return ENEMY_SPEED_ARMOR;
+    case 'smart':
+      return ENEMY_SPEED_SMART;
     default:
       return ENEMY_SPEED_BASIC;
   }
@@ -147,15 +150,16 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     prevFire: false,
     alive: true,
     hp: enemyHp(kind),
-    aiTicks: AI_DECISION_MIN_TICKS,
-    invulnTicks: 0, // 敌方无出生护盾
-    level: 0, // 敌人不使用 star 等级
+    // 智能坦克出生后立即规划路径；传统敌人仍沿出生朝向行进半秒再做首次随机决策。
+    aiTicks: kind === 'smart' ? 0 : AI_DECISION_MIN_TICKS,
+    invulnTicks: 0, // 敌方无出生护盾，但可拾取 helmet 获得护盾
+    level: 0,
     carriesPowerup: false, // 由出生器按出队计数标记（见 enemy.ts updateSpawner）
     slideTicks: 0,
     freezeTicks: 0, // 敌人不受友军冻结影响（敌军冻结由道具 state.enemyFreezeTicks 全局控制）
-    weapon: 'cannon', // 敌人不使用武器系统，恒为经典炮
+    weapon: 'cannon',
     fireCooldown: 0,
-    speedBoostTicks: 0, // 敌人不吃道具：三项恒为初始值
+    speedBoostTicks: 0,
     hasBoat: false,
     ghostTicks: 0,
   };

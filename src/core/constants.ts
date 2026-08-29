@@ -89,6 +89,7 @@ export const ENEMY_SPEED_BASIC = 0.5;
 export const ENEMY_SPEED_FAST = 1.0;
 export const ENEMY_SPEED_POWER = 0.75;
 export const ENEMY_SPEED_ARMOR = 0.5;
+export const ENEMY_SPEED_SMART = 0.75;
 // 血量：常规敌军 1 发即毁，装甲坦克需 4 发。
 export const ENEMY_HP_DEFAULT = 1;
 export const ARMOR_HP = 4;
@@ -111,6 +112,10 @@ export const AI_DECISION_MIN_TICKS = 30;
 export const AI_DECISION_RANGE_TICKS = 31; // 30 + rng.int(31) → 30..60
 // AI 开火概率：每帧约 1/60（且当前无在场子弹时）。
 export const AI_FIRE_DENOM = 60;
+// 智能坦克的目标路径刷新间隔；遇阻时不等计时，立即重新规划并尝试清障。
+export const SMART_AI_REPLAN_TICKS = 12;
+// A* 中进入含砖位置的代价：优先选择短绕路，无路可绕时仍会主动射穿砖墙。
+export const SMART_AI_BRICK_COST = 6;
 // 关卡敌军总数（单一可调常量；暂不随人数变化）。各关 STAGE_ENEMY_MIX 之和均等于此值。
 export const STAGE_ENEMY_TOTAL = 20;
 // 关卡总数（levels.ts STAGES 的长度）；通关第 5 关后回卷到第 1 关。
@@ -118,37 +123,42 @@ export const STAGE_COUNT = 5;
 // 每关敌军编成（每关总数均为 STAGE_ENEMY_TOTAL，逐关升级）。
 // 出生队列按各种类剩余数轮转交错（round-robin）构建，确定性、无需 rng（见 state.ts）。
 export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; count: number }>> = [
-  // 第 1 关：基础 18 + 快速 2
+  // 第 1 关：基础 17 + 快速 2 + 智能 1
   [
-    { kind: 'basic', count: 18 },
+    { kind: 'basic', count: 17 },
     { kind: 'fast', count: 2 },
+    { kind: 'smart', count: 1 },
   ],
-  // 第 2 关：基础 12 + 快速 6 + 威力 2
+  // 第 2 关：基础 11 + 快速 5 + 威力 2 + 智能 2
   [
-    { kind: 'basic', count: 12 },
-    { kind: 'fast', count: 6 },
+    { kind: 'basic', count: 11 },
+    { kind: 'fast', count: 5 },
     { kind: 'power', count: 2 },
+    { kind: 'smart', count: 2 },
   ],
-  // 第 3 关：基础 10 + 快速 6 + 威力 2 + 装甲 2
-  [
-    { kind: 'basic', count: 10 },
-    { kind: 'fast', count: 6 },
-    { kind: 'power', count: 2 },
-    { kind: 'armor', count: 2 },
-  ],
-  // 第 4 关：基础 8 + 快速 6 + 威力 3 + 装甲 3
+  // 第 3 关：基础 8 + 快速 5 + 威力 2 + 装甲 2 + 智能 3
   [
     { kind: 'basic', count: 8 },
-    { kind: 'fast', count: 6 },
-    { kind: 'power', count: 3 },
-    { kind: 'armor', count: 3 },
+    { kind: 'fast', count: 5 },
+    { kind: 'power', count: 2 },
+    { kind: 'armor', count: 2 },
+    { kind: 'smart', count: 3 },
   ],
-  // 第 5 关：基础 6 + 快速 6 + 威力 4 + 装甲 4
+  // 第 4 关：基础 6 + 快速 5 + 威力 3 + 装甲 3 + 智能 3
   [
     { kind: 'basic', count: 6 },
-    { kind: 'fast', count: 6 },
+    { kind: 'fast', count: 5 },
+    { kind: 'power', count: 3 },
+    { kind: 'armor', count: 3 },
+    { kind: 'smart', count: 3 },
+  ],
+  // 第 5 关：基础 4 + 快速 4 + 威力 4 + 装甲 4 + 智能 4
+  [
+    { kind: 'basic', count: 4 },
+    { kind: 'fast', count: 4 },
     { kind: 'power', count: 4 },
     { kind: 'armor', count: 4 },
+    { kind: 'smart', count: 4 },
   ],
 ];
 // 同屏敌军上限的基数与每多一名玩家的增量。
@@ -202,12 +212,13 @@ export const FRIENDLY_FREEZE_TICKS = 3 * TICKS_PER_SECOND; // 180 帧 = 3 秒
 export const FRIENDLY_FREEZE_BLINK_TICKS = 4;
 
 // ── 计分 ──
-// 击毁各种敌方坦克的得分（经典）：基础 100 / 快速 200 / 威力 300 / 装甲 400。
-export const ENEMY_SCORE: Record<'basic' | 'fast' | 'power' | 'armor', number> = {
+// 击毁各种敌方坦克的得分：经典四型 100–400，智能型因主动追踪与瞄准计 500。
+export const ENEMY_SCORE: Record<EnemyKind, number> = {
   basic: 100,
   fast: 200,
   power: 300,
   armor: 400,
+  smart: 500,
 };
 
 // ── 暂停 ──
@@ -222,13 +233,13 @@ export const CARRIER_QUEUE_POSITIONS: ReadonlyArray<number> = [4, 11, 18];
 export const CARRIER_FLASH_TICKS = 8;
 // 拾取任一道具的全局加分。
 export const POWERUP_SCORE = 500;
-// timer 道具：敌军冻结帧数（期间敌人既不移动也不开火，履带动画亦冻结）。
+// timer 道具：对方阵营冻结帧数（期间不能移动或开火，履带动画亦冻结）。
 export const ENEMY_FREEZE_TICKS = 600;
 // shovel 道具：鹰巢护墙钢化持续帧数；到期恢复为完整砖墙。
 export const SHOVEL_TICKS = 1200;
 // helmet 道具：无敌帧数（复用出生护盾机制 / 渲染）。
 export const HELMET_INVULN_TICKS = 600;
-// star 道具：玩家等级上限；等级 ≥1 提升弹速、≥2 可双弹在场、=3 可击穿钢块。
+// star 道具：坦克等级上限；等级 ≥1 提升弹速、≥2 可双弹在场、=3 可击穿钢块。
 export const PLAYER_MAX_LEVEL = 3;
 // star 等级 ≥1 时的玩家弹速（px/tick，原为 BULLET_SPEED=2）。
 export const STAR_BULLET_SPEED = 3;

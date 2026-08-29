@@ -18,12 +18,13 @@ const EAGLE_X = EAGLE_COL * SUBTILE; // 96
 const EAGLE_Y = EAGLE_ROW * SUBTILE; // 192
 const EAGLE_SIZE = 2 * SUBTILE; // 16
 
-// 子弹（4×4）命中鹰巢：任一方（敌我皆可）子弹触及鹰巢即摧毁基地。
+// 子弹（4×4）命中鹰巢：除智能坦克弹外，任一方子弹触及鹰巢即摧毁基地。
 // 鹰巢一旦被毁只结算一次；产生一个居中的大爆炸；命中子弹消亡。
 export function resolveEagleHit(state: GameState): void {
   if (state.eagleDestroyed) return;
   for (const b of state.bullets) {
     if (
+      b.attacksEagle &&
       b.x < EAGLE_X + EAGLE_SIZE &&
       b.x + BULLET_SIZE > EAGLE_X &&
       b.y < EAGLE_Y + EAGLE_SIZE &&

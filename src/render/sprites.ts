@@ -359,12 +359,12 @@ const EAGLE_DESTROYED = eagleDestroyedTile();
 //       R=炮管亮色内芯 '.'=透明
 // 统一使用 1–2 美术像素切角、硬轮廓、左上高光与右下暗面；其余三朝向由网格旋转生成。
 
-// 五套差异化坦克模板：
+// 六套差异化坦克模板：
 // PLAYER = 箭头前甲 + 菱形徽记；BASIC = 方正量产车；FAST = 窄体梭形；
-// POWER = 宽炮塔 + 粗炮管；ARMOR = 满宽履带 + 双层重甲。
+// POWER = 宽炮塔 + 粗炮管；ARMOR = 满宽履带 + 双层重甲；SMART = 传感器炮塔 + 侧舱。
 // 即使把所有车体去色为同一灰度，仍能依靠外轮廓和炮塔比例识别阵营/类型。
 type TankGrid = string[][];
-type TankSilhouette = 'player' | 'basic' | 'fast' | 'power' | 'armor';
+type TankSilhouette = 'player' | 'basic' | 'fast' | 'power' | 'armor' | 'smart';
 
 function tankBlank(): TankGrid {
   return Array.from({ length: 32 }, () => new Array<string>(32).fill('.'));
@@ -487,6 +487,20 @@ function makeTankTemplate(kind: TankSilhouette): string[] {
     tankRect(g, 22, 13, 25, 20, 'O');
     tankRect(g, 22, 14, 24, 19, 'Z');
     tankRect(g, 13, 13, 18, 16, 'L');
+  } else if (kind === 'smart') {
+    tankTrack(g, 3, 9, 8, 29);
+    tankTrack(g, 22, 28, 8, 29);
+    tankBarrel(g, 14, 1, 17, 12);
+    tankPlate(g, 8, 12, 23, 28, 3);
+    tankPlate(g, 10, 8, 21, 21, 4);
+    // 两侧传感器舱与成对“眼睛”构成智能型独有的机器人面相。
+    tankRect(g, 6, 14, 10, 20, 'O');
+    tankRect(g, 7, 15, 10, 19, 'S');
+    tankRect(g, 21, 14, 25, 20, 'O');
+    tankRect(g, 21, 15, 24, 19, 'Z');
+    tankRect(g, 13, 12, 14, 14, 'L');
+    tankRect(g, 17, 12, 18, 14, 'L');
+    tankRect(g, 14, 18, 17, 19, 'B');
   } else {
     tankTrack(g, 0, 8, 6, 31);
     tankTrack(g, 23, 31, 6, 31);
@@ -511,6 +525,7 @@ const TANK_BASIC = makeTankTemplate('basic');
 const TANK_FAST_HD = makeTankTemplate('fast');
 const TANK_POWER = makeTankTemplate('power');
 const TANK_ARMOR_HD = makeTankTemplate('armor');
+const TANK_SMART = makeTankTemplate('smart');
 
 // 记号 → 调色板字符 的重着色映射（'.' 与未列出的字符原样透传）。
 type ColorMap = Record<string, string>;
@@ -528,6 +543,8 @@ const MAP_PLAYERS: ColorMap[] = [MAP_PLAYER1, MAP_PLAYER2, MAP_PLAYER3, MAP_PLAY
 const MAP_BASIC: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
 // 威力型：银车体 + 绿色高光点缀（L→绿 / 过渡 S→亮绿），炮管仍为亮色。
 const MAP_POWER: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 'j', Z: 'v', L: 'G', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
+// 智能型：蓝色计算核心 + 青色传感器高光，与银色经典敌军一眼区分。
+const MAP_SMART: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'K', S: 'J', Z: 'P', L: 'I', D: 'Q', O: 'e', K: 'Q', B: 'e', R: 'I' };
 // 装甲型（常态）：与基础同为银色，靠更厚履带区分。
 const MAP_ARMOR: ColorMap = { T: 'c', t: 'a', E: 'e', H: 'b', S: 's', Z: 'v', L: 'c', D: 'a', O: 'e', K: 'a', B: 'e', R: 'c' };
 // 装甲型（白闪）：受损时交替使用的高亮白色变体（履带 w/c、分隔灰，车体近全白）。
@@ -1099,6 +1116,7 @@ export interface SpriteAtlas {
     fast: TankFrames;
     power: TankFrames;
     armor: TankFrames; // 常态银色
+    smart: TankFrames;
     armorFlash: TankFrames; // 受损白闪变体
   };
   enemyTankRed: {
@@ -1106,6 +1124,7 @@ export interface SpriteAtlas {
     fast: TankFrames;
     power: TankFrames;
     armor: TankFrames;
+    smart: TankFrames;
   }; // 携带道具敌军红闪变体（各种类）
   powerup: Record<PowerupKind, Sprite>; // 各种道具图标（16×16 逻辑）
   bullet: Sprite;
@@ -1151,13 +1170,16 @@ const Y_PLAYER3 = 368;
 const Y_PLAYER4 = 400;
 // 各 playerIndex 对应的图集行 y 偏移。
 const PLAYER_ROW_Y = [Y_PLAYER, Y_PLAYER2, Y_PLAYER3, Y_PLAYER4];
-// 携带道具敌军红闪变体行（basic/fast/power/armor，各 32 高，附在图集底部）。
+// 携带道具敌军红闪变体行（各 32 高，附在图集底部）。
 const Y_RED_BASIC = 432;
 const Y_RED_FAST = 464;
 const Y_RED_POWER = 496;
 const Y_RED_ARMOR = 528;
+// 智能型常态 / 红闪行追加在既有图集之后，避免改动旧精灵偏移。
+const Y_SMART = 560;
+const Y_RED_SMART = 592;
 // 道具图标行（POWERUP_KINDS.length 个 32×32，x=0/32/…）。
-const Y_POWERUP = 560;
+const Y_POWERUP = 624;
 
 // 把一台坦克的朝上两帧铺到某一行：旋转生成其余朝向，
 // 按 up0,up1,down0,down1,left0,left1,right0,right1 排布于 x=0,32,…,224。
@@ -1194,7 +1216,7 @@ export function createSpriteAtlas(): SpriteAtlas {
   // 宽度需容下最宽的一行：道具图标行（POWERUP_KINDS.length 个 32×32 —— 6 经典 + 4 武器 + 5 新道具）。
   // 其余行最宽为坦克行（8 帧 × 32 = 256），故按两者取大。
   const width = Math.max(256, POWERUP_KINDS.length * 32);
-  const height = 592; // + 4 行红闪敌军坦克（各 32）+ 1 行道具图标（32）
+  const height = 656; // + 智能坦克常态/红闪两行 + 1 行道具图标（32）
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -1239,11 +1261,12 @@ export function createSpriteAtlas(): SpriteAtlas {
     paintTankRow(ctx, recolor(TANK_PLAYER, map), recolor(swapTreads(TANK_PLAYER), map), PLAYER_ROW_Y[i]);
   }
 
-  // 敌方坦克各行：四种独立剪影 + 履带第二帧。
+  // 敌方坦克各行：五种独立剪影 + 履带第二帧。
   paintTankRow(ctx, recolor(TANK_BASIC, MAP_BASIC), recolor(swapTreads(TANK_BASIC), MAP_BASIC), Y_BASIC);
   paintTankRow(ctx, recolor(TANK_FAST_HD, MAP_BASIC), recolor(swapTreads(TANK_FAST_HD), MAP_BASIC), Y_FAST);
   paintTankRow(ctx, recolor(TANK_POWER, MAP_POWER), recolor(swapTreads(TANK_POWER), MAP_POWER), Y_POWER);
   paintTankRow(ctx, recolor(TANK_ARMOR_HD, MAP_ARMOR), recolor(swapTreads(TANK_ARMOR_HD), MAP_ARMOR), Y_ARMOR);
+  paintTankRow(ctx, recolor(TANK_SMART, MAP_SMART), recolor(swapTreads(TANK_SMART), MAP_SMART), Y_SMART);
   paintTankRow(
     ctx,
     recolor(TANK_ARMOR_HD, MAP_ARMOR_FLASH),
@@ -1256,6 +1279,7 @@ export function createSpriteAtlas(): SpriteAtlas {
   paintTankRow(ctx, recolor(TANK_FAST_HD, MAP_ENEMY_RED), recolor(swapTreads(TANK_FAST_HD), MAP_ENEMY_RED), Y_RED_FAST);
   paintTankRow(ctx, recolor(TANK_POWER, MAP_ENEMY_RED), recolor(swapTreads(TANK_POWER), MAP_ENEMY_RED), Y_RED_POWER);
   paintTankRow(ctx, recolor(TANK_ARMOR_HD, MAP_ENEMY_RED), recolor(swapTreads(TANK_ARMOR_HD), MAP_ENEMY_RED), Y_RED_ARMOR);
+  paintTankRow(ctx, recolor(TANK_SMART, MAP_ENEMY_RED), recolor(swapTreads(TANK_SMART), MAP_ENEMY_RED), Y_RED_SMART);
 
   // 道具图标行：按 POWERUP_KINDS 顺序铺于 x=0,32,…。
   POWERUP_KINDS.forEach((kind, i) => paint(ctx, POWERUP_ICON_ROWS[kind], i * 32, Y_POWERUP));
@@ -1289,6 +1313,7 @@ export function createSpriteAtlas(): SpriteAtlas {
       fast: tankFramesAt(canvas, Y_FAST),
       power: tankFramesAt(canvas, Y_POWER),
       armor: tankFramesAt(canvas, Y_ARMOR),
+      smart: tankFramesAt(canvas, Y_SMART),
       armorFlash: tankFramesAt(canvas, Y_ARMOR_FLASH),
     },
     enemyTankRed: {
@@ -1296,6 +1321,7 @@ export function createSpriteAtlas(): SpriteAtlas {
       fast: tankFramesAt(canvas, Y_RED_FAST),
       power: tankFramesAt(canvas, Y_RED_POWER),
       armor: tankFramesAt(canvas, Y_RED_ARMOR),
+      smart: tankFramesAt(canvas, Y_RED_SMART),
     },
     powerup: POWERUP_KINDS.reduce(
       (acc, kind, i) => {

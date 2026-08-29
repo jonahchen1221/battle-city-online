@@ -115,7 +115,13 @@ export interface GameState {
 // 携带道具者仍由 enemy.ts 按第 4/11/18 台出队计数标记，与队列内容无关。
 // 每名玩家一份“全零”的击毁计数表（避免共享同一对象引用）。
 function emptyKillsByPlayer(playerCount: number): Array<Record<EnemyKind, number>> {
-  return Array.from({ length: playerCount }, () => ({ basic: 0, fast: 0, power: 0, armor: 0 }));
+  return Array.from({ length: playerCount }, () => ({
+    basic: 0,
+    fast: 0,
+    power: 0,
+    armor: 0,
+    smart: 0,
+  }));
 }
 
 function createStageQueue(stageIndex: number): TankKind[] {

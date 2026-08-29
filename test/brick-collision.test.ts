@@ -23,6 +23,7 @@ test('a bullet passes through destroyed brick quarters without erasing surviving
     ownerId: 1,
     ownerPlayerIndex: 0,
     fromEnemy: false,
+    attacksEagle: true,
     alive: true,
     steelPiercing: false,
   };

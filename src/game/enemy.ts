@@ -13,8 +13,13 @@ import {
   TANK_SIZE,
   SUBTILE,
   MACHINE_FIRE_INTERVAL_TICKS,
+  BULLET_SIZE,
+  EAGLE_COL,
+  EAGLE_ROW,
+  SMART_AI_REPLAN_TICKS,
+  SMART_AI_BRICK_COST,
 } from '../core/constants';
-import { LevelState } from './level';
+import { Cell, LevelState, getCell } from './level';
 import {
   TankState,
   createEnemy,
@@ -47,6 +52,214 @@ function pickDirection(rng: Rng): Direction {
 // 重置 AI 决策计时：30–60 帧。
 function resetDecisionTimer(rng: Rng): number {
   return AI_DECISION_MIN_TICKS + rng.int(AI_DECISION_RANGE_TICKS);
+}
+
+const EAGLE_X = EAGLE_COL * SUBTILE;
+const EAGLE_Y = EAGLE_ROW * SUBTILE;
+const EAGLE_SIZE = 2 * SUBTILE;
+const NAV_TANK_CELLS = TANK_SIZE / SUBTILE;
+
+interface NavDirection {
+  dir: Direction;
+  dc: number;
+  dr: number;
+}
+
+const NAV_DIRECTIONS: ReadonlyArray<NavDirection> = [
+  { dir: 'up', dc: 0, dr: -1 },
+  { dir: 'down', dc: 0, dr: 1 },
+  { dir: 'left', dc: -1, dr: 0 },
+  { dir: 'right', dc: 1, dr: 0 },
+];
+
+interface OpenNode {
+  index: number;
+  f: number;
+  h: number;
+}
+
+function openNodeBefore(a: OpenNode, b: OpenNode): boolean {
+  return a.f < b.f || (a.f === b.f && (a.h < b.h || (a.h === b.h && a.index < b.index)));
+}
+
+// A* 开放集使用确定性最小堆；同分时按离目标距离、再按网格下标排序，保证联机模拟可复现。
+function pushOpen(heap: OpenNode[], node: OpenNode): void {
+  heap.push(node);
+  let i = heap.length - 1;
+  while (i > 0) {
+    const parent = Math.floor((i - 1) / 2);
+    if (!openNodeBefore(heap[i], heap[parent])) break;
+    [heap[i], heap[parent]] = [heap[parent], heap[i]];
+    i = parent;
+  }
+}
+
+function popOpen(heap: OpenNode[]): OpenNode | undefined {
+  const first = heap[0];
+  const last = heap.pop();
+  if (heap.length > 0 && last) {
+    heap[0] = last;
+    let i = 0;
+    while (true) {
+      const left = i * 2 + 1;
+      const right = left + 1;
+      let best = i;
+      if (left < heap.length && openNodeBefore(heap[left], heap[best])) best = left;
+      if (right < heap.length && openNodeBefore(heap[right], heap[best])) best = right;
+      if (best === i) break;
+      [heap[i], heap[best]] = [heap[best], heap[i]];
+      i = best;
+    }
+  }
+  return first;
+}
+
+// 智能坦克会把砖看成“可清除但代价较高”的路面，把钢、水和鹰巢视为永久障碍。
+// 返回进入这个 8px 对齐位置的代价；16×16 车体覆盖的任一子格为永久障碍时不可进入。
+function navigationCost(level: LevelState, col: number, row: number): number {
+  let hasBrick = false;
+  for (let dr = 0; dr < NAV_TANK_CELLS; dr++) {
+    for (let dc = 0; dc < NAV_TANK_CELLS; dc++) {
+      const cell = getCell(level, col + dc, row + dr);
+      if (cell === Cell.STEEL || cell === Cell.WATER || cell === Cell.EAGLE) return Infinity;
+      if (cell === Cell.BRICK) hasBrick = true;
+    }
+  }
+  return hasBrick ? SMART_AI_BRICK_COST : 1;
+}
+
+function manhattan(col: number, row: number, goalCol: number, goalRow: number): number {
+  return Math.abs(goalCol - col) + Math.abs(goalRow - row);
+}
+
+// 在 8px 网格上以 A* 找到追向玩家的第一步。其他坦克是会移动的动态障碍，不写入路径图，
+// 实际移动仍由 applyInput 做实体碰撞；若目标暂不可达，则走向已搜索到的最近可达点。
+function findSmartDirection(tank: TankState, target: TankState, level: LevelState): Direction | null {
+  const navCols = level.cols - NAV_TANK_CELLS + 1;
+  const navRows = level.rows - NAV_TANK_CELLS + 1;
+  const clampCol = (x: number): number => Math.max(0, Math.min(navCols - 1, Math.round(x / SUBTILE)));
+  const clampRow = (y: number): number => Math.max(0, Math.min(navRows - 1, Math.round(y / SUBTILE)));
+  const startCol = clampCol(tank.x);
+  const startRow = clampRow(tank.y);
+  const goalCol = clampCol(target.x);
+  const goalRow = clampRow(target.y);
+  const startIndex = startRow * navCols + startCol;
+  const goalIndex = goalRow * navCols + goalCol;
+  const size = navCols * navRows;
+  const costs = new Array<number>(size).fill(Infinity);
+  const firstSteps = new Array<Direction | null>(size).fill(null);
+  const closed = new Array<boolean>(size).fill(false);
+  const open: OpenNode[] = [];
+  const startH = manhattan(startCol, startRow, goalCol, goalRow);
+  costs[startIndex] = 0;
+  pushOpen(open, { index: startIndex, f: startH, h: startH });
+
+  let closestIndex = startIndex;
+  let closestH = startH;
+  while (open.length > 0) {
+    const current = popOpen(open)!;
+    if (closed[current.index]) continue;
+    closed[current.index] = true;
+    const col = current.index % navCols;
+    const row = Math.floor(current.index / navCols);
+    if (
+      current.h < closestH ||
+      (current.h === closestH && costs[current.index] < costs[closestIndex])
+    ) {
+      closestIndex = current.index;
+      closestH = current.h;
+    }
+    if (current.index === goalIndex) {
+      closestIndex = current.index;
+      break;
+    }
+
+    for (const step of NAV_DIRECTIONS) {
+      const nextCol = col + step.dc;
+      const nextRow = row + step.dr;
+      if (nextCol < 0 || nextRow < 0 || nextCol >= navCols || nextRow >= navRows) continue;
+      const stepCost = navigationCost(level, nextCol, nextRow);
+      if (!Number.isFinite(stepCost)) continue;
+      const nextIndex = nextRow * navCols + nextCol;
+      const nextCost = costs[current.index] + stepCost;
+      if (nextCost >= costs[nextIndex]) continue;
+      costs[nextIndex] = nextCost;
+      firstSteps[nextIndex] = current.index === startIndex ? step.dir : firstSteps[current.index];
+      const h = manhattan(nextCol, nextRow, goalCol, goalRow);
+      pushOpen(open, { index: nextIndex, f: nextCost + h, h });
+    }
+  }
+
+  return firstSteps[closestIndex];
+}
+
+// 多人局按直线距离选择最近存活玩家；完全同距时 playerIndex 小者优先，结果稳定可复现。
+function nearestPlayer(tank: TankState, state: GameState): TankState | null {
+  let target: TankState | null = null;
+  let bestDistance = Infinity;
+  for (const candidate of state.tanks) {
+    if (!candidate.alive || !isPlayerTank(candidate)) continue;
+    const dx = candidate.x - tank.x;
+    const dy = candidate.y - tank.y;
+    const distance = dx * dx + dy * dy;
+    if (
+      distance < bestDistance ||
+      (distance === bestDistance && target !== null && candidate.playerIndex < target.playerIndex)
+    ) {
+      target = candidate;
+      bestDistance = distance;
+    }
+  }
+  return target;
+}
+
+// 玩家中心进入炮口的 16px 直线走廊时，返回精确的瞄准方向。
+function aimDirection(tank: TankState, target: TankState): Direction | null {
+  const tankCx = tank.x + TANK_SIZE / 2;
+  const tankCy = tank.y + TANK_SIZE / 2;
+  const targetCx = target.x + TANK_SIZE / 2;
+  const targetCy = target.y + TANK_SIZE / 2;
+  if (Math.abs(tankCx - targetCx) <= TANK_SIZE / 2) {
+    if (targetCy < tankCy) return 'up';
+    if (targetCy > tankCy) return 'down';
+  }
+  if (Math.abs(tankCy - targetCy) <= TANK_SIZE / 2) {
+    if (targetCx < tankCx) return 'left';
+    if (targetCx > tankCx) return 'right';
+  }
+  return null;
+}
+
+function rangesOverlap(a0: number, a1: number, b0: number, b1: number): boolean {
+  return a0 < b1 && a1 > b0;
+}
+
+// 只要炮弹沿当前射线继续飞行有可能触及鹰巢，就禁止智能坦克开火。该检查不依赖中间墙体，
+// 因而即使砖墙稍后被其他炮弹打掉，已发射的智能坦克炮弹也不会误伤基地。
+function shotThreatensEagle(tank: TankState, dir: Direction): boolean {
+  const cx = tank.x + TANK_SIZE / 2;
+  const cy = tank.y + TANK_SIZE / 2;
+  const halfBullet = BULLET_SIZE / 2;
+  if (dir === 'up' || dir === 'down') {
+    if (!rangesOverlap(cx - halfBullet, cx + halfBullet, EAGLE_X, EAGLE_X + EAGLE_SIZE)) {
+      return false;
+    }
+    return dir === 'up' ? tank.y >= EAGLE_Y + EAGLE_SIZE : tank.y + TANK_SIZE <= EAGLE_Y;
+  }
+  if (!rangesOverlap(cy - halfBullet, cy + halfBullet, EAGLE_Y, EAGLE_Y + EAGLE_SIZE)) {
+    return false;
+  }
+  return dir === 'left' ? tank.x >= EAGLE_X + EAGLE_SIZE : tank.x + TANK_SIZE <= EAGLE_X;
+}
+
+function fireSmartTank(tank: TankState, state: GameState): void {
+  const canFire = tank.fireCooldown === 0 &&
+    liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
+  if (!canFire || shotThreatensEagle(tank, tank.dir)) return;
+  const spawned = spawnWeaponBullets(tank, state.nextBulletId);
+  state.nextBulletId += spawned.length;
+  for (const bullet of spawned) state.bullets.push(bullet);
+  if (tank.weapon === 'machine') tank.fireCooldown = MACHINE_FIRE_INTERVAL_TICKS;
 }
 
 // 当前场上（含出生闪光中的）敌方坦克数量。出生队列现在也可能含玩家复活，需排除。
@@ -166,6 +379,44 @@ function updateOneEnemy(tank: TankState, state: GameState, level: LevelState): v
   }
 }
 
+// 智能坦克：锁定最近玩家，以 A* 主动追踪；玩家进入直线火力走廊后停车瞄准并持续压制。
+// 撞上路径中的砖墙时向规划方向清障。所有开火都经过鹰巢射线检查，不参与传统的随机向下攻击。
+function updateSmartEnemy(tank: TankState, state: GameState, level: LevelState): void {
+  const target = nearestPlayer(tank, state);
+  if (!target) {
+    tank.moving = false;
+    return;
+  }
+
+  tank.aiTicks--;
+  const aim = aimDirection(tank, target);
+  if (aim !== null && !shotThreatensEagle(tank, aim)) {
+    tank.moving = false;
+    if (turnTank(tank, aim, level, state.tanks)) fireSmartTank(tank, state);
+    return;
+  }
+
+  let desired = tank.dir;
+  if (tank.aiTicks <= 0) {
+    desired = findSmartDirection(tank, target, level) ?? desired;
+    tank.aiTicks = SMART_AI_REPLAN_TICKS;
+  }
+
+  const px = tank.x;
+  const py = tank.y;
+  applyInput(tank, driveInput(desired), level, state.tanks);
+  if (tank.x !== px || tank.y !== py) return;
+
+  // 动态障碍或砖墙使本步失败：立即重算。若替代首步存在则原地转向并尝试；仍失败时开炮清障。
+  tank.aiTicks = SMART_AI_REPLAN_TICKS;
+  const retry = findSmartDirection(tank, target, level);
+  if (retry !== null && retry !== desired) {
+    applyInput(tank, driveInput(retry), level, state.tanks);
+    if (tank.x !== px || tank.y !== py) return;
+  }
+  fireSmartTank(tank, state);
+}
+
 // 敌方总编排：先推进出生闪光（实体化），再驱动全部在场敌人，最后尝试出生新敌人。
 // 敌军行动门禁（两级，冻结优先于减速）：
 //   • timer 道具冻结期间（enemyFreezeTicks>0）：跳过全部在场敌人的 AI（不动、不开火、履带冻结）；
@@ -180,7 +431,8 @@ export function updateEnemies(state: GameState, level: LevelState): void {
   if (!frozen && !slowedSkip) {
     for (const tank of state.tanks) {
       if (!tank.alive || isPlayerTank(tank)) continue;
-      updateOneEnemy(tank, state, level);
+      if (tank.kind === 'smart') updateSmartEnemy(tank, state, level);
+      else updateOneEnemy(tank, state, level);
     }
   }
 

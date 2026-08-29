@@ -57,6 +57,7 @@ export interface BulletState {
   ownerId: number;
   ownerPlayerIndex: number; // 射手的玩家序号（玩家弹为其 playerIndex，敌弹为 -1）：用于击杀记分归属
   fromEnemy: boolean; // 阵营：true=敌弹（只打玩家），false=玩家弹（只打敌人）
+  attacksEagle: boolean; // 智能坦克弹为 false：仍被鹰巢挡住，但绝不会触发基地摧毁
   alive: boolean;
   steelPiercing: boolean; // star 满级（3 级）玩家弹：可击穿钢块（击中钢块时整格清除）；仅 cannon 生效
 }
@@ -132,6 +133,7 @@ function makeBullet(
     ownerId: tank.id,
     ownerPlayerIndex: isPlayer ? tank.playerIndex : -1,
     fromEnemy: !isPlayer,
+    attacksEagle: tank.kind !== 'smart',
     alive: true,
     steelPiercing,
   };
