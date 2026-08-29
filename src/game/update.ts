@@ -9,6 +9,7 @@ import {
   resolveBulletBullet,
   bulletCanHit,
   bulletHitsTank,
+  makeSmallExplosion,
 } from './bullet';
 import { updateEnemies } from './enemy';
 import { updatePhase, resolveEagleHit, restartGame } from './phase';
@@ -17,9 +18,11 @@ import {
   EXPLOSION_BIG_TICKS,
   EXPLOSION_BIG_SIZE,
   TANK_SIZE,
+  BULLET_SIZE,
   SPAWN_FLASH_TICKS,
   ENEMY_SCORE,
   STAGE_START_TICKS,
+  FRIENDLY_FREEZE_TICKS,
 } from '../core/constants';
 
 // 每逻辑帧调用一次。纯函数式推进：只依赖 state 与 inputs，
@@ -136,6 +139,16 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     // 出生护盾倒计时（实体化那一刻起算，逐帧递减到 0）。
     if (tank.invulnTicks > 0) tank.invulnTicks--;
 
+    // 友军冻结：被队友子弹击中后 freezeTicks>0，期间输入照常采样但一律不生效
+    //（不能移动、不能开火），逐帧递减到 0 自动恢复。冻结中履带定格（moving=false）、冰面滑行中断。
+    if (tank.freezeTicks > 0) {
+      tank.freezeTicks--;
+      tank.moving = false;
+      tank.slideTicks = 0;
+      tank.prevFire = input.fire; // 仍记录开火键状态：解冻那帧不会因一直按住而被判为边沿
+      continue;
+    }
+
     applyInput(tank, input, level, state.tanks);
 
     // 边沿触发开火：本帧按下且上帧未按下；在场子弹数需低于该坦克上限（star 等级 ≥2 可双弹）。
@@ -158,6 +171,18 @@ function resolveBulletTanks(state: GameState): void {
       if (!bulletHitsTank(b, t)) continue;
 
       b.alive = false;
+
+      // 友军火力（多人合作）：玩家弹命中队友 —— 不扣血、不记击杀、不产生大爆炸，
+      // 改为把对方冻结 FRIENDLY_FREEZE_TICKS 帧；已在冻结中则刷新计时。子弹照常消亡并留下小火花。
+      if (!b.fromEnemy && isPlayerTank(t)) {
+        t.freezeTicks = FRIENDLY_FREEZE_TICKS;
+        state.explosions.push(
+          makeSmallExplosion(b.x + BULLET_SIZE / 2, b.y + BULLET_SIZE / 2),
+        );
+        state.events.push('explosionSmall');
+        break;
+      }
+
       t.hp--;
       if (t.hp <= 0) {
         pushBigExplosion(state, t);
@@ -196,6 +221,23 @@ function pushBigExplosion(state: GameState, t: TankState): void {
 function onPlayerKilled(state: GameState, t: TankState): void {
   const idx = t.playerIndex;
   state.livesByPlayer[idx]--;
+
+  // 多人合作：生命耗尽者向队友“借命”——候选为其余生命 ≥2 条的玩家
+  //（捐出一条后自己至少还剩 1 条给当前在场坦克，不会把队友一起拖死）。
+  // 候选非空则由 state.rng 随机取一名捐赠者：捐赠者 -1、借命者 +1（回到 1 条）后照常复活；
+  // 候选为空则维持死亡，交由 phase 判定 gameover。
+  if (state.playerCount > 1 && state.livesByPlayer[idx] <= 0) {
+    const donors: number[] = [];
+    for (let i = 0; i < state.playerCount; i++) {
+      if (i !== idx && state.livesByPlayer[i] >= 2) donors.push(i);
+    }
+    if (donors.length > 0) {
+      const donor = donors[state.rng.int(donors.length)];
+      state.livesByPlayer[donor]--;
+      state.livesByPlayer[idx]++;
+    }
+  }
+
   if (state.livesByPlayer[idx] > 0) {
     // 保留同一 id 与 playerIndex 以维持输入映射；进入出生闪光队列，与敌人共用 updateSpawning。
     state.spawning.push({ tank: createPlayer(idx, t.id), ticksLeft: SPAWN_FLASH_TICKS });

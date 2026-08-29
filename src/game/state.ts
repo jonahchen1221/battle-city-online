@@ -1,6 +1,7 @@
 import { Rng, createRng } from '../core/rng';
 import {
   PLAYER_LIVES_START,
+  PLAYER_LIVES_START_MP,
   STAGE_COUNT,
   STAGE_ENEMY_MIX,
   SPAWN_FLASH_TICKS,
@@ -137,7 +138,10 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     phaseTicks: 0,
     eagleDestroyed: false,
     playerCount,
-    livesByPlayer: new Array<number>(playerCount).fill(PLAYER_LIVES_START),
+    // 单机 3 条（NES 原版）；多人合作 5 条（且可向队友借命，见 update.ts onPlayerKilled）。
+    livesByPlayer: new Array<number>(playerCount).fill(
+      playerCount > 1 ? PLAYER_LIVES_START_MP : PLAYER_LIVES_START,
+    ),
     pendingResult: null,
     resultTimer: 0,
     scoreByPlayer: new Array<number>(playerCount).fill(0),
@@ -201,7 +205,7 @@ export function nextStage(state: GameState): void {
   // 多人合作：团队过关 = 全队一起进下一关 —— 新关卡全员生命恢复到初始值，阵亡者重新入场
   //（star 等级不保留，从 0 开始）。单人保持 NES 原版规则：生命跨关累积。
   if (state.playerCount > 1) {
-    state.livesByPlayer.fill(PLAYER_LIVES_START);
+    state.livesByPlayer.fill(PLAYER_LIVES_START_MP);
   }
 
   // 尚有生命的玩家在各自出生点复活（经出生闪光入场），并沿用其 star 等级。

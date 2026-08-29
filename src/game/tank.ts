@@ -49,6 +49,7 @@ export interface TankState {
   level: number; // 玩家 star 等级 0..3（敌人恒为 0）：影响弹速 / 双弹 / 破钢；死亡 / 复活归 0
   carriesPowerup: boolean; // 是否为“携带道具”的敌军（第 4/11/18 台出队者）：红色闪烁，死亡掉落道具
   slideTicks: number; // 冰面滑行剩余帧：在冰面上移动时装填为 ICE_SLIDE_TICKS，松开方向键后据此继续滑行
+  freezeTicks: number; // 友军冻结剩余帧：被队友子弹击中后 >0，期间不能移动 / 开火（敌人恒为 0）
 }
 
 // 判断一台坦克是否为玩家坦克。
@@ -78,6 +79,7 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     level: 0, // 复活即用 createPlayer 重建 → star 等级自然归 0
     carriesPowerup: false,
     slideTicks: 0,
+    freezeTicks: 0, // 复活即用 createPlayer 重建 → 冻结自然解除
   };
 }
 
@@ -126,6 +128,7 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     level: 0, // 敌人不使用 star 等级
     carriesPowerup: false, // 由出生器按出队计数标记（见 enemy.ts updateSpawner）
     slideTicks: 0,
+    freezeTicks: 0, // 敌人不受友军冻结影响（敌军冻结由道具 state.enemyFreezeTicks 全局控制）
   };
 }
 

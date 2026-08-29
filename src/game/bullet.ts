@@ -336,13 +336,15 @@ export function resolveBulletBullet(
 }
 
 // 子弹 vs 坦克命中判定（不含伤害结算）：
-// 敌弹只命中玩家坦克，玩家弹只命中敌方坦克（敌弹穿过敌人 —— 经典）。
-// 合作简化：玩家弹穿过任何玩家坦克（无友伤、不冻结）——由 !isPlayer 分支天然涵盖。
+// 敌弹只命中玩家坦克（敌弹穿过敌人 —— 经典）；玩家弹命中敌方坦克，也命中**其他玩家坦克**
+//（友军冻结：不扣血、不记击杀，仅冻结对方，结算见 update.ts resolveBulletTanks），但绝不命中射手自己。
 export function bulletCanHit(b: BulletState, t: TankState): boolean {
   const isPlayer = isPlayerTank(t);
-  // 出生护盾期间：敌弹从坦克身上直接穿过（既不伤人，也不消失），经典表现。
+  // 出生护盾期间：敌弹 / 友军弹都从坦克身上直接穿过（既不伤人 / 不冻结，也不消失），经典表现。
   if (isPlayer && t.invulnTicks > 0) return false;
-  return b.fromEnemy ? isPlayer : !isPlayer;
+  if (b.fromEnemy) return isPlayer;
+  // 玩家弹：射手自身的子弹永远穿过自己（出膛瞬间即与自身重叠）。
+  return isPlayer ? b.ownerId !== t.id : true;
 }
 
 export { bulletHitsTank };

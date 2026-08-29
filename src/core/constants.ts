@@ -174,8 +174,10 @@ export const EXPLOSION_BIG_SIZE = 32; // 大爆炸精灵 32×32（居中于 16×
 export const STAGE_START_TICKS = 120;
 // 冰面滑行：玩家/敌人在冰面上松开方向键后，沿原方向继续滑行的最大帧数（经典手感）。
 export const ICE_SLIDE_TICKS = 20;
-// 玩家初始生命数（含当前在场坦克）：3 条即共 3 台坦克。
+// 玩家初始生命数（含当前在场坦克）：3 条即共 3 台坦克。单机保持 NES 原版规则。
 export const PLAYER_LIVES_START = 3;
+// 多人合作局的初始生命数：合作模式更宽裕（且可向队友借命，见 update.ts onPlayerKilled）。
+export const PLAYER_LIVES_START_MP = 5;
 // 鹰巢被毁 / 玩家阵亡（无剩余生命）后仍继续模拟的帧数，随后进入 gameover。
 export const GAMEOVER_DELAY_TICKS = 90;
 // 全歼敌军后仍继续模拟的帧数，随后进入 stageclear。
@@ -191,6 +193,13 @@ export const EAGLE_ROW = 28;
 export const PLAYER_INVULN_TICKS = 180;
 // 护盾闪烁精灵：每约 4 帧在两帧间切换，形成流动的星光边框。
 export const SHIELD_ANIM_TICKS = 4;
+
+// ── 友军冻结（多人合作）──
+// 玩家坦克被队友子弹击中后的冻结帧数：期间不能移动、不能开火（不扣血、不记击杀）。
+// 单人局不存在队友，天然不会触发。
+export const FRIENDLY_FREEZE_TICKS = 3 * TICKS_PER_SECOND; // 180 帧 = 3 秒
+// 冻结中的玩家坦克闪烁周期（帧）：每约 4 帧明灭一次，一眼可辨“这台坦克被冻了”。
+export const FRIENDLY_FREEZE_BLINK_TICKS = 4;
 
 // ── 计分 ──
 // 击毁各种敌方坦克的得分（经典）：基础 100 / 快速 200 / 威力 300 / 装甲 400。

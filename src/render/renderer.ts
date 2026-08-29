@@ -32,6 +32,7 @@ import {
   COLOR_PAUSE,
   GAMEOVER_SLIDE_TICKS,
   SHIELD_ANIM_TICKS,
+  FRIENDLY_FREEZE_BLINK_TICKS,
   PAUSE_BLINK_TICKS,
   CARRIER_FLASH_TICKS,
   POWERUP_BLINK_VISIBLE_TICKS,
@@ -314,12 +315,20 @@ export class Renderer {
       if (!tank.alive) continue;
       const px = snapArt(FIELD_X + tank.x);
       const py = snapArt(FIELD_Y + tank.y);
-      // 冻结中的敌军履带定格第 0 帧（timer 道具）；其余按移动状态播放两帧。
-      const frozen = enemiesFrozen && tank.kind !== 'player';
+      // 冻结中履带定格第 0 帧：敌军由 timer 道具冻结，玩家由友军弹冻结（freezeTicks）；
+      // 其余按移动状态播放两帧。
+      const frozen =
+        tank.kind === 'player' ? tank.freezeTicks > 0 : enemiesFrozen;
       const frame = tank.moving && !frozen ? Math.floor(state.tick / TRACK_ANIM_TICKS) % 2 : 0;
       const frames = this.tankFrames(tank, state.tick);
       const sprite = frames[tank.dir][frame];
-      drawTile(ctx, sprite, px, py);
+      // 友军冻结反馈：被冻的玩家坦克每 FRIENDLY_FREEZE_BLINK_TICKS 帧明灭一次（相位由
+      // freezeTicks 自身推导，无需全局计时），一眼可辨“这台坦克动不了”。
+      const freezeBlinkOff =
+        tank.kind === 'player' &&
+        tank.freezeTicks > 0 &&
+        Math.floor(tank.freezeTicks / FRIENDLY_FREEZE_BLINK_TICKS) % 2 === 0;
+      if (!freezeBlinkOff) drawTile(ctx, sprite, px, py);
 
       // 出生护盾：每 SHIELD_ANIM_TICKS 帧切换两帧流光，覆盖在坦克之上。
       if (tank.invulnTicks > 0) {
