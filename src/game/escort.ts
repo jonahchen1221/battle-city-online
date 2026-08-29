@@ -45,42 +45,51 @@ export interface EscortGuardSlot {
   inward: Direction;
   x: number;
   y: number;
-  size: number;
+  width: number;
+  height: number;
 }
 
-// 两个 16×16 护卫位始终位于行驶方向的左/右侧；车辆转弯时标记也随之旋转。
-export function escortGuardSlots(escort: EscortState): [EscortGuardSlot, EscortGuardSlot] {
-  const centeredX = escort.x + (ESCORT_SIZE - TANK_SIZE) / 2;
-  const centeredY = escort.y + (ESCORT_SIZE - TANK_SIZE) / 2;
+// 每个护卫位沿车身方向覆盖连续两个坦克格，给玩家留出跟车调整空间。
+// 1–2 人局只启用左侧一位；3–4 人局启用左右两位，车辆转弯时标记一并旋转。
+export function escortGuardSlots(escort: EscortState, playerCount = 1): EscortGuardSlot[] {
+  const stripLength = TANK_SIZE * 2;
+  const centeredX = escort.x + (ESCORT_SIZE - stripLength) / 2;
+  const centeredY = escort.y + (ESCORT_SIZE - stripLength) / 2;
+  let slots: [EscortGuardSlot, EscortGuardSlot];
   switch (escort.dir) {
     case 'up':
-      return [
-        { side: 'left', inward: 'right', x: escort.x - TANK_SIZE, y: centeredY, size: TANK_SIZE },
-        { side: 'right', inward: 'left', x: escort.x + ESCORT_SIZE, y: centeredY, size: TANK_SIZE },
+      slots = [
+        { side: 'left', inward: 'right', x: escort.x - TANK_SIZE, y: centeredY, width: TANK_SIZE, height: stripLength },
+        { side: 'right', inward: 'left', x: escort.x + ESCORT_SIZE, y: centeredY, width: TANK_SIZE, height: stripLength },
       ];
+      break;
     case 'down':
-      return [
-        { side: 'left', inward: 'left', x: escort.x + ESCORT_SIZE, y: centeredY, size: TANK_SIZE },
-        { side: 'right', inward: 'right', x: escort.x - TANK_SIZE, y: centeredY, size: TANK_SIZE },
+      slots = [
+        { side: 'left', inward: 'left', x: escort.x + ESCORT_SIZE, y: centeredY, width: TANK_SIZE, height: stripLength },
+        { side: 'right', inward: 'right', x: escort.x - TANK_SIZE, y: centeredY, width: TANK_SIZE, height: stripLength },
       ];
+      break;
     case 'left':
-      return [
-        { side: 'left', inward: 'up', x: centeredX, y: escort.y + ESCORT_SIZE, size: TANK_SIZE },
-        { side: 'right', inward: 'down', x: centeredX, y: escort.y - TANK_SIZE, size: TANK_SIZE },
+      slots = [
+        { side: 'left', inward: 'up', x: centeredX, y: escort.y + ESCORT_SIZE, width: stripLength, height: TANK_SIZE },
+        { side: 'right', inward: 'down', x: centeredX, y: escort.y - TANK_SIZE, width: stripLength, height: TANK_SIZE },
       ];
+      break;
     case 'right':
-      return [
-        { side: 'left', inward: 'down', x: centeredX, y: escort.y - TANK_SIZE, size: TANK_SIZE },
-        { side: 'right', inward: 'up', x: centeredX, y: escort.y + ESCORT_SIZE, size: TANK_SIZE },
+      slots = [
+        { side: 'left', inward: 'down', x: centeredX, y: escort.y - TANK_SIZE, width: stripLength, height: TANK_SIZE },
+        { side: 'right', inward: 'up', x: centeredX, y: escort.y + ESCORT_SIZE, width: stripLength, height: TANK_SIZE },
       ];
+      break;
   }
+  return playerCount >= 3 ? slots : [slots[0]];
 }
 
-// 以玩家坦克中心进入标记格为准；玩家可紧贴车辆，也可与车身保留最多半格距离。
-export function escortGuardOccupancy(state: GameState): [boolean, boolean] {
+// 以玩家坦克中心进入两格标记带为准；同一护卫位只需一名玩家占据。
+export function escortGuardOccupancy(state: GameState): boolean[] {
   const escort = state.escort;
-  if (!escort) return [false, false];
-  const slots = escortGuardSlots(escort);
+  if (!escort) return [];
+  const slots = escortGuardSlots(escort, state.playerCount);
   return slots.map((slot) =>
     state.tanks.some((tank) => {
       if (!tank.alive || tank.kind !== 'player') return false;
@@ -88,16 +97,17 @@ export function escortGuardOccupancy(state: GameState): [boolean, boolean] {
       const centerY = tank.y + TANK_SIZE / 2;
       return (
         centerX >= slot.x &&
-        centerX <= slot.x + slot.size &&
+        centerX <= slot.x + slot.width &&
         centerY >= slot.y &&
-        centerY <= slot.y + slot.size
+        centerY <= slot.y + slot.height
       );
     }),
-  ) as [boolean, boolean];
+  );
 }
 
 export function escortHasGuard(state: GameState): boolean {
-  return escortGuardOccupancy(state).some(Boolean);
+  const occupied = escortGuardOccupancy(state);
+  return occupied.length > 0 && occupied.every(Boolean);
 }
 
 export function isEscortStage(stage: number): boolean {
@@ -353,7 +363,7 @@ function overlaps(
   return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
-// 至少一名玩家站在左右护卫位时车队才会沿当前路线节点前进；到节点后可转弯。
+// 1–2 人需占据唯一护卫位；3–4 人需同时占据左右两位。满足后车队才沿路线前进。
 export function updateEscort(state: GameState): void {
   const escort = state.escort;
   if (!escort || escort.destroyed || escort.arrived) return;

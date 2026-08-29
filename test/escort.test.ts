@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS, ESCORT_REPAIR_AMOUNT } from '../src/core/constants';
+import {
+  ESCORT_FIELD_COLS,
+  ESCORT_FIELD_ROWS,
+  ESCORT_REPAIR_AMOUNT,
+  TANK_SIZE,
+} from '../src/core/constants';
 import { createGameState } from '../src/game/state';
 import {
   escortGuardSlots,
+  escortHasGuard,
   updateEscort,
   resolveEscortHits,
 } from '../src/game/escort';
@@ -128,7 +134,7 @@ test('any tank standing in front stops the escort before their boxes overlap', (
   assert.equal(escort.moving, true);
 });
 
-test('the escort moves only while at least one player occupies a side guard slot', () => {
+test('the escort moves only while its single-player guard slot is occupied', () => {
   const state = createGameState(12, 1, 1);
   const escort = state.escort!;
   const player = state.tanks[0];
@@ -139,11 +145,49 @@ test('the escort moves only while at least one player occupies a side guard slot
   assert.equal(escort.y, startY);
   assert.equal(escort.moving, false);
 
-  const right = escortGuardSlots(escort)[1];
-  Object.assign(player, { x: right.x, y: right.y });
+  const guard = escortGuardSlots(escort, state.playerCount)[0];
+  Object.assign(player, { x: guard.x, y: guard.y });
   updateEscort(state);
   assert.ok(escort.y < startY);
   assert.equal(escort.moving, true);
+});
+
+test('guard slots scale from one required two-cell strip to two simultaneously occupied strips', () => {
+  for (const playerCount of [1, 2]) {
+    const state = createGameState(300 + playerCount, playerCount, 1);
+    const escort = state.escort!;
+    state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
+    const slots = escortGuardSlots(escort, playerCount);
+    assert.equal(slots.length, 1);
+    assert.equal(slots[0].width * slots[0].height, 2 * TANK_SIZE * TANK_SIZE);
+    Object.assign(state.tanks[0], { x: slots[0].x, y: slots[0].y });
+    assert.equal(escortHasGuard(state), true);
+    const before = escort.y;
+    updateEscort(state);
+    assert.ok(escort.y < before, `${playerCount}P convoy should move with one guard`);
+  }
+
+  for (const playerCount of [3, 4]) {
+    const state = createGameState(400 + playerCount, playerCount, 1);
+    const escort = state.escort!;
+    state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
+    const slots = escortGuardSlots(escort, playerCount);
+    assert.equal(slots.length, 2);
+    for (const slot of slots) {
+      assert.equal(slot.width * slot.height, 2 * TANK_SIZE * TANK_SIZE);
+    }
+
+    Object.assign(state.tanks[0], { x: slots[0].x, y: slots[0].y });
+    assert.equal(escortHasGuard(state), false);
+    const stoppedAt = escort.y;
+    updateEscort(state);
+    assert.equal(escort.y, stoppedAt, `${playerCount}P convoy should wait for the second guard`);
+
+    Object.assign(state.tanks[1], { x: slots[1].x, y: slots[1].y });
+    assert.equal(escortHasGuard(state), true);
+    updateEscort(state);
+    assert.ok(escort.y < stoppedAt, `${playerCount}P convoy should move with both guards`);
+  }
 });
 
 test('players can move through the expanded world but cannot drive through the escort', () => {

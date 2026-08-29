@@ -392,12 +392,12 @@ export class Renderer {
     }
   }
 
-  // 车辆左右护卫位：四角框 + 指向车身的箭头，不使用容易误读为路线的“+”标志。
+  // 车辆护卫位：每位由连续两格组成；四角框、分格线与箭头均不使用容易误读为路线的“+”。
   private drawEscortGuardSlots(state: GameState): void {
     const escort = state.escort;
     if (!escort || escort.destroyed || escort.arrived) return;
     const { ctx } = this;
-    const slots = escortGuardSlots(escort);
+    const slots = escortGuardSlots(escort, state.playerCount);
     const occupied = escortGuardOccupancy(state);
 
     for (let i = 0; i < slots.length; i++) {
@@ -412,28 +412,40 @@ export class Renderer {
           : '#a89848';
 
       ctx.fillStyle = active ? 'rgba(24,72,30,0.45)' : 'rgba(58,48,18,0.38)';
-      ctx.fillRect(x * ART_SCALE, y * ART_SCALE, slot.size * ART_SCALE, slot.size * ART_SCALE);
+      ctx.fillRect(x * ART_SCALE, y * ART_SCALE, slot.width * ART_SCALE, slot.height * ART_SCALE);
       ctx.fillStyle = color;
       const arm = 5;
       const thick = 2;
       ctx.fillRect(x * ART_SCALE, y * ART_SCALE, arm * ART_SCALE, thick * ART_SCALE);
       ctx.fillRect(x * ART_SCALE, y * ART_SCALE, thick * ART_SCALE, arm * ART_SCALE);
-      ctx.fillRect((x + slot.size - arm) * ART_SCALE, y * ART_SCALE, arm * ART_SCALE, thick * ART_SCALE);
-      ctx.fillRect((x + slot.size - thick) * ART_SCALE, y * ART_SCALE, thick * ART_SCALE, arm * ART_SCALE);
-      ctx.fillRect(x * ART_SCALE, (y + slot.size - thick) * ART_SCALE, arm * ART_SCALE, thick * ART_SCALE);
-      ctx.fillRect(x * ART_SCALE, (y + slot.size - arm) * ART_SCALE, thick * ART_SCALE, arm * ART_SCALE);
+      ctx.fillRect((x + slot.width - arm) * ART_SCALE, y * ART_SCALE, arm * ART_SCALE, thick * ART_SCALE);
+      ctx.fillRect((x + slot.width - thick) * ART_SCALE, y * ART_SCALE, thick * ART_SCALE, arm * ART_SCALE);
+      ctx.fillRect(x * ART_SCALE, (y + slot.height - thick) * ART_SCALE, arm * ART_SCALE, thick * ART_SCALE);
+      ctx.fillRect(x * ART_SCALE, (y + slot.height - arm) * ART_SCALE, thick * ART_SCALE, arm * ART_SCALE);
       ctx.fillRect(
-        (x + slot.size - arm) * ART_SCALE,
-        (y + slot.size - thick) * ART_SCALE,
+        (x + slot.width - arm) * ART_SCALE,
+        (y + slot.height - thick) * ART_SCALE,
         arm * ART_SCALE,
         thick * ART_SCALE,
       );
       ctx.fillRect(
-        (x + slot.size - thick) * ART_SCALE,
-        (y + slot.size - arm) * ART_SCALE,
+        (x + slot.width - thick) * ART_SCALE,
+        (y + slot.height - arm) * ART_SCALE,
         thick * ART_SCALE,
         arm * ART_SCALE,
       );
+      // 两个坦克格之间的分隔短线，让有效站位范围一眼可见。
+      ctx.globalAlpha = 0.55;
+      if (slot.width > TANK_SIZE) {
+        for (let offset = TANK_SIZE; offset < slot.width; offset += TANK_SIZE) {
+          ctx.fillRect((x + offset) * ART_SCALE, y * ART_SCALE, ART_SCALE, slot.height * ART_SCALE);
+        }
+      } else {
+        for (let offset = TANK_SIZE; offset < slot.height; offset += TANK_SIZE) {
+          ctx.fillRect(x * ART_SCALE, (y + offset) * ART_SCALE, slot.width * ART_SCALE, ART_SCALE);
+        }
+      }
+      ctx.globalAlpha = 1;
       // 五个 2×2 像素块组成朝向车身的尖括号，不依赖字体字符。
       const arrowDots: Record<'up' | 'down' | 'left' | 'right', Array<[number, number]>> = {
         right: [[4, 3], [6, 5], [8, 7], [6, 9], [4, 11]],
@@ -441,8 +453,10 @@ export class Renderer {
         down: [[3, 4], [5, 6], [7, 8], [9, 6], [11, 4]],
         up: [[3, 10], [5, 8], [7, 6], [9, 8], [11, 10]],
       };
+      const arrowX = x + (slot.width - TANK_SIZE) / 2;
+      const arrowY = y + (slot.height - TANK_SIZE) / 2;
       for (const [ox, oy] of arrowDots[slot.inward]) {
-        ctx.fillRect((x + ox) * ART_SCALE, (y + oy) * ART_SCALE, 2 * ART_SCALE, 2 * ART_SCALE);
+        ctx.fillRect((arrowX + ox) * ART_SCALE, (arrowY + oy) * ART_SCALE, 2 * ART_SCALE, 2 * ART_SCALE);
       }
     }
   }
