@@ -21,7 +21,6 @@ import {
   SMART_HELMET_TICKS,
   SMART_BOOTS_TICKS,
   SMART_GHOST_TICKS,
-  SMART_MAX_LEVEL,
   SMART_MAX_HP,
   ENEMY_SLOW_TICKS,
   BOSS_FREEZE_TICKS,
@@ -40,6 +39,7 @@ import {
   WeaponKind,
   isPlayerTank,
   playerMaxHpForLevel,
+  upgradeTankLikePlayer,
   upgradePlayerTank,
 } from './tank';
 import type { GameState } from './state';
@@ -297,7 +297,8 @@ export function canSmartTankPickup(tank: TankState, kind: PowerupKind): boolean 
     case 'helmet':
       return tank.invulnTicks <= 0;
     case 'star':
-      return tank.level < SMART_MAX_LEVEL;
+      // 与玩家一致：满级星仍可拾取；外甲已破时补回一层，未破时则正常消耗但不叠加。
+      return true;
     case 'wpnSpread':
     case 'wpnSpiral':
       return tank.weapon === 'cannon';
@@ -347,15 +348,15 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
   const player = isPlayerTank(collector);
   switch (kind) {
     case 'star':
-      if (player) {
+      if (player || collector.kind === 'smart') {
         // 满级时不再升级；若 3 级的一次性外层护甲已损失，则补回这一层。
-        if (!upgradePlayerTank(collector) && collector.armor === 0) collector.armor = 1;
+        const upgraded = player
+          ? upgradePlayerTank(collector)
+          : upgradeTankLikePlayer(collector);
+        if (!upgraded && collector.armor === 0) collector.armor = 1;
       } else {
-        // 智能坦克与其他敌军都走完整火炮路线：1 级提速、2 级双弹、3 级破钢。
-        collector.level = Math.min(
-          collector.kind === 'smart' ? SMART_MAX_LEVEL : PLAYER_MAX_LEVEL,
-          collector.level + 1,
-        );
+        // 传统敌军保留原升级路径；只有智能坦克改为完整复用玩家路线。
+        collector.level = Math.min(PLAYER_MAX_LEVEL, collector.level + 1);
       }
       break;
     case 'grenade':

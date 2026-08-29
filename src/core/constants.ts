@@ -154,13 +154,14 @@ export const ENEMY_SPEED_BASIC = 0.5;
 export const ENEMY_SPEED_FAST = 1.0;
 export const ENEMY_SPEED_POWER = 0.75;
 export const ENEMY_SPEED_ARMOR = 0.5;
-export const ENEMY_SPEED_SMART = 0.75;
+// 智能坦克与玩家共享同一套初始战斗数值；AI 只改变决策方式，不额外获得基础速度优势。
+export const ENEMY_SPEED_SMART = PLAYER_SPEED;
 // 血量：常规敌军 1 发即毁，装甲坦克需 4 发。
 export const ENEMY_HP_DEFAULT = 1;
 export const ARMOR_HP = 4;
 // 敌弹速度：威力坦克的子弹更快，其余与玩家一致。
 export const ENEMY_BULLET_SPEED_POWER = 3;
-export const ENEMY_BULLET_SPEED_DEFAULT = 2;
+export const ENEMY_BULLET_SPEED_DEFAULT = BULLET_SPEED;
 // 出生点（战场相对坐标，16×16 盒左上角）：顶行四点 左 / 中左 / 中右 / 右，出生朝下，按序轮转。
 export const ENEMY_SPAWN_POINTS: ReadonlyArray<{ x: number; y: number }> = [
   { x: 0, y: 0 }, // 左

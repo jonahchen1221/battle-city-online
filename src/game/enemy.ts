@@ -1839,14 +1839,16 @@ function pickSpawnSpot(
 // 普通关出生点在上半场随机，护送关使用各图进攻方向（见 pickSpawnSpot）；找不到可用落点则重试。
 // 所有敌军出生完毕后停止（胜负判定属后续任务）。
 function updateSpawner(state: GameState, obstacles: TankState[]): void {
-  // 护送关以抵达终点为胜利条件，因此原始 20 台耗尽后循环本关编成，持续保持沿途战斗。
-  // 普通关仍保留有限队列与全歼过关规则。
+  // 护送关以抵达终点为胜利条件，因此按 20 辆一波循环本关编成；必须等上一波全部消灭后
+  // 才装填下一波。普通关仍保留单波有限队列与全歼过关规则。
   if (
     state.enemyQueue.length === 0 &&
     state.escort &&
     !state.escort.arrived &&
-    !state.escort.timeExpired
+    !state.escort.timeExpired &&
+    enemyCount(state) === 0
   ) {
+    // 严格按 20 辆分波：上一波已全部出队且场上/出生闪光中也已清空，才装填下一波。
     state.enemyQueue.push(...createStageEnemyQueue(state.stage));
   }
 

@@ -212,7 +212,8 @@ function createStageQueue(stage: number): TankKind[] {
   return queue;
 }
 
-// 护送关抵达前会按本关原始编成循环呼叫援军。普通关仍只使用初始化时的一轮有限队列。
+// 护送关抵达前会按本关原始编成循环呼叫援军，波次门禁由 enemy.ts 保证上一波清场后才装填。
+// 普通关仍只使用初始化时的一轮有限队列。
 export function createStageEnemyQueue(stage: number): TankKind[] {
   return createStageQueue(stage);
 }

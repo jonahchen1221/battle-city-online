@@ -44,6 +44,7 @@ import {
   DASH_COOLDOWN_TICKS,
   DASH_READY_FLASH_TICKS,
   SMART_AI_INTERCEPT_RELOAD_TICKS,
+  PLAYER_DAMAGE_FLASH_TICKS,
 } from '../core/constants';
 
 // 每逻辑帧调用一次。纯函数式推进：只依赖 state 与 inputs，
@@ -345,8 +346,25 @@ function resolveBulletTanks(state: GameState): void {
 // 敌方坦克的统一单次伤害入口，供直击与 F 弹范围炎爆复用，确保得分、携带道具和智能坦克掉星一致。
 function damageEnemyTank(state: GameState, tank: GameState['tanks'][number], ownerPlayerIndex: number): void {
   if (!tank.alive || isPlayerTank(tank)) return;
-  tank.hp--;
-  if (tank.hp > 0) return;
+  const armorBroken = tank.kind === 'smart' && tank.armor > 0;
+  if (armorBroken) tank.armor--;
+  else tank.hp--;
+  if (tank.hp > 0) {
+    // 智能坦克的升级耐久与玩家一致，并复用同样的受击反馈；传统装甲坦克保持原表现。
+    if (tank.kind === 'smart') {
+      tank.hitFlashTicks = PLAYER_DAMAGE_FLASH_TICKS;
+      const cx = tank.x + TANK_SIZE / 2;
+      const cy = tank.y + TANK_SIZE / 2;
+      state.explosions.push(makeSmallExplosion(cx, cy));
+      if (armorBroken) {
+        state.explosions.push(makeSmallExplosion(cx + 5, cy - 3));
+        state.events.push('steelHit');
+      } else {
+        state.events.push('explosionSmall');
+      }
+    }
+    return;
+  }
 
   pushBigExplosion(state, tank);
   tank.alive = false;

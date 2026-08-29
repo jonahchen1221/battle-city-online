@@ -107,11 +107,13 @@ export function playerSpeedForLevel(level: number): number {
   return level >= 1 ? PLAYER_SPEED_UPGRADED : PLAYER_SPEED;
 }
 
-// 星星只补充“该级新解锁的耐久”，不承担回血功能：
+// 玩家与智能坦克共用的星星升级路线。星星只补充“该级新解锁的耐久”，不承担回血功能：
 // 0→1 增加的一点车体上限会立即兑现；1→2 不回血；2→3 只装上一层新护甲。
 // 返回 false 表示已经满级，拾取者属性保持不变。
-export function upgradePlayerTank(tank: TankState): boolean {
-  if (!isPlayerTank(tank) || tank.level >= PLAYER_MAX_LEVEL) return false;
+export function upgradeTankLikePlayer(tank: TankState): boolean {
+  if ((tank.kind !== 'player' && tank.kind !== 'smart') || tank.level >= PLAYER_MAX_LEVEL) {
+    return false;
+  }
   const oldMaxHp = playerMaxHpForLevel(tank.level);
   tank.level++;
   const newMaxHp = playerMaxHpForLevel(tank.level);
@@ -119,6 +121,11 @@ export function upgradePlayerTank(tank: TankState): boolean {
   tank.hp = Math.min(newMaxHp, tank.hp + (newMaxHp - oldMaxHp));
   if (tank.level === 3) tank.armor = 1;
   return true;
+}
+
+// 保留玩家专用入口，避免其他调用方无意间升级普通敌军。
+export function upgradePlayerTank(tank: TankState): boolean {
+  return isPlayerTank(tank) && upgradeTankLikePlayer(tank);
 }
 
 // 跨关恢复已捕获的升级状态，但不治疗既有车体伤害，也不补回已经打掉的护甲。
@@ -150,7 +157,7 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     bulletSpeed: BULLET_SPEED,
     prevFire: false,
     alive: true,
-    hp: 1,
+    hp: playerMaxHpForLevel(0),
     armor: 0,
     hitFlashTicks: 0,
     aiTicks: 0,
@@ -207,6 +214,7 @@ function enemyBulletSpeed(kind: TankKind): number {
 
 // 敌方各种类的血量（仅装甲坦克为 4）。
 function enemyHp(kind: TankKind): number {
+  if (kind === 'smart') return playerMaxHpForLevel(0);
   return kind === 'armor' ? ARMOR_HP : ENEMY_HP_DEFAULT;
 }
 

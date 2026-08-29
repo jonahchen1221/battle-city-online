@@ -24,16 +24,25 @@ import {
   SMART_AI_STUCK_TICKS,
 } from '../src/core/constants';
 
-test('escort stages refill their enemy composition while normal stages stay finite', () => {
+test('escort stages refill only after the previous 20-tank wave is eliminated', () => {
   const escortState = createGameState(104, 1, 18);
   escortState.phase = 'playing';
   escortState.level = createEmptyLevel(escortState.level.cols, escortState.level.rows);
   escortState.enemyQueue = [];
   escortState.enemySpawnTimer = 0;
   escortState.spawning = [];
-  escortState.tanks = [escortState.tanks[0]];
+  const player = escortState.tanks[0];
+  const survivingEnemy = createEnemy('basic', 99, 0);
+  Object.assign(survivingEnemy, { x: 160, y: 160 });
+  escortState.tanks = [player, survivingEnemy];
   escortState.escort!.moving = true;
 
+  updateEnemies(escortState, escortState.level);
+
+  assert.equal(escortState.enemyQueue.length, 0, 'a surviving enemy must hold the next wave');
+  assert.equal(escortState.spawning.length, 0);
+
+  survivingEnemy.alive = false;
   updateEnemies(escortState, escortState.level);
 
   assert.equal(escortState.spawning.filter((spawn) => spawn.tank.kind !== 'player').length, 1);

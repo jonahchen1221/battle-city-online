@@ -187,8 +187,10 @@ function firingViewportBounds(tank: TankState, level: LevelState): BulletViewpor
 // 速度取自该坦克（威力坦克更快；敌我 star 等级 ≥1 均提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
 export function spawnBullet(tank: TankState, bulletId: number, level?: LevelState): BulletState {
   const speed = tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
-  // 玩家 2 级开放破钢；敌军保留原 3 级门槛。钻头仍让任何阵营、任何等级破钢。
-  const starPiercing = isPlayerTank(tank) ? tank.level >= 2 : tank.level >= 3;
+  // 玩家与智能坦克共用星星路线，均在 2 级开放破钢；传统敌军保留原 3 级门槛。
+  // 钻头仍让任何阵营、任何等级破钢。
+  const playerStyleUpgrade = isPlayerTank(tank) || tank.kind === 'smart';
+  const starPiercing = playerStyleUpgrade ? tank.level >= 2 : tank.level >= 3;
   return makeBullet(tank, bulletId, 'normal', speed, starPiercing || tank.drill, level);
 }
 

@@ -1012,14 +1012,16 @@ export class Renderer {
             Math.floor(tank.dashReadyFlashTicks / DASH_READY_BLINK_TICKS) % 2 === 0;
           if (on) this.drawDashRing(cx, cy, 1, COLOR_DASH_READY);
         }
-        if (!freezeBlinkOff) {
-          if (tank.level >= 3) {
-            if (tank.armor > 0) this.drawPlayerArmorPlates(px, py, state.tick);
-            else this.drawPlayerBrokenArmor(px, py, state.tick);
-          }
-          // 车体生命只剩 1 点时持续冒烟并闪烁红色故障核心。
-          if (tank.level >= 1 && tank.hp === 1) this.drawPlayerDamageSmoke(px, py, state.tick);
+      }
+
+      // 智能坦克与玩家共用星星耐久路线，因此也显示外甲、破甲和残血反馈。
+      if (!freezeBlinkOff && (tank.kind === 'player' || tank.kind === 'smart')) {
+        if (tank.level >= 3) {
+          if (tank.armor > 0) this.drawPlayerArmorPlates(px, py, state.tick);
+          else this.drawPlayerBrokenArmor(px, py, state.tick);
         }
+        // 车体生命只剩 1 点时持续冒烟并闪烁红色故障核心。
+        if (tank.level >= 1 && tank.hp === 1) this.drawPlayerDamageSmoke(px, py, state.tick);
       }
 
       // 出生护盾：每 SHIELD_ANIM_TICKS 帧切换两帧流光，覆盖在坦克之上。
