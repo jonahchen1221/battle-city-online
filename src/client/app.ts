@@ -5,7 +5,13 @@
 // 联机渲染：客户端不做权威模拟，只持有最近两份快照并在渲染帧间做位置插值；
 // 其余一切（地形 / HUD / 爆炸 / 阶段）直接取最新快照。
 
-import { createGameState, resetGameState, GameState } from '../game/state';
+import {
+  createGameState,
+  resetGameState,
+  GameState,
+  GameEvent,
+  PowerupPickupEvent,
+} from '../game/state';
 import { update } from '../game/update';
 import type { LevelState } from '../game/level';
 import { Renderer } from '../render/renderer';
@@ -14,7 +20,6 @@ import { Keyboard } from '../input/keyboard';
 import { GamepadInput, MenuEdges } from '../input/gamepad';
 import { InputState, emptyInput } from '../core/types';
 import { createRng, Rng } from '../core/rng';
-import { GameEvent } from '../game/state';
 import {
   ART_SCALE,
   NATIVE_WIDTH,
@@ -24,6 +29,7 @@ import {
   FIELD_WIDTH,
   FIELD_HEIGHT,
   TICKS_PER_SECOND,
+  PLAYER_LABEL_COLORS,
 } from '../core/constants';
 import { drawTextOutlined, textWidth, drawTile } from '../render/sprites';
 import {
@@ -42,6 +48,7 @@ import {
   drawLogoTextCentered,
   drawPixelPanel,
   drawTextCentered,
+  powerupTickerText,
 } from './ui';
 
 export type ScreenName = 'title' | 'joinCode' | 'lobby' | 'localGame' | 'netGame';
@@ -80,6 +87,10 @@ const COLOR_HIGHLIGHT = '#ffc14a'; // 自己所在行 / 光标黄
 const COLOR_ERROR = '#ff5947';
 const COLOR_OK = '#70dc58';
 
+// 机台顶栏中的跑马灯。以 CSS 像素匀速移动，并吸附到整数像素保持街机字样清晰。
+const TICKER_SPEED_PX_PER_MS = 0.075; // 75 CSS px / sec
+const TICKER_EDGE_PAD = 12;
+
 // 服务器错误码 → 可读英文短句（用像素字体，只用大写字母 / 数字，故全大写无标点）。
 const ERROR_TEXT: Record<ServerErrorCode, string> = {
   room_not_found: 'ROOM NOT FOUND',
@@ -97,12 +108,18 @@ interface BufferedSnap {
   arrival: number; // performance.now() 到达时刻（ms）
 }
 
+interface ActivePowerupTicker {
+  startedAt: number;
+}
+
 export class App {
   private ctx: CanvasRenderingContext2D;
   private renderer: Renderer;
   private keyboard: Keyboard;
   private gamepad: GamepadInput;
   private sfx: Sfx;
+  private readonly powerupTickerElement: HTMLElement | null;
+  private readonly powerupTickerTextElement: HTMLElement | null;
 
   private screen: ScreenName = 'title';
 
@@ -136,6 +153,9 @@ export class App {
   private lastSendTime = 0;
   private disconnected = false;
 
+  // 道具拾取跑马灯：只保留最新一条，新拾取会立即覆盖当前消息并重新从右侧入场。
+  private activePowerupTicker: ActivePowerupTicker | null = null;
+
   constructor(
     canvas: HTMLCanvasElement,
     renderer: Renderer,
@@ -151,6 +171,9 @@ export class App {
     this.keyboard = keyboard;
     this.gamepad = gamepad;
     this.sfx = sfx;
+    this.powerupTickerElement = document.getElementById('powerup-ticker');
+    this.powerupTickerTextElement =
+      this.powerupTickerElement?.querySelector<HTMLElement>('.cabinet-ticker-text') ?? null;
     this.localState = createGameState(20260708, 1);
 
     this.net = new NetClient();
@@ -213,8 +236,11 @@ export class App {
     const pad = this.gamepad.takeMenuEdges();
 
     if (this.screen === 'localGame') {
+      const tickBeforeUpdate = this.localState.tick;
       update(this.localState, [this.playerInput()]);
-      for (const e of this.localState.events) this.sfx.play(e);
+      // GAME OVER 后原地重开会让 tick 归零；旧局尚未播完的提示不得带进新局。
+      if (this.localState.tick < tickBeforeUpdate) this.clearPowerupTicker();
+      this.consumeGameEvents(this.localState.events);
       this.localState.events.length = 0;
     } else if (this.screen === 'netGame') {
       // 断线覆盖层：键盘走 Enter，手柄走 A / Start。
@@ -268,6 +294,7 @@ export class App {
         break;
       case 'localGame':
         this.renderer.draw(this.localState, alpha);
+        this.updatePowerupTicker();
         break;
       case 'netGame':
         this.drawNet();
@@ -364,6 +391,7 @@ export class App {
       this.arrivalGaps = [];
       this.lastArrival = 0;
       this.interpDelay = INTERP_DELAY_START;
+      this.clearPowerupTicker();
     }
 
     // 增量地形：带 level 则更新客户端地形，否则沿用上一份。
@@ -383,8 +411,8 @@ export class App {
     }
     this.lastArrival = now;
 
-    // 快照携带的音效事件立即播放（覆盖两份快照之间累积的事件，避免漏音）。
-    for (const e of events) this.sfx.play(e);
+    // 快照携带的音效 / UI 事件立即消费（覆盖两份快照之间累积的事件，避免漏音与拾取提示）。
+    this.consumeGameEvents(events);
   }
 
   private onNetClose(): void {
@@ -423,6 +451,7 @@ export class App {
     this.lastArrival = 0;
     this.interpDelay = INTERP_DELAY_START;
     this.clientLevel = null;
+    this.clearPowerupTicker();
   }
 
   // 自适应插值延迟：目标 = clamp(p95(到达间隔) × 1.5, MIN, MAX)，逐帧缓动 1% 靠拢。
@@ -494,6 +523,7 @@ export class App {
       // 1 PLAYER：全新本地单机局。设 prevStart=true，避免刚按下的 Enter 被当作暂停边沿。
       resetGameState(this.localState, (Date.now() >>> 0) || 20260708);
       this.localState.prevStart = true;
+      this.clearPowerupTicker();
       this.screen = 'localGame';
     } else if (this.titleSel === 1) {
       // CREATE ROOM：连接并建房。
@@ -800,6 +830,7 @@ export class App {
     const rs = this.buildNetRenderState();
     if (rs) {
       this.renderer.draw(rs, 0);
+      this.updatePowerupTicker();
     } else {
       // 尚未收到首份快照：黑屏 + 提示。
       clearScreen(this.ctx);
@@ -864,6 +895,62 @@ export class App {
     const cy = FIELD_Y + FIELD_HEIGHT / 2;
     drawTextCentered(ctx, atlas, 'CONNECTION LOST', cx, cy - 12, COLOR_ERROR);
     drawTextCentered(ctx, atlas, 'PRESS ENTER', cx, cy + 8, COLOR_MENU);
+  }
+
+  // ───────────────────────── 顶部道具跑马灯 ─────────────────────────
+
+  private consumeGameEvents(events: readonly GameEvent[]): void {
+    for (const event of events) {
+      this.sfx.play(event);
+      if (typeof event !== 'string' && event.type === 'powerupPicked') {
+        this.showPowerupTicker(event);
+      }
+    }
+  }
+
+  private showPowerupTicker(event: PowerupPickupEvent): void {
+    this.activePowerupTicker = { startedAt: performance.now() };
+
+    const track = this.powerupTickerElement;
+    const textElement = this.powerupTickerTextElement;
+    if (!track || !textElement) return;
+    textElement.textContent = powerupTickerText(event);
+    textElement.style.color = PLAYER_LABEL_COLORS[event.playerIndex] ?? COLOR_HIGHLIGHT;
+    textElement.style.transform = `translate3d(${track.clientWidth + TICKER_EDGE_PAD}px, 0, 0)`;
+    track.classList.add('is-active');
+  }
+
+  private clearPowerupTicker(): void {
+    this.activePowerupTicker = null;
+    this.powerupTickerElement?.classList.remove('is-active');
+    if (this.powerupTickerTextElement) {
+      this.powerupTickerTextElement.textContent = '';
+      this.powerupTickerTextElement.style.removeProperty('color');
+      this.powerupTickerTextElement.style.removeProperty('transform');
+    }
+  }
+
+  private updatePowerupTicker(): void {
+    const track = this.powerupTickerElement;
+    const textElement = this.powerupTickerTextElement;
+    if (!track || !textElement) return;
+
+    const now = performance.now();
+    const active = this.activePowerupTicker;
+    if (!active) return;
+    const trackWidth = track.clientWidth;
+    const width = textElement.scrollWidth;
+    const distance = trackWidth + width + TICKER_EDGE_PAD * 2;
+    const elapsed = now - active.startedAt;
+
+    // 整条消息越过左缘后清空；期间若有新拾取，showPowerupTicker 会直接替换并重置 startedAt。
+    if (elapsed * TICKER_SPEED_PX_PER_MS >= distance) {
+      this.clearPowerupTicker();
+      return;
+    }
+
+    const x = trackWidth + TICKER_EDGE_PAD - elapsed * TICKER_SPEED_PX_PER_MS;
+    textElement.style.transform = `translate3d(${Math.round(x)}px, 0, 0)`;
   }
 
   // ───────────────────────── 状态行 ─────────────────────────

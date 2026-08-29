@@ -62,7 +62,6 @@
       min-height: 20px;
       display: flex;
       align-items: center;
-      justify-content: space-between;
       gap: 24px;
       padding: 0 8px;
       color: #7e8883;
@@ -74,6 +73,7 @@
     }
 
     .cabinet-title {
+      flex: 0 0 auto;
       color: #cbd2ce;
     }
 
@@ -88,7 +88,31 @@
       vertical-align: 1px;
     }
 
-    .cabinet-mode { color: #a6752b; }
+    .cabinet-ticker {
+      position: relative;
+      align-self: stretch;
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--signal-hot);
+      opacity: 0;
+      transition: opacity 80ms steps(1, end);
+    }
+
+    .cabinet-ticker.is-active { opacity: 1; }
+
+    .cabinet-ticker-text {
+      position: absolute;
+      inset-block: 0;
+      left: 0;
+      display: flex;
+      align-items: center;
+      width: max-content;
+      white-space: nowrap;
+      letter-spacing: .12em;
+      will-change: transform;
+      text-shadow: 1px 1px 0 #211407;
+    }
 
     .screen-bezel {
       padding: 8px;
@@ -133,6 +157,16 @@
       .screen-bezel { padding: 2px; border-width: 1px; }
       .cabinet-bar { gap: 8px; padding: 0 3px; font-size: 6px; }
       .cabinet-title::before { width: 4px; height: 4px; margin-right: 5px; }
+      .cabinet-ticker-text { letter-spacing: .08em; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .cabinet-ticker-text {
+        width: 100%;
+        justify-content: flex-end;
+        transform: none !important;
+        will-change: auto;
+      }
     }
 
     @media (prefers-reduced-motion: no-preference) {
@@ -150,7 +184,9 @@
   <main class="arcade-shell" aria-label="Battle City Online arcade cabinet">
     <header class="cabinet-bar">
       <span class="cabinet-title">Battle City</span>
-      <span class="cabinet-mode">Online co-op system</span>
+      <span id="powerup-ticker" class="cabinet-ticker" role="status" aria-live="polite">
+        <span class="cabinet-ticker-text"></span>
+      </span>
     </header>
     <div class="screen-bezel">
       <canvas id="game" aria-label="Battle City Online game screen"></canvas>

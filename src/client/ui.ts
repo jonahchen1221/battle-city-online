@@ -3,7 +3,33 @@
 // 不修改 sprites.ts：大字通过读取 atlas.font 掩码、以 ART_SCALE×scale 的方块自行绘制。
 
 import { ART_SCALE, NATIVE_WIDTH, NATIVE_HEIGHT } from '../core/constants';
+import type { PowerupKind } from '../game/powerup';
+import type { PowerupPickupEvent } from '../game/state';
 import { SpriteAtlas, FONT_ADVANCE, drawText, drawTextOutlined, textWidth } from '../render/sprites';
+
+// 跑马灯文案刻意保持短促、全大写：既适配 5×7 NES 像素字，也让玩家在战斗中一眼读懂效果。
+const POWERUP_TICKER_COPY: Record<PowerupKind, { name: string; effect: string }> = {
+  star: { name: 'STAR', effect: 'CANNON LEVEL UP' },
+  grenade: { name: 'GRENADE', effect: 'ALL ENEMIES DESTROYED' },
+  tank: { name: '1UP TANK', effect: 'EXTRA LIFE' },
+  timer: { name: 'CLOCK', effect: 'ENEMIES FROZEN 10 SEC' },
+  shovel: { name: 'SHOVEL', effect: 'STEEL BASE WALLS 20 SEC' },
+  helmet: { name: 'HELMET', effect: 'INVINCIBLE 10 SEC' },
+  wpnSpread: { name: 'SPREAD', effect: 'THREE WAY SHOT' },
+  wpnSpiral: { name: 'SPIRAL', effect: 'WAVING SHOT' },
+  wpnLaser: { name: 'LASER', effect: 'PIERCING SHOT' },
+  wpnMachine: { name: 'MACHINE GUN', effect: 'HOLD FIRE TO RAPID FIRE' },
+  boots: { name: 'BOOTS', effect: 'SPEED BOOST 20 SEC' },
+  boat: { name: 'BOAT', effect: 'CROSS WATER UNTIL DEATH' },
+  ghost: { name: 'GHOST', effect: 'PASS THROUGH BRICKS 10 SEC' },
+  hourglass: { name: 'HOURGLASS', effect: 'ENEMIES SLOWED 12 SEC' },
+  wrench: { name: 'WRENCH', effect: 'BASE WALLS REPAIRED' },
+};
+
+export function powerupTickerText(event: PowerupPickupEvent): string {
+  const copy = POWERUP_TICKER_COPY[event.kind];
+  return `${event.playerIndex + 1}P GOT ${copy.name}: ${copy.effect}`;
+}
 
 // 用黑色铺满整个画布（标题/大厅/连接界面的底）。
 export function clearScreen(ctx: CanvasRenderingContext2D, color = '#000000'): void {

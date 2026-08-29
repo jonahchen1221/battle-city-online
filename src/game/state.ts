@@ -36,8 +36,8 @@ export interface ExplosionState {
 export type Phase = 'stagestart' | 'playing' | 'gameover' | 'stageclear';
 
 // 音效事件：游戏层在事件发生的瞬间 push 到 state.events，由调用方（main.ts）逐帧读取并清空。
-// 纯字符串联合，保持 GameState 可序列化；游戏层绝不直接触碰音频。
-export type GameEvent =
+// 游戏层绝不直接触碰音频。
+export type AudioEvent =
   | 'playerFire' // 玩家开火
   | 'brickHit' // 子弹击中砖块
   | 'steelHit' // 子弹击中钢块 / 鹰巢 / 边界
@@ -52,6 +52,16 @@ export type GameEvent =
   | 'powerupSpawn' // 携带者掉落道具（浮标出现）
   | 'powerupPickup' // 拾取道具（除 tank 外）
   | 'lifeUp'; // 拾取 tank 道具（加命）：独立的 1UP 欢快音效
+
+// 道具拾取通知：与拾取音效一起进入事件队列。客户端据此排入顶部跑马灯；对象结构仍可直接序列化，
+// 联机时由权威服务器随 snapshot 事件一并广播，所有客户端看到相同的拾取者与道具效果。
+export interface PowerupPickupEvent {
+  type: 'powerupPicked';
+  playerIndex: number;
+  kind: PowerupKind;
+}
+
+export type GameEvent = AudioEvent | PowerupPickupEvent;
 
 // 整局游戏的完整状态。必须保持可序列化（除 rng 外无函数/类实例），
 // 联机版中服务器持有它并向客户端广播快照。
@@ -93,7 +103,7 @@ export interface GameState {
   enemiesDequeued: number; // 已出队敌军计数（用于按第 4/11/18 台标记携带者）
   // 本关开始时每名玩家的累计分快照：nextStage 据此算出上一关各人得分差，评出 MVP（仅多人局）。
   stageScoreStart: number[];
-  events: GameEvent[]; // 本帧音效事件队列；main.ts 逐帧读取并清空
+  events: GameEvent[]; // 本帧音效 / UI 事件队列；main.ts 逐帧读取并清空
 }
 
 // 按某关编成（STAGE_ENEMY_MIX[stageIndex]）构建敌军出生队列（queue[0] 最先出生）。

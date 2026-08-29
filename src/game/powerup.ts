@@ -237,6 +237,8 @@ export function tryPickupPowerup(state: GameState): void {
       if (!pickupOverlap(t, p)) continue;
       state.scoreByPlayer[t.playerIndex] += POWERUP_SCORE;
       applyPowerupEffect(state, t, p.kind);
+      // 记录结构化拾取信息，客户端据此显示“谁拾取了什么、有什么效果”的跑马灯。
+      state.events.push({ type: 'powerupPicked', playerIndex: t.playerIndex, kind: p.kind });
       // tank 道具（加命）用独立的欢快 1UP 音效；其余用统一拾取提示音。
       state.events.push(p.kind === 'tank' ? 'lifeUp' : 'powerupPickup');
       taken = true;

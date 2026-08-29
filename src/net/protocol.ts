@@ -40,7 +40,7 @@ export type ServerMessage =
   | { t: 'joined'; code: string; playerIndex: number; players: LobbyPlayer[] } // 入房成功（含重连）
   | { t: 'lobby'; players: LobbyPlayer[] } // 大厅状态变更广播
   | { t: 'started'; playerCount: number } // 开局；随后开始收 snapshot
-  | { t: 'snapshot'; snap: Snapshot; events: GameEvent[] } // 权威快照 + 自上次快照以来累积的音效事件
+  | { t: 'snapshot'; snap: Snapshot; events: GameEvent[] } // 权威快照 + 自上次快照以来累积的音效 / UI 事件
   | { t: 'error'; code: ServerErrorCode; msg: string };
 
 export type ServerErrorCode =

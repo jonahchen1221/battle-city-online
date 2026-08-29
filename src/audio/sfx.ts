@@ -15,6 +15,8 @@ export class Sfx {
 
   // 播放一个游戏事件对应的音效。未解锁（无手势）时静默返回。
   play(event: GameEvent): void {
+    // 结构化 UI 事件与音效共用权威事件流；音频层只消费字符串事件。
+    if (typeof event !== 'string') return;
     const ctx = this.ensure();
     if (!ctx) return;
     if (ctx.state === 'suspended') void ctx.resume();
