@@ -680,12 +680,12 @@ export class Renderer {
     ctx.restore();
   }
 
-  // 闪烁的 "PRESS ENTER" 重开提示（gameover / stageclear 共用），与 PAUSE 同款闪烁节奏。
+  // 闪烁的推进提示：GAME OVER 重试当前关，STAGE CLEAR 进入下一关。
   private drawRestartHint(state: GameState, y: number): void {
     if (Math.floor(state.phaseTicks / PAUSE_BLINK_TICKS) % 2 !== 0) return; // 灭相
     const { ctx, atlas } = this;
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
-    const text = 'PRESS ENTER';
+    const text = state.phase === 'gameover' ? 'ENTER RETRY STAGE' : 'PRESS ENTER';
     drawTextOutlined(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), y, COLOR_STAGE_CLEAR);
   }
 

@@ -123,13 +123,19 @@ import type { LevelState } from '../game/level';
 //     （新客户端 / 重连 / 跨关 / 重开 / 地形刚被破坏）时，本次快照携带完整 level；
 //   • epoch 与 rev 都一致时省略 level，客户端沿用它上一次收到的 level 对象。
 // 客户端据此重建：snap.level 存在则替换本地地形，否则复用上一份（渲染永远有 level 可用）。
-export type Snapshot = Omit<GameState, 'rng' | 'events' | 'level'> & {
+export type Snapshot = Omit<GameState, 'rng' | 'events' | 'level' | 'stageStartCheckpoint'> & {
   level?: LevelState;
 };
 
 // 从权威 state 摘取快照字段（浅取引用，调用方须立即序列化，不得跨 tick 持有）。
 // includeLevel=true 时携带完整地形；false 时省略（增量：客户端沿用上一份 level）。
 export function pickSnapshot(state: GameState, includeLevel: boolean): Snapshot {
-  const { rng: _rng, events: _events, level, ...rest } = state;
+  const {
+    rng: _rng,
+    events: _events,
+    stageStartCheckpoint: _stageStartCheckpoint,
+    level,
+    ...rest
+  } = state;
   return includeLevel ? { ...rest, level } : { ...rest };
 }

@@ -8,7 +8,7 @@ import {
   GAMEOVER_DELAY_TICKS,
   STAGE_CLEAR_DELAY_TICKS,
 } from '../core/constants';
-import { GameState, Phase, resetGameState } from './state';
+import { GameState, Phase, restoreStageStart } from './state';
 import { isPlayerTank } from './tank';
 
 // 阶段编排：鹰巢命中、失败/胜利判定、重开。update.ts 只做调用，逻辑集中于此以保持可读。
@@ -111,8 +111,7 @@ export function updatePhase(state: GameState): void {
   }
 }
 
-// gameover / stageclear 时按 start 重开：seed 由旧 rng 确定性派生，就地重建 state。
-export function restartGame(state: GameState): void {
-  const seed = Math.floor(state.rng.next() * 2 ** 31);
-  resetGameState(state, seed);
+// GAME OVER 时按 start：恢复当前关卡刚开场时保存的完整检查点。
+export function retryStage(state: GameState): void {
+  restoreStageStart(state);
 }

@@ -302,7 +302,7 @@ export class App {
     if (this.screen === 'localGame') {
       const tickBeforeUpdate = this.localState.tick;
       update(this.localState, [this.playerInput()]);
-      // GAME OVER 后原地重开会让 tick 归零；旧局尚未播完的提示不得带进新局。
+      // GAME OVER 后恢复关卡开局检查点会让 tick 回退；旧尝试的提示不得带进重试。
       if (this.localState.tick < tickBeforeUpdate) this.clearPowerupTicker();
       this.consumeGameEvents(this.localState.events);
       this.localState.events.length = 0;
@@ -477,8 +477,8 @@ export class App {
   private onSnapshot(snap: Snapshot, events: GameEvent[]): void {
     const now = performance.now();
 
-    // 整局重开会把权威 tick 归零。不得把重开前后的同 id 实体放在同一插值窗口里，
-    // 否则会从旧局终点插到新局出生点。
+    // 重试会把权威 tick 恢复到本关开局。不得把重试前后的同 id 实体放在同一插值窗口里，
+    // 否则会从旧尝试终点插到本关出生点。
     const previous = this.snapBuf[this.snapBuf.length - 1];
     if (previous && snap.tick < previous.snap.tick) {
       this.snapBuf = [];
@@ -1173,7 +1173,17 @@ export class App {
           y: lerp(from.snap.escort.y, base.escort.y, alpha),
         }
       : base.escort;
-    return { ...base, level, rng: this.dummyRng, events: [], tanks, bullets, boss, escort };
+    return {
+      ...base,
+      level,
+      rng: this.dummyRng,
+      stageStartCheckpoint: null,
+      events: [],
+      tanks,
+      bullets,
+      boss,
+      escort,
+    };
   }
 
   private drawDisconnectOverlay(): void {

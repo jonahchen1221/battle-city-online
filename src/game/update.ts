@@ -13,7 +13,7 @@ import {
 } from './bullet';
 import { updateEnemies } from './enemy';
 import { collisionTanks, updateBoss, resolveBulletBoss } from './boss';
-import { updatePhase, resolveEagleHit, restartGame } from './phase';
+import { updatePhase, resolveEagleHit, retryStage } from './phase';
 import {
   tryPickupPowerup,
   dropPowerup,
@@ -59,7 +59,7 @@ export function update(state: GameState, inputs: InputState[]): void {
   }
 
   // gameover / stageclear：冻结模拟（不推进坦克/子弹/AI），仅让爆炸播完；按 start 边沿推进。
-  // stageclear → 进入下一关（nextStage）；gameover → 整局重开到第 1 关（restartGame）。
+  // stageclear → 进入下一关（nextStage）；gameover → 恢复当前关卡的开局检查点（retryStage）。
   if (state.phase !== 'playing') {
     state.phaseTicks++;
     advanceExplosions(state);
@@ -67,9 +67,9 @@ export function update(state: GameState, inputs: InputState[]): void {
       if (state.phase === 'stageclear') {
         nextStage(state);
       } else {
-        restartGame(state);
+        retryStage(state);
       }
-      // restartGame 会把 prevStart 重置为 false；无论哪条分支，这里立即置回 true，
+      // 检查点中的 prevStart 可能不是本帧输入状态；无论哪条分支，这里立即置回 true，
       // 使按住 Enter 不会在下一帧被再次识别为边沿而立刻重复触发。
       state.prevStart = true;
     }

@@ -3,6 +3,8 @@
 export interface Rng {
   next(): number; // [0, 1)
   int(maxExclusive: number): number;
+  // 当前 mulberry32 内部状态。关卡检查点用它恢复完全相同的后续随机序列。
+  getState(): number;
 }
 
 export function createRng(seed: number): Rng {
@@ -17,5 +19,6 @@ export function createRng(seed: number): Rng {
   return {
     next,
     int: (maxExclusive: number) => Math.floor(next() * maxExclusive),
+    getState: () => s,
   };
 }

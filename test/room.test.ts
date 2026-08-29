@@ -103,6 +103,7 @@ test('a new level epoch forces a full terrain snapshot even when rev remains zer
   const first = host.latest('snapshot');
   assert.equal(first?.snap.levelEpoch, 0);
   assert.equal(first?.snap.level?.rev, 0);
+  assert.equal('stageStartCheckpoint' in (first?.snap ?? {}), false);
 
   assert.ok(internal.game);
   nextStage(internal.game);

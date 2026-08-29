@@ -120,7 +120,35 @@ export interface GameState {
   enemiesDequeued: number; // 已出队敌军计数（用于按第 4/11/18 台标记携带者）
   // 本关开始时每名玩家的累计分快照：nextStage 据此算出上一关各人得分差，评出 MVP（仅多人局）。
   stageScoreStart: number[];
+  // 本关开场时的完整检查点。仅权威模拟持有，不随网络快照下发；GAME OVER 重试时恢复。
+  stageStartCheckpoint: StageStartCheckpoint | null;
   events: GameEvent[]; // 本帧音效 / UI 事件队列；main.ts 逐帧读取并清空
+}
+
+// 检查点只保留纯数据：rng 以其内部状态代替，events 与检查点自身不递归保存。
+// 因此即使 GameState 新增普通可序列化字段，也会自动纳入重试恢复范围。
+export type StageStartCheckpoint = Omit<
+  GameState,
+  'rng' | 'events' | 'stageStartCheckpoint'
+> & {
+  rngState: number;
+};
+
+function cloneCheckpoint(checkpoint: StageStartCheckpoint): StageStartCheckpoint {
+  return structuredClone(checkpoint);
+}
+
+function saveStageStartCheckpoint(state: GameState): void {
+  const {
+    rng,
+    events: _events,
+    stageStartCheckpoint: _stageStartCheckpoint,
+    ...serializableState
+  } = state;
+  state.stageStartCheckpoint = cloneCheckpoint({
+    ...serializableState,
+    rngState: rng.getState(),
+  });
 }
 
 // 按某关编成（STAGE_ENEMY_MIX[stageIndex]）构建敌军出生队列（queue[0] 最先出生）。
@@ -190,7 +218,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     const wrench = neutralQueue.indexOf('wrench');
     if (wrench > 0) [neutralQueue[0], neutralQueue[wrench]] = [neutralQueue[wrench], neutralQueue[0]];
   }
-  return {
+  const state: GameState = {
     tick: 0,
     rng,
     levelEpoch: 0,
@@ -234,8 +262,11 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     neutralTimer: NEUTRAL_POWERUP_FIRST_TICKS,
     enemiesDequeued: 0,
     stageScoreStart: new Array<number>(playerCount).fill(0),
+    stageStartCheckpoint: null,
     events: ['stageStart'],
   };
+  saveStageStartCheckpoint(state);
+  return state;
 }
 
 // 通关后进入下一关（就地修改同一 state 对象）。
@@ -362,6 +393,25 @@ export function nextStage(state: GameState): void {
   state.phase = 'stagestart';
   state.phaseTicks = 0;
   state.events.push('stageStart');
+  saveStageStartCheckpoint(state);
+}
+
+// GAME OVER 后把当前关卡恢复为刚进入时的完整状态：关号、生命、分数、装备、地图、
+// 敌军编成、Boss / 护送状态与后续随机序列都会回到检查点。levelEpoch 仍单调递增，
+// 让联机客户端一定收到恢复后的完整地形；events 只重新发出本关开场音效。
+export function restoreStageStart(state: GameState): void {
+  const checkpoint = state.stageStartCheckpoint;
+  if (!checkpoint) return;
+
+  const nextLevelEpoch = state.levelEpoch + 1;
+  const restored = cloneCheckpoint(checkpoint);
+  const { rngState, ...serializableState } = restored;
+  Object.assign(state, serializableState, {
+    rng: createRng(rngState),
+    levelEpoch: nextLevelEpoch,
+    stageStartCheckpoint: checkpoint,
+    events: ['stageStart'] satisfies GameEvent[],
+  });
 }
 
 // 就地重置为全新的第 1 关（保留同一 state 对象引用，供 main.ts 持有）——一切归零（生命/得分/等级/关号）。
