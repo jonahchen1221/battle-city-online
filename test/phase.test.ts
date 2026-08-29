@@ -59,6 +59,8 @@ test('game over retries the current stage from its exact opening checkpoint', ()
     rng,
     events,
     stageStartCheckpoint: restoredCheckpoint,
+    // 连接状态是房间运行时数据，不属于可重试的关卡检查点。
+    activePlayerCount,
     ...restored
   } = state;
   const { rngState, ...expectedState } = expected;
@@ -70,6 +72,7 @@ test('game over retries the current stage from its exact opening checkpoint', ()
   assert.deepEqual(restoredCheckpoint, checkpoint);
   assert.deepEqual(events, ['stageStart']);
   assert.equal(rng.getState(), rngState);
+  assert.equal(activePlayerCount, 2);
   assert.equal(state.stage, 2);
   assert.equal(state.phase, 'stagestart');
 });

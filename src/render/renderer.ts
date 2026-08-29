@@ -418,7 +418,7 @@ export class Renderer {
     const escort = state.escort;
     if (!escort || escort.timeExpired || escort.arrived) return;
     const { ctx } = this;
-    const slots = escortGuardSlots(escort, state.playerCount);
+    const slots = escortGuardSlots(escort, state.activePlayerCount);
     const occupied = escortGuardOccupancy(state);
 
     for (let i = 0; i < slots.length; i++) {

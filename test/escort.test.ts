@@ -234,6 +234,20 @@ test('the escort moves only while its single-player guard slot is occupied', () 
   assert.equal(escort.moving, true);
 });
 
+test('disconnected tanks neither count as guards nor keep the multiplayer guard requirement', () => {
+  const state = createGameState(23, 3, 2);
+  const escort = state.escort!;
+  const guard = escortGuardSlots(escort, 1)[0];
+  Object.assign(state.tanks[0], { x: guard.x, y: guard.y });
+  // 其余两台坦克仍保留在模拟中供重连，但已不可操控。
+  const activePlayers = [true, false, false];
+
+  assert.equal(escortHasGuard(state, activePlayers), true);
+  const beforeY = escort.y;
+  updateEscort(state, activePlayers);
+  assert.ok(escort.y < beforeY);
+});
+
 test('guard slots scale from one required two-cell strip to two simultaneously occupied strips', () => {
   for (const playerCount of [1, 2]) {
     const state = createGameState(300 + playerCount, playerCount, 2);

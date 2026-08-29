@@ -112,13 +112,20 @@ export function escortGuardSlots(escort: EscortState, playerCount = 1): EscortGu
 }
 
 // 以玩家坦克中心进入两格标记带为准；同一护卫位只需一名玩家占据。
-export function escortGuardOccupancy(state: GameState): boolean[] {
+export function escortGuardOccupancy(
+  state: GameState,
+  activePlayers?: readonly boolean[],
+): boolean[] {
   const escort = state.escort;
   if (!escort) return [];
-  const slots = escortGuardSlots(escort, state.playerCount);
+  const activePlayerCount = activePlayers
+    ? activePlayers.reduce((count, active) => count + (active ? 1 : 0), 0)
+    : state.activePlayerCount;
+  const slots = escortGuardSlots(escort, activePlayerCount);
   return slots.map((slot) =>
     state.tanks.some((tank) => {
       if (!tank.alive || tank.kind !== 'player') return false;
+      if (activePlayers && activePlayers[tank.playerIndex] !== true) return false;
       const centerX = tank.x + TANK_SIZE / 2;
       const centerY = tank.y + TANK_SIZE / 2;
       return (
@@ -131,8 +138,11 @@ export function escortGuardOccupancy(state: GameState): boolean[] {
   );
 }
 
-export function escortHasGuard(state: GameState): boolean {
-  const occupied = escortGuardOccupancy(state);
+export function escortHasGuard(
+  state: GameState,
+  activePlayers?: readonly boolean[],
+): boolean {
+  const occupied = escortGuardOccupancy(state, activePlayers);
   return occupied.length > 0 && occupied.every(Boolean);
 }
 
@@ -623,7 +633,7 @@ function overlaps(
 }
 
 // 1–2 人需占据唯一护卫位；3–4 人需同时占据左右两位。满足后车队才沿路线前进。
-export function updateEscort(state: GameState): void {
+export function updateEscort(state: GameState, activePlayers?: readonly boolean[]): void {
   const escort = state.escort;
   if (!escort || escort.timeExpired || escort.arrived) return;
 
@@ -638,7 +648,7 @@ export function updateEscort(state: GameState): void {
     }
   }
 
-  if (!escortHasGuard(state)) {
+  if (!escortHasGuard(state, activePlayers)) {
     escort.moving = false;
     return;
   }

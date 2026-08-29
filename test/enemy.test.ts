@@ -15,7 +15,6 @@ import {
   EAGLE_ROW,
   ESCORT_ENEMY_RECYCLE_TICKS,
   ESCORT_STOPPED_SPAWN_DIVISOR,
-  SMART_AI_ESCAPE_TICKS,
   SMART_AI_FIRE_COOLDOWN_TICKS,
   SMART_AI_STUCK_TICKS,
   STAGE_ENEMY_TOTAL,
@@ -206,7 +205,7 @@ test('smart enemy uses pathfinding to close the distance to the nearest player',
   assert.ok(after < before, `expected smart tank to approach player: ${before} -> ${after}`);
 });
 
-test('smart enemy commits to a side escape after being blocked by another tank', () => {
+test('smart enemy plans around another tank instead of entering a blocked lane', () => {
   const state = createGameState(77, 1, 1);
   const player = state.tanks[0];
   const blocker = createEnemy('basic', 2, 0);
@@ -227,11 +226,63 @@ test('smart enemy commits to a side escape after being blocked by another tank',
   assert.notEqual(smart.y, 32, 'smart tank should leave the blocked horizontal lane');
   assert.equal(smart.x, 16);
   assert.equal(smart.smartStuckTicks, 0);
-  assert.equal(smart.smartEscapeTicks, SMART_AI_ESCAPE_TICKS);
 
-  const escapedY = smart.y;
+  const detourY = smart.y;
   for (let tick = 0; tick < 4; tick++) updateEnemies(state, state.level);
-  assert.ok(Math.abs(smart.y - 32) > Math.abs(escapedY - 32), 'escape should persist, not jitter back');
+  assert.ok(Math.abs(smart.y - 32) >= Math.abs(detourY - 32), 'detour should not jitter back');
+});
+
+test('smart enemy ignores collision epsilon when every escape direction is sealed', () => {
+  const state = createGameState(78, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  const level = createEmptyLevel();
+  // 智能坦克位于左上角：上/左是边界，右/下各有两格钢墙。碰撞二分会产生约 1e-6px
+  // 的容差残值，但这不是真实移动，不能据此启动 24 帧脱困。
+  for (const row of [0, 1]) setCell(level, 2, row, Cell.STEEL);
+  for (const col of [0, 1]) setCell(level, col, 2, Cell.STEEL);
+  Object.assign(player, { x: 64, y: 64 });
+  Object.assign(smart, { x: 0, y: 0, dir: 'right' as const, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = level;
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  for (let tick = 0; tick < SMART_AI_STUCK_TICKS; tick++) {
+    updateEnemies(state, level);
+  }
+
+  assert.deepEqual({ x: smart.x, y: smart.y }, { x: 0, y: 0 });
+  assert.equal(smart.smartEscapeTicks, 0);
+});
+
+test('smart enemy takes a real detour when tanks block a corner', () => {
+  const state = createGameState(88, 1, 1);
+  const player = state.tanks[0];
+  const stationary = (id: number, x: number, y: number) => {
+    const tank = createEnemy('basic', id, 0);
+    Object.assign(tank, { x, y, speed: 0, aiTicks: 999 });
+    return tank;
+  };
+  const front = stationary(2, 64, 16);
+  const above = stationary(3, 48, 0);
+  const below = stationary(5, 48, 32);
+  const smart = createEnemy('smart', 4, 0);
+  Object.assign(player, { x: 144, y: 80 });
+  Object.assign(smart, { x: 32, y: 16, dir: 'right' as const, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, front, above, below, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  // 旧逻辑无视动态占位，会在 x=29.25..48、y=16 之间永久往返；动态 A* 应在抵达
+  // 死角前就选择下方通路，并越过正前方阻挡者。
+  for (let tick = 0; tick < 120; tick++) updateEnemies(state, state.level);
+
+  assert.ok(smart.y > 32, `expected a vertical detour, got (${smart.x}, ${smart.y})`);
+  assert.ok(smart.x > front.x, `expected to pass the front blocker, got x=${smart.x}`);
 });
 
 test('smart enemy aims and fires immediately when a player enters its firing lane', () => {
@@ -292,7 +343,7 @@ test('smart enemy routes around an indestructible steel wall instead of camping 
   assert.notEqual(smart.x, 40, 'smart tank should leave the blocked firing lane to go around steel');
 });
 
-test('smart enemy does not fire through the escort and starts escaping around it', () => {
+test('smart enemy does not fire through the escort and routes around it', () => {
   const state = createGameState(43, 1, 2);
   const player = state.tanks[0];
   const smart = createEnemy('smart', 2, 0);
@@ -314,7 +365,6 @@ test('smart enemy does not fire through the escort and starts escaping around it
   assert.equal(state.bullets.length, 0);
   assert.equal(smart.fireCooldown, 0);
   assert.notEqual(smart.x, startX, 'smart tank should sidestep instead of remaining aim-locked');
-  assert.equal(smart.smartEscapeTicks, SMART_AI_ESCAPE_TICKS);
 });
 
 test('smart enemy may shoot a player who stands before the escort on the same ray', () => {

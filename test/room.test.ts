@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { WebSocket } from 'ws';
 import type { GameState } from '../src/game/state';
-import { nextStage, resetGameState } from '../src/game/state';
+import { createGameState, nextStage, resetGameState } from '../src/game/state';
+import { emptyInput } from '../src/core/types';
+import { escortGuardSlots } from '../src/game/escort';
 import type { ServerMessage } from '../src/net/protocol';
 import { Room } from '../src/server/room';
 
@@ -86,6 +88,67 @@ test('lobby seat holes are compacted instead of creating phantom players', () =>
     [0, 1],
   );
 
+  internal.destroyNow();
+});
+
+test('action presses survive a press and release before the next server tick', () => {
+  const room = new Room('EDGE', () => {});
+  const host = new FakeWebSocket();
+  room.addHost(asWebSocket(host), 'H1');
+  room.setReady(0, true);
+  room.start(0);
+  const internal = internals(room);
+  assert.ok(internal.game);
+  internal.game.phase = 'playing';
+
+  room.setInput(0, { ...emptyInput(), fire: true });
+  room.setInput(0, emptyInput());
+  internal.tick();
+  assert.equal(
+    internal.game.bullets.some((bullet) => !bullet.fromEnemy && bullet.ownerPlayerIndex === 0),
+    true,
+    'fire press must be latched until one authoritative tick consumes it',
+  );
+
+  room.setInput(0, { ...emptyInput(), pause: true });
+  room.setInput(0, emptyInput());
+  internal.tick();
+  assert.equal(internal.game.paused, true, 'pause press must use the same edge latch');
+
+  internal.game.paused = false;
+  internal.game.phase = 'gameover';
+  internal.game.prevStart = false;
+  room.setInput(0, { ...emptyInput(), start: true });
+  room.setInput(0, emptyInput());
+  internal.tick();
+  assert.equal(internal.game.phase, 'stagestart', 'start press must be latched for retries');
+
+  internal.destroyNow();
+});
+
+test('an escort match scales its guard requirement down after teammates disconnect', () => {
+  const room = new Room('DROP', () => {});
+  const sockets = [new FakeWebSocket(), new FakeWebSocket(), new FakeWebSocket()];
+  room.addHost(asWebSocket(sockets[0]), 'P1');
+  assert.equal(room.join(asWebSocket(sockets[1]), 'P2'), 1);
+  assert.equal(room.join(asWebSocket(sockets[2]), 'P3'), 2);
+  for (let i = 0; i < sockets.length; i++) room.setReady(i, true);
+  room.start(0);
+
+  const internal = internals(room);
+  internal.game = createGameState(17, 3, 2);
+  internal.game.phase = 'playing';
+  room.handleDisconnect(1, asWebSocket(sockets[1]));
+  room.handleDisconnect(2, asWebSocket(sockets[2]));
+
+  const escort = internal.game.escort!;
+  const guard = escortGuardSlots(escort, 1)[0];
+  Object.assign(internal.game.tanks[0], { x: guard.x, y: guard.y });
+  const beforeY = escort.y;
+  internal.tick();
+
+  assert.equal(internal.game.activePlayerCount, 1);
+  assert.ok(escort.y < beforeY, 'the remaining connected player should be able to move the convoy');
   internal.destroyNow();
 });
 

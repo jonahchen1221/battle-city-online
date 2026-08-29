@@ -155,7 +155,9 @@ test('holding fire across a level three armor break retriggers the cannon next t
   state.tanks.push(enemy);
   const hit = spawnBullet(enemy, state.nextBulletId++, state.level);
   Object.assign(hit, {
-    x: player.x + 6,
+    // 从车体左侧命中，避开玩家正上方炮口；本用例只验证破甲后的开火状态复位，
+    // 不应被同帧新发玩家弹与敌弹的连续碰撞判定提前抵消。
+    x: player.x,
     y: player.y - 3,
     dir: 'down' as const,
     vx: 0,

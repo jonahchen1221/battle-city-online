@@ -11,7 +11,7 @@ import {
   NEUTRAL_POWERUP_FIRST_TICKS,
   TANK_SIZE,
 } from '../core/constants';
-import { LevelState, cloneLevel } from './level';
+import { LevelState, cloneLevel, levelHasWater } from './level';
 import { bossArenaForStage, normalLevelForStage } from './levels';
 import {
   TankState,
@@ -111,6 +111,9 @@ export interface GameState {
   eagleDestroyed: boolean; // 鹰巢（基地）是否已被摧毁
   escort: EscortState | null; // 护送关的移动鹰巢；普通关为 null
   playerCount: number; // 本局玩家数（1–4）
+  // 当前可操控的玩家数。本地局等于 playerCount；联机局由服务器逐帧更新，
+  // 护送关据此调整护卫位数，渲染层也能显示与规则一致的标记。
+  activePlayerCount: number;
   livesByPlayer: number[]; // 每名玩家的剩余生命（含当前在场坦克），按 playerIndex 索引
   // 待定结果：某触发（鹰毁 / 玩家阵亡 / 全歼）已武装但仍在延迟模拟中；
   // resultTimer 归零后 phase 切到 pendingResult。null 表示未武装。
@@ -129,7 +132,7 @@ export interface GameState {
   enemyFreezeTicks: number; // timer 道具：>0 时敌军冻结（不动、不开火），逐帧递减
   enemySlowTicks: number; // hourglass 道具：>0 时敌军半速（仅偶数 tick 行动），逐帧递减
   shovelTicks: number; // shovel 道具：>0 时鹰巢护墙已钢化，归零时恢复砖墙，逐帧递减
-  neutralQueue: PowerupKind[]; // 本关剩余待刷的中立道具（开关洗牌，保证 5 种新道具每关各出一次）
+  neutralQueue: PowerupKind[]; // 本关剩余待刷的中立道具（开关洗牌；无水场景不含船）
   neutralTimer: number; // 距下一枚中立道具刷新的剩余帧（仅 playing 期间递减）
   enemiesDequeued: number; // 已出队敌军计数（用于按第 4/11/18 台标记携带者）
   // 本关开始时每名玩家的累计分快照：nextStage 据此算出上一关各人得分差，评出 MVP（仅多人局）。
@@ -143,7 +146,7 @@ export interface GameState {
 // 因此即使 GameState 新增普通可序列化字段，也会自动纳入重试恢复范围。
 export type StageStartCheckpoint = Omit<
   GameState,
-  'rng' | 'events' | 'stageStartCheckpoint'
+  'rng' | 'events' | 'stageStartCheckpoint' | 'activePlayerCount'
 > & {
   rngState: number;
 };
@@ -157,6 +160,7 @@ function saveStageStartCheckpoint(state: GameState): void {
     rng,
     events: _events,
     stageStartCheckpoint: _stageStartCheckpoint,
+    activePlayerCount: _activePlayerCount,
     ...serializableState
   } = state;
   state.stageStartCheckpoint = cloneCheckpoint({
@@ -225,8 +229,8 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   }
   // rng 先行创建：本关中立道具队列的洗牌即取自它（必须在 state 组装前完成）。
   const rng = createRng(seed);
-  // Boss 关走专属中立池（2 星 + 头盔 + 战靴 + 1 件随机武器），普通关 / 护送关维持原 5 种池。
-  const neutralQueue = shuffledNeutralQueue(rng, bossStage);
+  // Boss 关走专属中立池（2 星 + 头盔 + 战靴 + 1 件随机武器）；普通关 / 护送关无水时排除船。
+  const neutralQueue = shuffledNeutralQueue(rng, bossStage, levelHasWater(level));
   // 护送关首枚中立道具固定为扳手，让玩家在 10 秒后稳定获得一次倒计时奖励。
   if (escort) {
     const wrench = neutralQueue.indexOf('wrench');
@@ -257,6 +261,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     eagleDestroyed: false,
     escort,
     playerCount,
+    activePlayerCount: playerCount,
     // 单机 3 条（NES 原版）；多人合作 5 条（且可向队友借命，见 update.ts onPlayerKilled）。
     livesByPlayer: new Array<number>(playerCount).fill(
       playerCount > 1 ? PLAYER_LIVES_START_MP : PLAYER_LIVES_START,
@@ -367,7 +372,11 @@ export function nextStage(state: GameState): void {
   state.enemySlowTicks = 0;
   state.shovelTicks = 0;
   // 新关卡重新洗一副中立道具队列（Boss 关用专属池），计时归位到首枚延迟。
-  state.neutralQueue = shuffledNeutralQueue(state.rng, state.boss !== null);
+  state.neutralQueue = shuffledNeutralQueue(
+    state.rng,
+    state.boss !== null,
+    levelHasWater(state.level),
+  );
   if (state.escort) {
     const wrench = state.neutralQueue.indexOf('wrench');
     if (wrench > 0) {

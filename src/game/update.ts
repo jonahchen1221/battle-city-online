@@ -38,8 +38,18 @@ import {
 // 不得访问 DOM、canvas、performance.now 或 Math.random。
 // update 只做编排：坦克移动在 tank.ts，子弹/战斗在 bullet.ts，敌方 AI 在 enemy.ts，
 // 阶段（胜负/重开）在 phase.ts。
-export function update(state: GameState, inputs: InputState[]): void {
+export function update(
+  state: GameState,
+  inputs: InputState[],
+  activePlayers?: readonly boolean[],
+): void {
   state.tick++;
+  if (activePlayers) {
+    state.activePlayerCount = activePlayers.reduce(
+      (count, active) => count + (active ? 1 : 0),
+      0,
+    );
+  }
 
   // start（Enter）与 pause（P）各自聚合 + 边沿检测：只认“按下的那一帧”，避免按住连触发。
   // start 仅用于结算重开 / 大厅；pause 仅用于暂停切换。二者分离，互不干扰。
@@ -112,7 +122,7 @@ export function update(state: GameState, inputs: InputState[]): void {
   }
   advanceTankPowerupTimers(state);
 
-  // 中立道具定时刷新（每关必出 5 种新道具）：仅在 playing 期间推进。
+  // 中立道具定时刷新（无水关排除船）：仅在 playing 期间推进。
   updateNeutralPowerups(state);
 
   // 玩家坦克由输入驱动：inputs[i] 对应 playerIndex===i 的坦克（按序号映射，非数组顺序）。
@@ -149,7 +159,7 @@ export function update(state: GameState, inputs: InputState[]): void {
   advanceExplosions(state);
 
   // 移动鹰巢在战斗结算后前进：本帧刚清掉的路障/敌军会立即让它恢复行驶。
-  updateEscort(state);
+  updateEscort(state, activePlayers);
 
   // 阶段编排：检测鹰毁 / 玩家阵亡 / 全歼，武装并推进延迟结果。
   updatePhase(state);

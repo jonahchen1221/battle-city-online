@@ -109,6 +109,8 @@ function playerBulletOnBoss(id: number, kind: BulletState['kind']): BulletState 
     id,
     x: BOSS_X + BOSS_SIZE / 2 - BULLET_SIZE / 2,
     y: BOSS_Y + BOSS_SIZE / 2 - BULLET_SIZE / 2,
+    prevX: BOSS_X + BOSS_SIZE / 2 - BULLET_SIZE / 2,
+    prevY: BOSS_Y + BOSS_SIZE / 2 - BULLET_SIZE / 2,
     dir: 'up',
     speed: 2,
     vx: 0,
@@ -1196,8 +1198,8 @@ test('Boss 关中立道具队列：2 星 + 头盔 + 战靴 + 1 件随机武器',
     }
   }
 
-  // 普通关维持原 5 种中立池。
-  const normal = createGameState(1, 1, 4).neutralQueue;
+  // 有水普通关维持原 5 种中立池。
+  const normal = createGameState(1, 1, 7).neutralQueue;
   assert.deepEqual([...normal].sort(), [...NEUTRAL_POWERUP_KINDS].sort());
 
   // 护送关同样用普通池（只是把扳手换到队首，见 state.ts）。

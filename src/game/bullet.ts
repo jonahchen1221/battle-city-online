@@ -57,6 +57,9 @@ export interface BulletState {
   id: number; // 每发子弹唯一；同一射手多弹时供网络快照稳定匹配
   x: number;
   y: number;
+  // 上一逻辑帧的位置；子弹相撞用它做连续轨迹判定，防止高速弹一帧交叉穿过。
+  prevX: number;
+  prevY: number;
   dir: Direction; // 主轴朝向：地形开凿 / 前沿扫描一律按它定向（斜飞的散弹粒亦然）
   speed: number; // px/tick（主轴标称速度；实际位移见 vx/vy）
   vx: number; // 实际速度向量 X 分量（px/tick）：normal 由 dir×speed 推出，行为与改动前一致
@@ -139,6 +142,8 @@ function makeBullet(
     id,
     x,
     y,
+    prevX: x,
+    prevY: y,
     dir: tank.dir,
     speed,
     vx: (v.x * cos - v.y * sin) * speed,
@@ -253,6 +258,8 @@ export function maxBulletsFor(tank: TankState): number {
 // 螺旋弹另叠加一个垂直于主轴的正弦增量：位移 = (sin((age+1)ω) − sin(age·ω))·R，
 // 等价于横向偏移恒为 sin(age·ω)·R（幅度 ≤ SPIRAL_RADIUS），无需记录出膛原点。
 function moveBullet(b: BulletState): void {
+  b.prevX = b.x;
+  b.prevY = b.y;
   b.x += b.vx;
   b.y += b.vy;
   if (b.kind === 'spiral') {
@@ -507,6 +514,34 @@ function bulletsOverlap(a: BulletState, b: BulletState): boolean {
   );
 }
 
+// 返回两枚移动 AABB 在本帧首次重叠的时刻（0..1）；null 表示整段轨迹都未相交。
+// 把 b 视为静止后，a 的相对位移在 x/y 两轴上各给出一个“重叠时间窗”，
+// 两窗的交集非空即命中。边缘只相贴仍沿用旧规则，不算相撞。
+function sweptBulletCollisionTime(a: BulletState, b: BulletState): number | null {
+  if (bulletsOverlap(a, b)) return 1;
+
+  const relativeX = a.prevX - b.prevX;
+  const relativeY = a.prevY - b.prevY;
+  const relativeDx = (a.x - a.prevX) - (b.x - b.prevX);
+  const relativeDy = (a.y - a.prevY) - (b.y - b.prevY);
+
+  const axisWindow = (offset: number, delta: number): [number, number] | null => {
+    if (Math.abs(delta) < EPS) {
+      return Math.abs(offset) < BULLET_SIZE ? [-Infinity, Infinity] : null;
+    }
+    const t0 = (-BULLET_SIZE - offset) / delta;
+    const t1 = (BULLET_SIZE - offset) / delta;
+    return t0 < t1 ? [t0, t1] : [t1, t0];
+  };
+
+  const xWindow = axisWindow(relativeX, relativeDx);
+  const yWindow = axisWindow(relativeY, relativeDy);
+  if (!xWindow || !yWindow) return null;
+  const entry = Math.max(0, xWindow[0], yWindow[0]);
+  const exit = Math.min(1, xWindow[1], yWindow[1]);
+  return entry < exit ? entry : null;
+}
+
 // 子弹 vs 子弹（重叠即判定）：
 // - 不同阵营（玩家弹 × 敌弹）：相互抵消（经典机制）。
 // - 同为玩家弹但射手不同（多人合作友军火力）：也相互抵消 —— 队友可打掉你的弹幕。
@@ -527,11 +562,16 @@ export function resolveBulletBullet(
         if (a.fromEnemy) continue; // 敌弹 × 敌弹：穿过
         if (a.ownerId === b.ownerId) continue; // 同一射手自己的弹：穿过
       }
-      if (!bulletsOverlap(a, b)) continue;
+      const collisionTime = sweptBulletCollisionTime(a, b);
+      if (collisionTime === null) continue;
       a.alive = false;
       b.alive = false;
+      const ax = a.prevX + (a.x - a.prevX) * collisionTime;
+      const ay = a.prevY + (a.y - a.prevY) * collisionTime;
+      const bx = b.prevX + (b.x - b.prevX) * collisionTime;
+      const by = b.prevY + (b.y - b.prevY) * collisionTime;
       explosions.push(
-        makeSmallExplosion((a.x + b.x) / 2 + BULLET_SIZE / 2, (a.y + b.y) / 2 + BULLET_SIZE / 2),
+        makeSmallExplosion((ax + bx) / 2 + BULLET_SIZE / 2, (ay + by) / 2 + BULLET_SIZE / 2),
       );
       events.push('explosionSmall');
       break;

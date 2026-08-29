@@ -32,7 +32,7 @@ import {
   ESCORT_TIME_BONUS_TICKS,
 } from '../core/constants';
 import type { Rng } from '../core/rng';
-import { Cell, setCell, getCell } from './level';
+import { Cell, setCell, getCell, levelHasWater } from './level';
 import {
   TankState,
   EnemyKind,
@@ -44,7 +44,7 @@ import type { GameState } from './state';
 import { destroyPlayerTank, dropDeathStar } from './death';
 
 // 道具系统（纯模拟层）：一切随机取自 state.rng，可复现；GameState 保持可序列化。
-// 六种经典道具 + 四种魂斗罗风格武器道具 + 五种“中立”道具（每关必出，见 updateNeutralPowerups）。
+// 六种经典道具 + 四种魂斗罗风格武器道具 + 五种“中立”道具（无水关排除船，见 updateNeutralPowerups）。
 // rng.int(POWERUP_KINDS.length) → POWERUP_KINDS[idx]（顺序即取值映射，务必稳定：只在尾部追加）。
 export type PowerupKind =
   | 'star'
@@ -82,7 +82,12 @@ export const POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
   'drill',
 ];
 
-// 每关必出的“中立”道具（由定时器刷新到战场随机空位，与携带者掉落无关）。
+// 无水场景下船没有用途；携带者掉落时改从这个候选池抽取。
+const POWERUP_KINDS_WITHOUT_BOAT: ReadonlyArray<PowerupKind> = POWERUP_KINDS.filter(
+  (kind) => kind !== 'boat',
+);
+
+// 每关依次刷新的“中立”道具（由定时器刷新到战场随机空位，与携带者掉落无关；无水关排除船）。
 export const NEUTRAL_POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
   'boots',
   'boat',
@@ -159,11 +164,12 @@ export function pushPowerup(state: GameState, p: PowerupState): void {
 }
 
 // 携带道具的敌军死亡时调用：向场上追加一枚新的随机道具，随机落点（不再替换旧道具）。
-// rng 调用顺序（决定性）：先 rng.int(POWERUP_KINDS.length) 取种类；随后每次拒绝采样先
+// rng 调用顺序（决定性）：先从当前场景可用的种类池取一种；随后每次拒绝采样先
 // rng.int(FIELD_COLS-1) 取列、再 rng.int(FIELD_ROWS-1) 取行，直到落点不与鹰巢禁区重叠
 //（最多 MAX_TRIES 次，超限用兜底格）。
 export function dropPowerup(state: GameState): void {
-  const kind = POWERUP_KINDS[state.rng.int(POWERUP_KINDS.length)];
+  const kinds = levelHasWater(state.level) ? POWERUP_KINDS : POWERUP_KINDS_WITHOUT_BOAT;
+  const kind = kinds[state.rng.int(kinds.length)];
   const maxCol = state.level.cols - 2;
   const maxRow = state.level.rows - 2;
   const centerCol = state.escort ? Math.floor(state.escort.x / SUBTILE) : 0;
@@ -190,10 +196,14 @@ export function dropPowerup(state: GameState): void {
 }
 
 // 用 state.rng 对一组道具种类做 Fisher-Yates 洗牌，返回新数组（本关的中立道具刷新顺序）。
-// 每关调用一次（createGameState / nextStage），保证本关的 5 枚中立道具各出现恰一次。
+// 每关调用一次（createGameState / nextStage），保证本关可用的中立道具各出现恰一次。
 // bossStage=true 时改用 Boss 专属池：2 星 + 头盔 + 战靴 + 1 件随机武器（先取武器再洗牌，
 // rng 调用顺序固定，快照可复现）。
-export function shuffledNeutralQueue(rng: Rng, bossStage = false): PowerupKind[] {
+export function shuffledNeutralQueue(
+  rng: Rng,
+  bossStage = false,
+  hasWater = true,
+): PowerupKind[] {
   const queue = bossStage
     ? [
         ...BOSS_NEUTRAL_POWERUP_KINDS,
@@ -205,6 +215,11 @@ export function shuffledNeutralQueue(rng: Rng, bossStage = false): PowerupKind[]
     const tmp = queue[i];
     queue[i] = queue[j];
     queue[j] = tmp;
+  }
+  // 先照常洗牌再移除船，保持其他道具的相对顺序以及既有 rng 消耗不变。
+  if (!bossStage && !hasWater) {
+    const boat = queue.indexOf('boat');
+    if (boat >= 0) queue.splice(boat, 1);
   }
   return queue;
 }
@@ -238,7 +253,7 @@ function sampleNeutralSpot(state: GameState): { x: number; y: number } | null {
   return null;
 }
 
-// 中立道具定时刷新（每关必出）：仅在 playing 期间由 update 每帧调用。
+// 中立道具定时刷新：仅在 playing 期间由 update 每帧调用。
 // neutralTimer 归零且队列非空 → 出队一枚并刷到随机空位，随后按 INTERVAL 刷下一枚；
 // 落点采样全失败则本枚顺延（RETRY 帧后重试，队列不消耗）。
 export function updateNeutralPowerups(state: GameState): void {

@@ -422,7 +422,7 @@ export const SMART_MAX_LEVEL = 1;
 export const SMART_MAX_HP = 2;
 // hourglass 沙漏：敌军半速持续帧数（期间敌军仅在偶数 tick 行动；enemyFreezeTicks 全冻结优先）。
 export const ENEMY_SLOW_TICKS = 12 * TICKS_PER_SECOND; // 720 帧 = 12 秒
-// 中立道具定时刷新（每关必出五种新道具）：首枚延迟、后续间隔、落点采样失败时的顺延重试间隔。
+// 中立道具定时刷新（无水关排除船）：首枚延迟、后续间隔、落点采样失败时的顺延重试间隔。
 export const NEUTRAL_POWERUP_FIRST_TICKS = 10 * TICKS_PER_SECOND; // 600 帧 = 10 秒
 export const NEUTRAL_POWERUP_INTERVAL_TICKS = 15 * TICKS_PER_SECOND; // 900 帧 = 15 秒
 export const NEUTRAL_POWERUP_RETRY_TICKS = 60; // 采样 20 次全失败：1 秒后重试同一枚

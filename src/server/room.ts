@@ -44,10 +44,17 @@ interface Slot {
   // 服务端签发的不可猜测座位凭证。每次成功接管连接后轮换，避免旧凭证重放。
   resumeToken: string;
   input: InputState; // 该玩家最新输入（逐帧应用，收到新消息才更新）
+  // 动作键的按下沿不能只靠最新电平表示：快速的按下→松开两条消息可能
+  // 都在下一个服务器 tick 前到达。逐键锁存一次按下，由 tick 消费。
+  pendingActions: { fire: boolean; start: boolean; pause: boolean };
   // 已成功下发给该连接的地形 epoch / rev（增量地形，见 protocol.ts）。-1 = 尚未发过；
   // 入房 / 重连时二者都重置为 -1，保证新连接的第一份快照必含完整地形。
   sentLevelEpoch: number;
   sentLevelRev: number;
+}
+
+function emptyPendingActions(): Slot['pendingActions'] {
+  return { fire: false, start: false, pause: false };
 }
 
 export type RoomPhase = 'lobby' | 'in-game';
@@ -141,6 +148,7 @@ export class Room {
     slot.name = name;
     slot.connected = true;
     slot.input = emptyInput();
+    slot.pendingActions = emptyPendingActions();
     slot.sentLevelEpoch = -1;
     slot.sentLevelRev = -1;
     slot.resumeToken = Room.newResumeToken();
@@ -161,6 +169,7 @@ export class Room {
       ws,
       resumeToken: Room.newResumeToken(),
       input: emptyInput(),
+      pendingActions: emptyPendingActions(),
       sentLevelEpoch: -1,
       sentLevelRev: -1,
     };
@@ -223,6 +232,7 @@ export class Room {
       ws,
       resumeToken: Room.newResumeToken(),
       input: emptyInput(),
+      pendingActions: emptyPendingActions(),
       sentLevelEpoch: -1,
       sentLevelRev: -1,
     };
@@ -269,6 +279,9 @@ export class Room {
   setInput(playerIndex: number, input: InputState): void {
     const slot = this.slots.get(playerIndex);
     if (!slot || !slot.connected) return;
+    if (input.fire && !slot.input.fire) slot.pendingActions.fire = true;
+    if (input.start && !slot.input.start) slot.pendingActions.start = true;
+    if (input.pause && !slot.input.pause) slot.pendingActions.pause = true;
     slot.input = input;
   }
 
@@ -300,6 +313,7 @@ export class Room {
     slot.connected = false;
     slot.ws = null;
     slot.input = emptyInput();
+    slot.pendingActions = emptyPendingActions();
     if (this.connectedCount() === 0) this.scheduleDestroy(); // 全员断线 → 宽限期后销毁
   }
 
@@ -347,12 +361,25 @@ export class Room {
     if (!game) return;
 
     const inputs: InputState[] = new Array(game.playerCount);
+    const activePlayers: boolean[] = new Array(game.playerCount);
     for (let i = 0; i < game.playerCount; i++) {
       const slot = this.gameSlots[i];
-      inputs[i] = slot && slot.connected ? slot.input : emptyInput();
+      const connected = slot?.connected === true;
+      activePlayers[i] = connected;
+      if (!slot || !connected) {
+        inputs[i] = emptyInput();
+        continue;
+      }
+      inputs[i] = {
+        ...slot.input,
+        fire: slot.input.fire || slot.pendingActions.fire,
+        start: slot.input.start || slot.pendingActions.start,
+        pause: slot.input.pause || slot.pendingActions.pause,
+      };
+      slot.pendingActions = emptyPendingActions();
     }
 
-    update(game, inputs);
+    update(game, inputs, activePlayers);
 
     // 抽干本帧事件到累加器（服务器代替 main.ts 消费 state.events，避免其无限增长）。
     if (game.events.length > 0) {

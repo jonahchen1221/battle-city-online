@@ -63,6 +63,20 @@ function driveInput(dir: Direction): InputState {
   return input;
 }
 
+// 地形碰撞为避免浮点边界抖动保留约 1e-6px 的容差；AI 若直接用严格相等判断，会把
+// 贴墙二分产生的微小残值误认成“成功移动”。统一在这里过滤并回滚这种幽灵位移。
+const SMART_MOVE_EPSILON = 1e-4;
+function smartMoved(tank: TankState, fromX: number, fromY: number): boolean {
+  const moved =
+    Math.abs(tank.x - fromX) > SMART_MOVE_EPSILON ||
+    Math.abs(tank.y - fromY) > SMART_MOVE_EPSILON;
+  if (!moved) {
+    tank.x = fromX;
+    tank.y = fromY;
+  }
+  return moved;
+}
+
 // 加权随机选向：偏向战场下方（基地一侧）。下 40% / 左 20% / 右 20% / 上 20%。
 function pickDirection(rng: Rng): Direction {
   const r = rng.int(5); // 0,1→下(40%)  2→左  3→右  4→上
@@ -214,12 +228,76 @@ function manhattan(col: number, row: number, goalCol: number, goalRow: number): 
   return Math.abs(goalCol - col) + Math.abs(goalRow - row);
 }
 
-// 在 8px 网格上以 A* 找到追向玩家的第一步。其他坦克是会移动的动态障碍，不写入路径图，
-// 实际移动仍由 applyInput 做实体碰撞；若目标暂不可达，则走向已搜索到的最近可达点。
+interface SmartNavigationTarget {
+  x: number;
+  y: number;
+  id?: number;
+}
+
+function navigationBoxesOverlap(
+  ax: number,
+  ay: number,
+  aw: number,
+  ah: number,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+): boolean {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
+// A* 把其他坦克、Boss 伪坦克与护送车作为本次规划的动态实心占位。追踪目标玩家本身除外，
+// 否则目标节点永远不可达；最终贴近目标仍由实体碰撞与瞄准逻辑裁决。
+function dynamicNavigationBlocked(
+  tank: TankState,
+  target: SmartNavigationTarget,
+  col: number,
+  row: number,
+  obstacles: TankState[],
+  escort?: EscortState,
+): boolean {
+  const x = col * SUBTILE;
+  const y = row * SUBTILE;
+  for (const obstacle of obstacles) {
+    if (
+      obstacle === tank ||
+      !obstacle.alive ||
+      (target.id !== undefined && obstacle.id === target.id)
+    ) continue;
+    if (
+      navigationBoxesOverlap(
+        x,
+        y,
+        TANK_SIZE,
+        TANK_SIZE,
+        obstacle.x,
+        obstacle.y,
+        TANK_SIZE,
+        TANK_SIZE,
+      )
+    ) return true;
+  }
+  return escort !== undefined && navigationBoxesOverlap(
+    x,
+    y,
+    TANK_SIZE,
+    TANK_SIZE,
+    escort.x,
+    escort.y,
+    ESCORT_SIZE,
+    ESCORT_SIZE,
+  );
+}
+
+// 在 8px 网格上以 A* 找到追向玩家的第一步。地形决定长期通路，其他坦克等动态占位也参与
+// 本次搜索；若目标暂不可达，则走向已搜索到的最近可达点。
 function findSmartDirection(
   tank: TankState,
-  target: { x: number; y: number },
+  target: SmartNavigationTarget,
   level: LevelState,
+  obstacles: TankState[],
+  escort?: EscortState,
 ): Direction | null {
   const navCols = level.cols - NAV_TANK_CELLS + 1;
   const navRows = level.rows - NAV_TANK_CELLS + 1;
@@ -266,6 +344,7 @@ function findSmartDirection(
       if (nextCol < 0 || nextRow < 0 || nextCol >= navCols || nextRow >= navRows) continue;
       const stepCost = navigationCost(tank, level, nextCol, nextRow);
       if (!Number.isFinite(stepCost)) continue;
+      if (dynamicNavigationBlocked(tank, target, nextCol, nextRow, obstacles, escort)) continue;
       const nextIndex = nextRow * navCols + nextCol;
       const nextCost = costs[current.index] + stepCost;
       if (nextCost >= costs[nextIndex]) continue;
@@ -591,7 +670,7 @@ function beginSmartEscape(
     const probe = { ...tank };
     const probeObstacles = obstacles.map((obstacle) => obstacle === tank ? probe : obstacle);
     applyInput(probe, driveInput(dir), level, probeObstacles, state.escort ?? undefined);
-    if (probe.x === tank.x && probe.y === tank.y) continue;
+    if (!smartMoved(probe, tank.x, tank.y)) continue;
 
     applyInput(tank, driveInput(dir), level, obstacles, state.escort ?? undefined);
     tank.smartStuckTicks = 0;
@@ -878,7 +957,7 @@ function updateSmartEnemy(
     const px = tank.x;
     const py = tank.y;
     applyInput(tank, driveInput(tank.dir), level, obstacles, state.escort ?? undefined);
-    if (tank.x !== px || tank.y !== py) {
+    if (smartMoved(tank, px, py)) {
       tank.smartEscapeTicks--;
       tank.smartStuckTicks = 0;
       if (tank.smartEscapeTicks === 0) tank.aiTicks = 0;
@@ -909,24 +988,38 @@ function updateSmartEnemy(
 
   let desired = tank.dir;
   if (tank.aiTicks <= 0) {
-    desired = findSmartDirection(tank, chaseTarget, level) ?? desired;
+    desired = findSmartDirection(
+      tank,
+      chaseTarget,
+      level,
+      obstacles,
+      state.escort ?? undefined,
+    ) ?? desired;
     tank.aiTicks = SMART_AI_REPLAN_TICKS;
   }
 
   const px = tank.x;
   const py = tank.y;
   applyInput(tank, driveInput(desired), level, obstacles, state.escort ?? undefined);
-  if (tank.x !== px || tank.y !== py) {
+  if (smartMoved(tank, px, py)) {
     tank.smartStuckTicks = 0;
     return;
   }
 
   // 动态障碍或砖墙使本步失败：立即重算。若替代首步存在则原地转向并尝试；仍失败时开炮清障。
   tank.aiTicks = SMART_AI_REPLAN_TICKS;
-  const retry = findSmartDirection(tank, chaseTarget, level);
+  const retry = findSmartDirection(
+    tank,
+    chaseTarget,
+    level,
+    obstacles,
+    state.escort ?? undefined,
+  );
+  let blockedDir = desired;
   if (retry !== null && retry !== desired) {
+    blockedDir = retry;
     applyInput(tank, driveInput(retry), level, obstacles, state.escort ?? undefined);
-    if (tank.x !== px || tank.y !== py) {
+    if (smartMoved(tank, px, py)) {
       tank.smartStuckTicks = 0;
       return;
     }
@@ -934,7 +1027,7 @@ function updateSmartEnemy(
   tank.smartStuckTicks++;
   if (
     tank.smartStuckTicks >= SMART_AI_STUCK_TICKS &&
-    beginSmartEscape(tank, desired, state, level, obstacles)
+    beginSmartEscape(tank, blockedDir, state, level, obstacles)
   ) return;
   fireSmartTank(tank, state);
 }

@@ -50,6 +50,11 @@ export function getCell(level: LevelState, col: number, row: number): CellType {
   return level.cells[cellIndex(level, col, row)];
 }
 
+// 当前场景是否包含水域。道具生成等只关心“有没有水”，不需要知道具体位置。
+export function levelHasWater(level: LevelState): boolean {
+  return level.cells.includes(Cell.WATER);
+}
+
 // 读取砖块象限掩码（非砖块格返回 0）。
 export function getBrickMask(level: LevelState, col: number, row: number): number {
   if (col < 0 || row < 0 || col >= level.cols || row >= level.rows) {
