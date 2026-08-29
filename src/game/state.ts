@@ -77,7 +77,6 @@ export interface GameState {
   explosions: ExplosionState[]; // 爆炸特效
   enemyQueue: TankKind[]; // 待出生敌军队列（按出生先后）
   enemySpawnTimer: number; // 距下次出生的倒计时（≤0 且有空位即出生）
-  enemySpawnPoint: number; // 下一个出生点索引（0→1→2 轮转）
   nextEnemyId: number; // 敌方坦克 id 分配器
   nextBulletId: number; // 子弹 id 分配器（联机插值按此稳定匹配多发同源子弹）
   stage: number; // 当前关号（1-based，1..STAGE_COUNT）
@@ -156,7 +155,6 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     explosions: [],
     enemyQueue: createStageQueue(stageIndex),
     enemySpawnTimer: 0, // 开局即可出生第一台
-    enemySpawnPoint: 0,
     nextEnemyId: playerCount + 1, // 玩家占用 id=1..N
     nextBulletId: 1,
     stage,
@@ -235,7 +233,6 @@ export function nextStage(state: GameState): void {
   state.spawning = [];
   state.explosions = [];
   state.enemySpawnTimer = 0;
-  state.enemySpawnPoint = 0;
   state.nextEnemyId = state.playerCount + 1;
   state.eagleDestroyed = false;
   state.pendingResult = null;

@@ -7,8 +7,11 @@ import {
   AI_FIRE_DENOM,
   maxEnemiesOnField,
   ENEMY_SPAWN_INTERVAL_TICKS,
-  ENEMY_SPAWN_POINTS,
   CARRIER_QUEUE_POSITIONS,
+  FIELD_WIDTH,
+  FIELD_HEIGHT,
+  TANK_SIZE,
+  SUBTILE,
 } from '../core/constants';
 import { LevelState } from './level';
 import {
@@ -57,18 +60,48 @@ function enemyCount(state: GameState): number {
   return n;
 }
 
+// 随机出生点：在地图上半场（y ≤ FIELD_HEIGHT/2 − TANK_SIZE）按子格对齐随机取点，
+// 要求地形可通行、不与在场坦克及出生闪光重叠。最多尝试 SPAWN_TRY_LIMIT 次，全失败返回 null
+//（本帧放弃，由调用方短暂延时后重试 —— 不消耗出生队列）。
+const SPAWN_TRY_LIMIT = 20;
+const SPAWN_RETRY_TICKS = 30;
+function pickSpawnSpot(state: GameState, tank: TankState): { x: number; y: number } | null {
+  const xSlots = (FIELD_WIDTH - TANK_SIZE) / SUBTILE + 1; // 0..304，步长 8
+  const ySlots = (FIELD_HEIGHT / 2 - TANK_SIZE) / SUBTILE + 1; // 0..104，步长 8（上半场）
+  for (let i = 0; i < SPAWN_TRY_LIMIT; i++) {
+    const x = state.rng.int(xSlots) * SUBTILE;
+    const y = state.rng.int(ySlots) * SUBTILE;
+    if (!canTankOccupy(tank, x, y, state.level, state.tanks)) continue;
+    // 出生闪光中的坦克还不在 tanks 里，单独查重叠，避免两团闪光叠在同一点。
+    const overlapsFlash = state.spawning.some(
+      (s) => Math.abs(s.tank.x - x) < TANK_SIZE && Math.abs(s.tank.y - y) < TANK_SIZE,
+    );
+    if (overlapsFlash) continue;
+    return { x, y };
+  }
+  return null;
+}
+
 // 生成器：计时归零且场上有空位、队列非空时，取队首出生（进入出生闪光）。
-// 出生点按 左→中→右 轮转。所有敌军出生完毕后停止（胜负判定属后续任务）。
+// 出生点在上半场随机（见 pickSpawnSpot）；找不到可用落点则 SPAWN_RETRY_TICKS 后重试。
+// 所有敌军出生完毕后停止（胜负判定属后续任务）。
 function updateSpawner(state: GameState): void {
   if (state.enemySpawnTimer > 0) state.enemySpawnTimer--;
   if (state.enemyQueue.length === 0) return;
   if (enemyCount(state) >= maxEnemiesOnField(state.playerCount)) return;
   if (state.enemySpawnTimer > 0) return;
 
-  const kind = state.enemyQueue.shift()!;
-  const spawnIndex = state.enemySpawnPoint;
-  state.enemySpawnPoint = (state.enemySpawnPoint + 1) % ENEMY_SPAWN_POINTS.length;
-  const tank = createEnemy(kind, state.nextEnemyId++, spawnIndex);
+  // 先用队首种类探点（不出队）：探不到落点时队列原样保留。
+  const tank = createEnemy(state.enemyQueue[0], state.nextEnemyId, 0);
+  const spot = pickSpawnSpot(state, tank);
+  if (!spot) {
+    state.enemySpawnTimer = SPAWN_RETRY_TICKS;
+    return;
+  }
+  tank.x = spot.x;
+  tank.y = spot.y;
+  state.enemyQueue.shift();
+  state.nextEnemyId++;
   // 出队计数（1 起）：第 4/11/18 台为“携带道具”者（红闪，死亡掉落）。按计数标记，不回看队列下标。
   state.enemiesDequeued++;
   if (CARRIER_QUEUE_POSITIONS.includes(state.enemiesDequeued)) {
