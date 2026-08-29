@@ -138,11 +138,10 @@ function makeBullet(
 }
 
 // 从坦克炮口生成一发经典弹（cannon / 敌弹）。
-// 速度取自该坦克（威力坦克更快；玩家 star 等级 ≥1 提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
+// 速度取自该坦克（威力坦克更快；敌我 star 等级 ≥1 均提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
 export function spawnBullet(tank: TankState, bulletId: number): BulletState {
-  const isPlayer = isPlayerTank(tank);
-  const speed = isPlayer && tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
-  return makeBullet(tank, bulletId, 'normal', speed, isPlayer && tank.level >= 3);
+  const speed = tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
+  return makeBullet(tank, bulletId, 'normal', speed, tank.level >= 3);
 }
 
 // 按坦克当前武器生成一次开火的全部子弹（cannon / 机枪各一发，散弹一轮三发）。
@@ -192,9 +191,8 @@ export function liveBulletCount(bullets: BulletState[], ownerId: number): number
 
 // 该坦克同屏可存在的子弹上限：
 // cannon 沿用 star 规则（等级 ≥2 为 PLAYER_MAX_BULLETS_UPGRADED，否则 1）；
-// 特殊武器各有自己的上限（散弹的“1”指一轮齐射 —— 三发全灭前不能再射）。敌人恒为 1。
+// 特殊武器各有自己的上限（散弹的“1”指一轮齐射 —— 三发全灭前不能再射）。
 export function maxBulletsFor(tank: TankState): number {
-  if (!isPlayerTank(tank)) return 1;
   switch (tank.weapon) {
     case 'spread':
       return SPREAD_MAX_VOLLEYS;
@@ -468,8 +466,8 @@ export function resolveBulletBullet(
 //（友军冻结：不扣血、不记击杀，仅冻结对方，结算见 update.ts resolveBulletTanks），但绝不命中射手自己。
 export function bulletCanHit(b: BulletState, t: TankState): boolean {
   const isPlayer = isPlayerTank(t);
-  // 出生护盾期间：敌弹 / 友军弹都从坦克身上直接穿过（既不伤人 / 不冻结，也不消失），经典表现。
-  if (isPlayer && t.invulnTicks > 0) return false;
+  // 出生护盾或 helmet 护盾期间，对方子弹直接穿过（既不伤害也不消失）。
+  if (t.invulnTicks > 0) return false;
   if (b.fromEnemy) return isPlayer;
   // 玩家弹：射手自身的子弹永远穿过自己（出膛瞬间即与自身重叠）。
   return isPlayer ? b.ownerId !== t.id : true;

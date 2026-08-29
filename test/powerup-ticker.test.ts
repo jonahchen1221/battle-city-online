@@ -28,3 +28,13 @@ test('marquee copy identifies the player, item, and effect', () => {
 
   assert.equal(powerupTickerText(event, 'AX'), 'AX GOT GHOST: PASS THROUGH BRICKS 10 SEC');
 });
+
+test('marquee copy describes the enemy-side effect', () => {
+  const event: PowerupPickupEvent = {
+    type: 'powerupPicked',
+    playerIndex: -1,
+    kind: 'grenade',
+  };
+
+  assert.equal(powerupTickerText(event, 'ENEMY'), 'ENEMY GOT GRENADE: ALL PLAYERS DESTROYED');
+});

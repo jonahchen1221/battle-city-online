@@ -27,9 +27,20 @@ const POWERUP_TICKER_COPY: Record<PowerupKind, { name: string; effect: string }>
   wrench: { name: 'WRENCH', effect: 'BASE WALLS REPAIRED' },
 };
 
+// 敌方拾取全局型道具时效果会反转阵营；个人强化类沿用同一说明。
+const ENEMY_POWERUP_EFFECT: Partial<Record<PowerupKind, string>> = {
+  grenade: 'ALL PLAYERS DESTROYED',
+  tank: 'EXTRA REINFORCEMENT',
+  timer: 'PLAYERS FROZEN 10 SEC',
+  shovel: 'BASE WALLS REMOVED',
+  hourglass: 'PLAYERS SLOWED 12 SEC',
+  wrench: 'TANK ARMOR REPAIRED',
+};
+
 export function powerupTickerText(event: PowerupPickupEvent, playerName: string): string {
   const copy = POWERUP_TICKER_COPY[event.kind];
-  return `${playerName} GOT ${copy.name}: ${copy.effect}`;
+  const effect = event.playerIndex < 0 ? ENEMY_POWERUP_EFFECT[event.kind] ?? copy.effect : copy.effect;
+  return `${playerName} GOT ${copy.name}: ${effect}`;
 }
 
 // 大厅座位可能有空洞，开局后会按旧座位号压紧成连续的对局 playerIndex。

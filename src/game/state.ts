@@ -57,7 +57,7 @@ export type AudioEvent =
 // 联机时由权威服务器随 snapshot 事件一并广播，所有客户端看到相同的拾取者与道具效果。
 export interface PowerupPickupEvent {
   type: 'powerupPicked';
-  playerIndex: number;
+  playerIndex: number; // 玩家为 0..3；敌方拾取者为 -1
   kind: PowerupKind;
 }
 
@@ -97,6 +97,8 @@ export interface GameState {
   prevPause: boolean; // 上一帧 pause 键聚合状态（边沿检测：暂停切换）
   // ── 道具系统 ──
   powerups: PowerupState[]; // 场上全部道具浮标（最多 MAX_POWERUPS_ON_FIELD 枚，数组序即年龄序：越靠前越旧）
+  playerFreezeTicks: number; // 敌方 timer：>0 时全部玩家冻结
+  playerSlowTicks: number; // 敌方 hourglass：>0 时全部玩家半速
   enemyFreezeTicks: number; // timer 道具：>0 时敌军冻结（不动、不开火），逐帧递减
   enemySlowTicks: number; // hourglass 道具：>0 时敌军半速（仅偶数 tick 行动），逐帧递减
   shovelTicks: number; // shovel 道具：>0 时鹰巢护墙已钢化，归零时恢复砖墙，逐帧递减
@@ -175,6 +177,8 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     prevStart: false,
     prevPause: false,
     powerups: [],
+    playerFreezeTicks: 0,
+    playerSlowTicks: 0,
     enemyFreezeTicks: 0,
     enemySlowTicks: 0,
     shovelTicks: 0,
@@ -240,6 +244,8 @@ export function nextStage(state: GameState): void {
   // scoreByPlayer 跨关累积、保持不动；killsByPlayer 每关独立、清零重建。
   state.killsByPlayer = emptyKillsByPlayer(state.playerCount);
   state.powerups = [];
+  state.playerFreezeTicks = 0;
+  state.playerSlowTicks = 0;
   state.enemyFreezeTicks = 0;
   state.enemySlowTicks = 0;
   state.shovelTicks = 0;

@@ -447,25 +447,29 @@ export class Renderer {
   private drawTanks(state: GameState, playerNames: readonly string[]): void {
     const { ctx, atlas } = this;
     const enemiesFrozen = state.enemyFreezeTicks > 0;
+    const playersFrozen = state.playerFreezeTicks > 0;
     for (const tank of state.tanks) {
       if (!tank.alive) continue;
       const px = snapArt(FIELD_X + tank.x);
       const py = snapArt(FIELD_Y + tank.y);
-      // 冻结中履带定格第 0 帧：敌军由 timer 道具冻结，玩家由友军弹冻结（freezeTicks）；
+      // 冻结中履带定格第 0 帧：敌军由玩家 timer 冻结，玩家由友军弹或敌方 timer 冻结；
       // 其余按移动状态播放两帧。
-      const frozen =
-        tank.kind === 'player' ? tank.freezeTicks > 0 : enemiesFrozen;
+      const frozen = tank.kind === 'player'
+        ? tank.freezeTicks > 0 || playersFrozen
+        : enemiesFrozen;
       const frame = tank.moving && !frozen ? Math.floor(state.tick / TRACK_ANIM_TICKS) % 2 : 0;
       const frames = this.tankFrames(tank, state.tick);
       const sprite = frames[tank.dir][frame];
-      // 友军冻结反馈：被冻的玩家坦克每 FRIENDLY_FREEZE_BLINK_TICKS 帧明灭一次（相位由
-      // freezeTicks 自身推导，无需全局计时），一眼可辨“这台坦克动不了”。
+      // 冻结反馈：被冻的玩家坦克每 FRIENDLY_FREEZE_BLINK_TICKS 帧明灭一次。
       const freezeBlinkOff =
         tank.kind === 'player' &&
-        tank.freezeTicks > 0 &&
-        Math.floor(tank.freezeTicks / FRIENDLY_FREEZE_BLINK_TICKS) % 2 === 0;
+        (tank.freezeTicks > 0 || playersFrozen) &&
+        Math.floor(
+          (playersFrozen ? state.playerFreezeTicks : tank.freezeTicks) /
+            FRIENDLY_FREEZE_BLINK_TICKS,
+        ) % 2 === 0;
       // 幽灵态（ghost 道具）：整台坦克半透明绘制 —— 与友军冻结的“明灭闪烁”是两种观感，不会混淆。
-      const ghosting = tank.kind === 'player' && tank.ghostTicks > 0;
+      const ghosting = tank.ghostTicks > 0;
       if (ghosting) ctx.globalAlpha = GHOST_RENDER_ALPHA;
       if (!freezeBlinkOff) drawTile(ctx, sprite, px, py);
       if (ghosting) ctx.globalAlpha = 1;

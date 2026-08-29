@@ -98,6 +98,7 @@ const COLOR_TITLE = '#e64635'; // 砖红标题
 const COLOR_MENU = '#ffffff';
 const COLOR_MENU_DIM = '#89918d';
 const COLOR_HIGHLIGHT = '#ffc14a'; // 自己所在行 / 光标黄
+const COLOR_ENEMY = '#f85838'; // 敌方拾取道具跑马灯
 const COLOR_ERROR = '#ff5947';
 const COLOR_OK = '#70dc58';
 
@@ -1138,11 +1139,16 @@ export class App {
     const track = this.powerupTickerElement;
     const textElement = this.powerupTickerTextElement;
     if (!track || !textElement) return;
-    const name = this.screen === 'localGame'
-      ? this.playerName
-      : this.gamePlayerNames[event.playerIndex] ?? `P${event.playerIndex + 1}`;
+    const enemyPickup = event.playerIndex < 0;
+    const name = enemyPickup
+      ? 'ENEMY'
+      : this.screen === 'localGame'
+        ? this.playerName
+        : this.gamePlayerNames[event.playerIndex] ?? `P${event.playerIndex + 1}`;
     textElement.textContent = powerupTickerText(event, name);
-    textElement.style.color = PLAYER_LABEL_COLORS[event.playerIndex] ?? COLOR_HIGHLIGHT;
+    textElement.style.color = enemyPickup
+      ? COLOR_ENEMY
+      : PLAYER_LABEL_COLORS[event.playerIndex] ?? COLOR_HIGHLIGHT;
     textElement.style.transform = `translate3d(${track.clientWidth + TICKER_EDGE_PAD}px, 0, 0)`;
     track.classList.add('is-active');
   }

@@ -12,6 +12,7 @@ import {
   FIELD_HEIGHT,
   TANK_SIZE,
   SUBTILE,
+  MACHINE_FIRE_INTERVAL_TICKS,
 } from '../core/constants';
 import { LevelState } from './level';
 import {
@@ -22,7 +23,7 @@ import {
   isPlayerTank,
   canTankOccupy,
 } from './tank';
-import { hasLiveBullet, spawnBullet } from './bullet';
+import { liveBulletCount, maxBulletsFor, spawnWeaponBullets } from './bullet';
 import type { GameState } from './state';
 
 // 敌方 AI + 生成器。纯逻辑：一切随机取自 state.rng，可复现。
@@ -154,9 +155,14 @@ function updateOneEnemy(tank: TankState, state: GameState, level: LevelState): v
     turnTank(tank, nd, level, state.tanks);
   }
 
-  // 随机开火：每帧约 1/AI_FIRE_DENOM，且当前无在场子弹。
-  if (state.rng.int(AI_FIRE_DENOM) === 0 && !hasLiveBullet(state.bullets, tank.id)) {
-    state.bullets.push(spawnBullet(tank, state.nextBulletId++));
+  // 随机开火：拾取 star 或特殊武器后，弹量、弹型与冷却均沿用通用武器规则。
+  const canFire = tank.fireCooldown === 0 &&
+    liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
+  if (state.rng.int(AI_FIRE_DENOM) === 0 && canFire) {
+    const spawned = spawnWeaponBullets(tank, state.nextBulletId);
+    state.nextBulletId += spawned.length;
+    for (const bullet of spawned) state.bullets.push(bullet);
+    if (tank.weapon === 'machine') tank.fireCooldown = MACHINE_FIRE_INTERVAL_TICKS;
   }
 }
 

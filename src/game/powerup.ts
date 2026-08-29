@@ -26,6 +26,7 @@ import type { Rng } from '../core/rng';
 import { Cell, setCell, getCell } from './level';
 import { TankState, EnemyKind, WeaponKind, isPlayerTank } from './tank';
 import type { GameState } from './state';
+import { destroyPlayerTank } from './death';
 
 // 道具系统（纯模拟层）：一切随机取自 state.rng，可复现；GameState 保持可序列化。
 // 六种经典道具 + 四种魂斗罗风格武器道具 + 五种“中立”道具（每关必出，见 updateNeutralPowerups）。
@@ -216,7 +217,7 @@ export function updateNeutralPowerups(state: GameState): void {
   state.events.push('powerupSpawn');
 }
 
-// 玩家坦克 16×16 与道具 16×16 的 AABB 重叠。
+// 坦克 16×16 与道具 16×16 的 AABB 重叠。
 function pickupOverlap(t: TankState, p: PowerupState): boolean {
   return (
     p.x < t.x + TANK_SIZE &&
@@ -226,18 +227,24 @@ function pickupOverlap(t: TankState, p: PowerupState): boolean {
   );
 }
 
-// 拾取检测（玩家移动后调用）：遍历场上全部浮标（自旧到新），任一存活玩家坦克与之重叠即
-// 拾取——加分、生效、从数组移除、发声。同一帧可拾取多枚（各自结算）。
-export function tryPickupPowerup(state: GameState): void {
+export type PowerupCollectorSide = 'player' | 'enemy' | 'any';
+
+// 拾取检测：遍历场上全部浮标（自旧到新），任一符合阵营筛选的存活坦克与之重叠即
+// 拾取、生效、从数组移除、发声。玩家照常加 500 分，敌方不计入玩家分数。
+// side 默认 any，方便测试与外部调用；主循环会在敌我各自移动后按阵营调用。
+export function tryPickupPowerup(state: GameState, side: PowerupCollectorSide = 'any'): void {
   for (let i = 0; i < state.powerups.length; ) {
     const p = state.powerups[i];
     let taken = false;
     for (const t of state.tanks) {
-      if (!t.alive || !isPlayerTank(t)) continue;
+      if (!t.alive) continue;
+      const player = isPlayerTank(t);
+      if (side === 'player' && !player) continue;
+      if (side === 'enemy' && player) continue;
       if (!pickupOverlap(t, p)) continue;
-      state.scoreByPlayer[t.playerIndex] += POWERUP_SCORE;
+      if (player) state.scoreByPlayer[t.playerIndex] += POWERUP_SCORE;
       applyPowerupEffect(state, t, p.kind);
-      // 记录结构化拾取信息，客户端据此显示“谁拾取了什么、有什么效果”的跑马灯。
+      // 敌方 playerIndex 恒为 -1；客户端据此显示 ENEMY 及敌方版本的效果说明。
       state.events.push({ type: 'powerupPicked', playerIndex: t.playerIndex, kind: p.kind });
       // tank 道具（加命）用独立的欢快 1UP 音效；其余用统一拾取提示音。
       state.events.push(p.kind === 'tank' ? 'lifeUp' : 'powerupPickup');
@@ -249,27 +256,39 @@ export function tryPickupPowerup(state: GameState): void {
   }
 }
 
-// 施加道具效果。collector 为拾取者（player 坦克）。
+// 施加道具效果。个人强化对敌我完全通用；攻击/控制类按拾取者阵营作用于对手。
 function applyPowerupEffect(state: GameState, collector: TankState, kind: PowerupKind): void {
+  const player = isPlayerTank(collector);
   switch (kind) {
     case 'star':
-      // 升级：等级 +1，封顶 3。等级作用于该玩家子弹（弹速 / 双弹 / 破钢，见 bullet.ts）。
+      // 升级：等级 +1，封顶 3。敌我均可获得弹速 / 双弹 / 破钢升级。
       collector.level = Math.min(PLAYER_MAX_LEVEL, collector.level + 1);
       break;
     case 'grenade':
-      grenadeKillAll(state, collector);
+      grenadeKillOpponents(state, collector);
       break;
     case 'tank':
-      // 加命：该玩家生命 +1。
-      state.livesByPlayer[collector.playerIndex]++;
+      if (player) {
+        state.livesByPlayer[collector.playerIndex]++;
+      } else {
+        // 敌军 1UP：在本关队列末尾追加一台同类型援军。
+        state.enemyQueue.push(collector.kind as EnemyKind);
+      }
       break;
     case 'timer':
-      state.enemyFreezeTicks = ENEMY_FREEZE_TICKS;
+      if (player) state.enemyFreezeTicks = ENEMY_FREEZE_TICKS;
+      else state.playerFreezeTicks = ENEMY_FREEZE_TICKS;
       break;
     case 'shovel':
-      // 鹰巢护墙钢化；重复拾取仅重置计时（钢化本身幂等）。
-      state.shovelTicks = SHOVEL_TICKS;
-      fortifyEagleRing(state);
+      if (player) {
+        // 玩家钢化鹰巢护墙；重复拾取仅重置计时。
+        state.shovelTicks = SHOVEL_TICKS;
+        fortifyEagleRing(state);
+      } else {
+        // 敌方用铲子挖掉护墙，为进攻基地打开通道；同时取消现有钢化计时。
+        state.shovelTicks = 0;
+        clearEagleRing(state);
+      }
       break;
     case 'helmet':
       // 无敌：复用出生护盾计时 / 渲染。
@@ -288,14 +307,18 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       collector.ghostTicks = GHOST_TICKS;
       break;
     case 'hourglass':
-      // 沙漏：敌军限时半速（enemyFreezeTicks 全冻结优先，见 enemy.ts updateEnemies）。
-      state.enemySlowTicks = ENEMY_SLOW_TICKS;
+      if (player) state.enemySlowTicks = ENEMY_SLOW_TICKS;
+      else state.playerSlowTicks = ENEMY_SLOW_TICKS;
       break;
     case 'wrench':
-      // 扳手：即时把鹰巢护墙环修复为全新完整砖；若正处于 shovel 钢化期间则刷成钢（不降级）。
-      // 鹰巢本身不修复（已毁即已毁）。
-      if (state.shovelTicks > 0) fortifyEagleRing(state);
-      else restoreEagleRingBrick(state);
+      if (player) {
+        // 玩家即时修复鹰巢护墙；鹰巢本身不修复。
+        if (state.shovelTicks > 0) fortifyEagleRing(state);
+        else restoreEagleRingBrick(state);
+      } else {
+        // 敌方维修自身，额外增加一点耐久；即使满血拾取也能获得实际强化。
+        collector.hp++;
+      }
       break;
     default: {
       // 武器道具：替换拾取者当前武器（不叠加、不保留旧武器），连发冷却清零以便立即开火。
@@ -310,9 +333,16 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
   }
 }
 
-// grenade：场上每台存活敌军立即以大爆炸死亡；得分 / 击毁数一律归属拾取者 collector
-// （偏离原版“0 分”的小改动，为保持结算统计算术一致）。出生闪光中的敌人不受影响（仅遍历 state.tanks）。
-function grenadeKillAll(state: GameState, collector: TankState): void {
+// grenade：消灭场上全部对手。玩家拾取时得分 / 击毁数归拾取者；敌方拾取时沿用正常的
+// 玩家死亡、扣命与复活流程。出生闪光中的坦克不受影响。
+function grenadeKillOpponents(state: GameState, collector: TankState): void {
+  if (!isPlayerTank(collector)) {
+    for (const t of state.tanks) {
+      if (t.alive && isPlayerTank(t)) destroyPlayerTank(state, t);
+    }
+    return;
+  }
+
   const off = (EXPLOSION_BIG_SIZE - TANK_SIZE) / 2; // 8
   for (const t of state.tanks) {
     if (!t.alive || isPlayerTank(t)) continue;
@@ -328,6 +358,13 @@ function grenadeKillAll(state: GameState, collector: TankState): void {
       big: true,
     });
     state.events.push('explosionBig');
+  }
+}
+
+// 敌方 shovel：清空鹰巢外围护墙环；鹰巢本体不受影响。
+export function clearEagleRing(state: GameState): void {
+  for (const { col, row } of eagleRingCells()) {
+    setCell(state.level, col, row, Cell.EMPTY);
   }
 }
 

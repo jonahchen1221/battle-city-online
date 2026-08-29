@@ -1,6 +1,6 @@
 import { GameState, nextStage } from './state';
 import { InputState, emptyInput } from '../core/types';
-import { applyInput, TankState, EnemyKind, createPlayer, isPlayerTank } from './tank';
+import { applyInput, EnemyKind, isPlayerTank } from './tank';
 import {
   spawnWeaponBullets,
   liveBulletCount,
@@ -19,12 +19,9 @@ import {
   restoreEagleRingBrick,
   updateNeutralPowerups,
 } from './powerup';
+import { destroyPlayerTank, pushBigExplosion } from './death';
 import {
-  EXPLOSION_BIG_TICKS,
-  EXPLOSION_BIG_SIZE,
-  TANK_SIZE,
   BULLET_SIZE,
-  SPAWN_FLASH_TICKS,
   ENEMY_SCORE,
   STAGE_START_TICKS,
   FRIENDLY_FREEZE_TICKS,
@@ -97,14 +94,17 @@ export function update(state: GameState, inputs: InputState[]): void {
   state.phaseTicks++;
   const level = state.level;
 
-  // 道具计时递减。timer：敌军冻结逐帧递减。hourglass：敌军半速逐帧递减。
+  // 道具计时递减。timer / hourglass 按阵营分别控制；shovel 仍是玩家基地钢化计时。
   // shovel：钢化护墙逐帧递减，归零那帧恢复砖墙。
+  if (state.playerFreezeTicks > 0) state.playerFreezeTicks--;
+  if (state.playerSlowTicks > 0) state.playerSlowTicks--;
   if (state.enemyFreezeTicks > 0) state.enemyFreezeTicks--;
   if (state.enemySlowTicks > 0) state.enemySlowTicks--;
   if (state.shovelTicks > 0) {
     state.shovelTicks--;
     if (state.shovelTicks === 0) restoreEagleRingBrick(state);
   }
+  advanceTankPowerupTimers(state);
 
   // 中立道具定时刷新（每关必出 5 种新道具）：仅在 playing 期间推进。
   updateNeutralPowerups(state);
@@ -112,11 +112,12 @@ export function update(state: GameState, inputs: InputState[]): void {
   // 玩家坦克由输入驱动：inputs[i] 对应 playerIndex===i 的坦克（按序号映射，非数组顺序）。
   updatePlayers(state, inputs);
 
-  // 玩家移动后做道具拾取检测（AABB 重叠即拾取、生效、清除浮标）。
-  tryPickupPowerup(state);
+  // 敌我各自在移动后拾取。
+  tryPickupPowerup(state, 'player');
 
   // 敌方：出生闪光推进（含玩家复活）、AI 行进/开火、生成新敌人。
   updateEnemies(state, level);
+  tryPickupPowerup(state, 'enemy');
 
   // 推进子弹并结算地形碰撞（撞地形消失时产生小爆炸）。
   advanceBullets(level, state.bullets, state.explosions, state.events);
@@ -137,6 +138,17 @@ export function update(state: GameState, inputs: InputState[]): void {
   updatePhase(state);
 }
 
+// 个人型道具计时对敌我通用，即使坦克正被全局冻结也照常流逝。
+function advanceTankPowerupTimers(state: GameState): void {
+  for (const tank of state.tanks) {
+    if (!tank.alive) continue;
+    if (tank.invulnTicks > 0) tank.invulnTicks--;
+    if (tank.speedBoostTicks > 0) tank.speedBoostTicks--;
+    if (tank.ghostTicks > 0) tank.ghostTicks--;
+    if (tank.fireCooldown > 0) tank.fireCooldown--;
+  }
+}
+
 // 玩家坦克：输入驱动移动 + 边沿触发开火。
 // 输入按 playerIndex 映射（inputs[tank.playerIndex]）：某玩家阵亡后其坦克缺席，
 // 其余玩家的输入不会因数组塌缩而错位。
@@ -147,18 +159,13 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     if (!tank.alive) continue;
     const input = inputs[tank.playerIndex] ?? emptyInput();
 
-    // 出生护盾倒计时（实体化那一刻起算，逐帧递减到 0）。
-    if (tank.invulnTicks > 0) tank.invulnTicks--;
-
-    // 限时移动类道具倒计时（boots 加速 / ghost 穿砖）：与护盾同样逐帧递减，
-    // 冻结期间也照常流逝；死亡复活时由 createPlayer 重建而自然清零。
-    if (tank.speedBoostTicks > 0) tank.speedBoostTicks--;
-    if (tank.ghostTicks > 0) tank.ghostTicks--;
-
-    // 友军冻结：被队友子弹击中后 freezeTicks>0，期间输入照常采样但一律不生效
-    //（不能移动、不能开火），逐帧递减到 0 自动恢复。冻结中履带定格（moving=false）、冰面滑行中断。
-    if (tank.freezeTicks > 0) {
-      tank.freezeTicks--;
+    // 友军冻结与敌方 timer 均阻止移动 / 开火；敌方 hourglass 则让玩家隔帧行动。
+    const personallyFrozen = tank.freezeTicks > 0;
+    if (personallyFrozen) tank.freezeTicks--;
+    const globallyFrozen = state.playerFreezeTicks > 0;
+    const slowedSkip = !globallyFrozen && !personallyFrozen &&
+      state.playerSlowTicks > 0 && state.tick % 2 !== 0;
+    if (globallyFrozen || personallyFrozen || slowedSkip) {
       tank.moving = false;
       tank.slideTicks = 0;
       tank.prevFire = input.fire; // 仍记录开火键状态：解冻那帧不会因一直按住而被判为边沿
@@ -173,7 +180,6 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     // 两者都还需满足在场子弹数低于该坦克上限（见 maxBulletsFor：star 双弹 / 各武器自有上限）。
     const firePressed = input.fire && !tank.prevFire;
     tank.prevFire = input.fire;
-    if (tank.fireCooldown > 0) tank.fireCooldown--;
     const wantFire = tank.weapon === 'machine' ? input.fire && tank.fireCooldown === 0 : firePressed;
     if (wantFire && liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)) {
       const spawned = spawnWeaponBullets(tank, state.nextBulletId);
@@ -214,12 +220,11 @@ function resolveBulletTanks(state: GameState): void {
 
       t.hp--;
       if (t.hp <= 0) {
-        pushBigExplosion(state, t);
-        t.alive = false;
         if (isPlayerTank(t)) {
-          state.events.push('playerDeath');
-          onPlayerKilled(state, t);
+          destroyPlayerTank(state, t);
         } else {
+          pushBigExplosion(state, t);
+          t.alive = false;
           // 敌方坦克被击毁：把得分与击毁数归属给射手（敌弹不打敌人，故此处必为玩家弹，
           // ownerPlayerIndex ≥ 0；仍做守卫以防万一）。
           const kind = t.kind as EnemyKind; // 非玩家分支：kind 必为敌方种类
@@ -236,40 +241,6 @@ function resolveBulletTanks(state: GameState): void {
       // 装甲坦克 hp>0 时仅扣血（渲染层据 hp<ARMOR_HP 闪烁），子弹已消亡。
       if (!pierces) break;
     }
-  }
-}
-
-// 大爆炸：32×32，居中于 16×16 坦克。
-function pushBigExplosion(state: GameState, t: TankState): void {
-  const off = (EXPLOSION_BIG_SIZE - TANK_SIZE) / 2; // 8
-  state.explosions.push({ x: t.x - off, y: t.y - off, ticksLeft: EXPLOSION_BIG_TICKS, big: true });
-}
-
-// 玩家坦克被击毁：扣该玩家一条生命；若其仍有剩余则走 60 帧出生闪光复活（复用敌人出生机制，
-// 而非即时瞬移），期间不可控/不可碰撞；若该玩家已无生命则保持死亡，交由 phase 判定 gameover。
-function onPlayerKilled(state: GameState, t: TankState): void {
-  const idx = t.playerIndex;
-  state.livesByPlayer[idx]--;
-
-  // 多人合作：生命耗尽者向队友“借命”——候选为其余生命 ≥2 条的玩家
-  //（捐出一条后自己至少还剩 1 条给当前在场坦克，不会把队友一起拖死）。
-  // 候选非空则由 state.rng 随机取一名捐赠者：捐赠者 -1、借命者 +1（回到 1 条）后照常复活；
-  // 候选为空则维持死亡，交由 phase 判定 gameover。
-  if (state.playerCount > 1 && state.livesByPlayer[idx] <= 0) {
-    const donors: number[] = [];
-    for (let i = 0; i < state.playerCount; i++) {
-      if (i !== idx && state.livesByPlayer[i] >= 2) donors.push(i);
-    }
-    if (donors.length > 0) {
-      const donor = donors[state.rng.int(donors.length)];
-      state.livesByPlayer[donor]--;
-      state.livesByPlayer[idx]++;
-    }
-  }
-
-  if (state.livesByPlayer[idx] > 0) {
-    // 保留同一 id 与 playerIndex 以维持输入映射；进入出生闪光队列，与敌人共用 updateSpawning。
-    state.spawning.push({ tank: createPlayer(idx, t.id), ticksLeft: SPAWN_FLASH_TICKS });
   }
 }
 
