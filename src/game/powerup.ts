@@ -29,7 +29,7 @@ import {
   NEUTRAL_POWERUP_INTERVAL_TICKS,
   NEUTRAL_POWERUP_RETRY_TICKS,
   NEUTRAL_POWERUP_MAX_TRIES,
-  ESCORT_REPAIR_AMOUNT,
+  ESCORT_TIME_BONUS_TICKS,
 } from '../core/constants';
 import type { Rng } from '../core/rng';
 import { Cell, setCell, getCell } from './level';
@@ -361,10 +361,9 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       break;
     case 'shovel':
       if (player) {
-        // 护送关中改为移动鹰巢的限时护盾；普通关仍钢化护墙。
+        // 护送关中暂停倒计时；普通关仍钢化护墙。
         state.shovelTicks = SHOVEL_TICKS;
-        if (state.escort) state.escort.shieldTicks = SHOVEL_TICKS;
-        else fortifyEagleRing(state);
+        if (!state.escort) fortifyEagleRing(state);
       } else {
         // 敌方用铲子挖掉护墙，为进攻基地打开通道；同时取消现有钢化计时。
         state.shovelTicks = 0;
@@ -402,9 +401,9 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
     case 'wrench':
       if (player) {
         if (state.escort) {
-          state.escort.hp = Math.min(
-            state.escort.maxHp,
-            state.escort.hp + ESCORT_REPAIR_AMOUNT,
+          state.escort.timeLeftTicks = Math.min(
+            state.escort.timeLimitTicks,
+            state.escort.timeLeftTicks + ESCORT_TIME_BONUS_TICKS,
           );
         } else if (state.shovelTicks > 0) fortifyEagleRing(state);
         else restoreEagleRingBrick(state);

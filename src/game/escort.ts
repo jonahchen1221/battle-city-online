@@ -3,12 +3,9 @@ import {
   BULLET_SIZE,
   ESCORT_FIELD_COLS,
   ESCORT_FIELD_ROWS,
-  ESCORT_HIT_INVULN_TICKS,
-  ESCORT_MAX_HP,
   ESCORT_SIZE,
   ESCORT_SPEED,
-  EXPLOSION_BIG_SIZE,
-  EXPLOSION_BIG_TICKS,
+  ESCORT_TIME_LIMIT_TICKS,
   EXPLOSION_SMALL_TICKS,
   PLAYER_SPAWN_POINTS,
   SUBTILE,
@@ -28,14 +25,12 @@ export interface EscortState {
   route: EscortWaypoint[];
   routeIndex: number; // 当前目标节点；route[0] 是固定出生点
   dir: Direction;
-  hp: number;
-  maxHp: number;
+  timeLeftTicks: number;
+  timeLimitTicks: number;
+  timeExpired: boolean;
   speed: number;
   moving: boolean;
   arrived: boolean;
-  destroyed: boolean;
-  hitInvulnTicks: number;
-  shieldTicks: number;
 }
 
 export interface EscortWaypoint {
@@ -50,6 +45,34 @@ export interface EscortGuardSlot {
   y: number;
   width: number;
   height: number;
+}
+
+// 以完整折线路程为分母，计算车辆已实际行驶的比例；停驶不会推进，转弯后累计前序路段。
+export function escortProgress(escort: EscortState): number {
+  if (escort.route.length < 2) return 1;
+  let total = 0;
+  for (let i = 1; i < escort.route.length; i++) {
+    total +=
+      Math.abs(escort.route[i].x - escort.route[i - 1].x) +
+      Math.abs(escort.route[i].y - escort.route[i - 1].y);
+  }
+  if (total <= 0) return 1;
+
+  const targetIndex = Math.min(Math.max(1, escort.routeIndex), escort.route.length - 1);
+  let traveled = 0;
+  for (let i = 1; i < targetIndex; i++) {
+    traveled +=
+      Math.abs(escort.route[i].x - escort.route[i - 1].x) +
+      Math.abs(escort.route[i].y - escort.route[i - 1].y);
+  }
+  const segmentStart = escort.route[targetIndex - 1];
+  const segmentEnd = escort.route[targetIndex];
+  const segmentLength =
+    Math.abs(segmentEnd.x - segmentStart.x) + Math.abs(segmentEnd.y - segmentStart.y);
+  const segmentTraveled =
+    Math.abs(escort.x - segmentStart.x) + Math.abs(escort.y - segmentStart.y);
+  traveled += Math.min(segmentLength, segmentTraveled);
+  return Math.max(0, Math.min(1, traveled / total));
 }
 
 // 每个护卫位沿车身方向覆盖连续两个坦克格，给玩家留出跟车调整空间。
@@ -214,56 +237,136 @@ export function createEscortLevel(stage = 1): LevelState {
   const route = escortRouteForStage(stage);
   switch (variant) {
     case 0:
-      for (let row = 6; row < ESCORT_FIELD_ROWS - 8; row += 12) {
-        fillRect(level, 6, row, 10, 2, row % 24 === 6 ? Cell.BRICK : Cell.TREES);
-        fillRect(level, 64, row + 4, 10, 2, row % 24 === 6 ? Cell.TREES : Cell.BRICK);
-        fillRect(level, 22, row + 2, 4, 2, Cell.STEEL);
-        fillRect(level, 54, row + 6, 4, 2, Cell.STEEL);
+      // 桥头争夺：三条河把纵向推进切成四段；中央车桥最快，左右小桥可供玩家包抄。
+      for (const row of [18, 43, 68]) {
+        fillRect(level, 0, row, ESCORT_FIELD_COLS, 4, Cell.WATER);
       }
-      fillRect(level, 0, 45, ESCORT_FIELD_COLS, 4, Cell.WATER);
+      for (const [row, left, right] of [[18, 7, 65], [43, 13, 59], [68, 5, 67]]) {
+        fillRect(level, left, row, 8, 4, Cell.EMPTY);
+        fillRect(level, right, row, 8, 4, Cell.EMPTY);
+        fillRect(level, left - 2, row - 2, 2, 8, Cell.STEEL);
+        fillRect(level, right + 8, row - 2, 2, 8, Cell.STEEL);
+      }
+      for (const row of [6, 29, 54, 77]) {
+        fillRect(level, 4, row, 12, 4, Cell.TREES);
+        fillRect(level, 17, row + 1, 7, 2, Cell.BRICK);
+        fillRect(level, 56, row + 1, 7, 2, Cell.BRICK);
+        fillRect(level, 64, row, 12, 4, Cell.TREES);
+        fillRect(level, 26, row + 2, 4, 3, Cell.STEEL);
+        fillRect(level, 50, row - 1, 4, 3, Cell.STEEL);
+      }
+      fillRect(level, 27, 24, 26, 8, Cell.ICE);
+      fillRect(level, 25, 49, 30, 8, Cell.ICE);
       break;
     case 1:
-      fillRect(level, 0, 44, ESCORT_FIELD_COLS, 5, Cell.WATER);
-      fillRect(level, 28, 4, 4, 78, Cell.WATER);
-      for (let row = 8; row < 82; row += 14) {
-        fillRect(level, 5, row, 12, 3, Cell.TREES);
-        fillRect(level, 60, row + 5, 14, 2, Cell.BRICK);
+      // 运河折返：十字运河制造桥口争夺，转角堡垒可守也可被砖墙侧翼突破。
+      fillRect(level, 0, 26, ESCORT_FIELD_COLS, 4, Cell.WATER);
+      fillRect(level, 0, 57, ESCORT_FIELD_COLS, 4, Cell.WATER);
+      fillRect(level, 24, 4, 4, 80, Cell.WATER);
+      fillRect(level, 53, 8, 4, 76, Cell.WATER);
+      for (const [col, row, width, height] of [
+        [6, 26, 8, 4], [66, 26, 8, 4], [10, 57, 8, 4], [62, 57, 8, 4],
+        [24, 10, 4, 8], [24, 70, 4, 8], [53, 15, 4, 8], [53, 68, 4, 8],
+      ]) {
+        fillRect(level, col, row, width, height, Cell.EMPTY);
       }
+      for (const [col, row] of [[5, 8], [60, 9], [6, 66], [61, 68]]) {
+        fillRect(level, col, row, 13, 5, Cell.TREES);
+        fillRect(level, col + 3, row + 5, 7, 2, Cell.BRICK);
+      }
+      for (const [col, row] of [[31, 14], [43, 34], [31, 47], [42, 72]]) {
+        fillRect(level, col, row, 7, 2, Cell.STEEL);
+        fillRect(level, col, row + 2, 2, 7, Cell.STEEL);
+        fillRect(level, col + 5, row + 2, 2, 7, Cell.BRICK);
+      }
+      fillRect(level, 31, 34, 18, 9, Cell.ICE);
       break;
     case 2:
-      fillRect(level, 0, 34, ESCORT_FIELD_COLS, 4, Cell.WATER);
-      fillRect(level, 0, 67, ESCORT_FIELD_COLS, 3, Cell.WATER);
-      for (let col = 8; col < 72; col += 14) {
-        fillRect(level, col, 12, 3, 10, col % 28 === 8 ? Cell.STEEL : Cell.TREES);
-        fillRect(level, col + 4, 72, 5, 8, Cell.BRICK);
+      // 冰原交叉火力：大片冰面让转向有风险，钢柱切割射线，树林提供近距离伏击路线。
+      fillRect(level, 0, 35, ESCORT_FIELD_COLS, 4, Cell.WATER);
+      fillRect(level, 0, 69, ESCORT_FIELD_COLS, 3, Cell.WATER);
+      fillRect(level, 20, 43, 40, 15, Cell.ICE);
+      fillRect(level, 4, 10, 18, 8, Cell.ICE);
+      fillRect(level, 58, 74, 17, 9, Cell.ICE);
+      for (const col of [7, 23, 55, 71]) {
+        fillRect(level, col, 21, 3, 11, Cell.STEEL);
+        fillRect(level, col, 41, 3, 12, Cell.BRICK);
       }
+      for (const [col, row, width] of [[3, 28, 16], [60, 27, 16], [4, 58, 19], [57, 59, 19]]) {
+        fillRect(level, col, row, width, 5, Cell.TREES);
+      }
+      for (const [col, row] of [[27, 12], [46, 18], [8, 76], [29, 73]]) {
+        fillRect(level, col, row, 10, 2, Cell.BRICK);
+        fillRect(level, col + 4, row - 2, 2, 6, Cell.STEEL);
+      }
+      fillRect(level, 6, 35, 9, 4, Cell.EMPTY);
+      fillRect(level, 65, 35, 9, 4, Cell.EMPTY);
+      fillRect(level, 10, 69, 8, 3, Cell.EMPTY);
+      fillRect(level, 62, 69, 8, 3, Cell.EMPTY);
       break;
     case 3:
-      fillRect(level, 18, 0, 4, ESCORT_FIELD_ROWS, Cell.WATER);
-      fillRect(level, 58, 0, 4, ESCORT_FIELD_ROWS, Cell.WATER);
-      for (let row = 10; row < 82; row += 12) {
-        fillRect(level, 4, row, 10, 2, Cell.BRICK);
-        fillRect(level, 29, row + 4, 20, 2, Cell.TREES);
-        fillRect(level, 66, row + 2, 9, 3, Cell.STEEL);
+      // 双河堡垒：两条纵河形成三条战线，横向桥口与中央树林让护卫必须轮流看守侧翼。
+      fillRect(level, 17, 0, 4, ESCORT_FIELD_ROWS, Cell.WATER);
+      fillRect(level, 59, 0, 4, ESCORT_FIELD_ROWS, Cell.WATER);
+      fillRect(level, 0, 31, ESCORT_FIELD_COLS, 3, Cell.WATER);
+      fillRect(level, 0, 62, ESCORT_FIELD_COLS, 3, Cell.WATER);
+      for (const row of [10, 38, 72]) {
+        fillRect(level, 17, row, 4, 8, Cell.EMPTY);
+        fillRect(level, 59, row + 4, 4, 8, Cell.EMPTY);
       }
+      for (const col of [5, 34, 68]) {
+        fillRect(level, col, 31, 8, 3, Cell.EMPTY);
+        fillRect(level, col + 2, 62, 8, 3, Cell.EMPTY);
+      }
+      for (const [col, row] of [[3, 7], [24, 12], [45, 8], [66, 15], [4, 69], [26, 75], [47, 70], [67, 78]]) {
+        fillRect(level, col, row, 9, 3, Cell.BRICK);
+        fillRect(level, col + 3, row + 3, 3, 3, Cell.STEEL);
+      }
+      fillRect(level, 26, 38, 28, 18, Cell.TREES);
+      fillRect(level, 30, 43, 20, 8, Cell.ICE);
       break;
     case 4:
-      fillRect(level, 0, 28, ESCORT_FIELD_COLS, 4, Cell.WATER);
-      fillRect(level, 0, 56, ESCORT_FIELD_COLS, 4, Cell.WATER);
-      for (let row = 6; row < 86; row += 10) {
-        fillRect(level, 8, row, 8, 3, Cell.STEEL);
-        fillRect(level, 31, row + 3, 8, 2, Cell.BRICK);
-        fillRect(level, 64, row, 9, 3, Cell.TREES);
+      // 分段要塞：三道壕沟与交错火力点组成推进阶段，砖翼可打穿、钢核必须绕行。
+      for (const row of [20, 43, 66]) {
+        fillRect(level, 0, row, ESCORT_FIELD_COLS, 4, Cell.WATER);
       }
+      for (const [row, a, b] of [[20, 8, 63], [43, 14, 57], [66, 5, 68]]) {
+        fillRect(level, a, row, 9, 4, Cell.EMPTY);
+        fillRect(level, b, row, 8, 4, Cell.EMPTY);
+      }
+      for (const row of [7, 29, 52, 75]) {
+        fillRect(level, 5, row, 9, 3, Cell.STEEL);
+        fillRect(level, 14, row + 1, 12, 2, Cell.BRICK);
+        fillRect(level, 54, row + 1, 12, 2, Cell.BRICK);
+        fillRect(level, 66, row, 9, 3, Cell.STEEL);
+        fillRect(level, 28, row - 1, 8, 5, Cell.TREES);
+        fillRect(level, 44, row - 1, 8, 5, Cell.TREES);
+      }
+      fillRect(level, 18, 25, 14, 8, Cell.ICE);
+      fillRect(level, 48, 49, 14, 8, Cell.ICE);
+      fillRect(level, 20, 72, 40, 7, Cell.ICE);
       break;
     default:
-      fillRect(level, 0, 22, ESCORT_FIELD_COLS, 3, Cell.WATER);
-      fillRect(level, 0, 52, ESCORT_FIELD_COLS, 4, Cell.WATER);
-      fillRect(level, 36, 0, 5, ESCORT_FIELD_ROWS, Cell.ICE);
-      for (let row = 8; row < 84; row += 12) {
-        fillRect(level, 4, row, 12, 2, Cell.TREES);
-        fillRect(level, 48, row + 4, 8, 3, Cell.STEEL);
-        fillRect(level, 66, row, 10, 2, Cell.BRICK);
+      // 终局回廊：环形水障、冰庭院与内外两层掩体，长折线路线不断改变交战方向。
+      fillRect(level, 7, 18, 66, 4, Cell.WATER);
+      fillRect(level, 7, 65, 66, 4, Cell.WATER);
+      fillRect(level, 7, 18, 4, 51, Cell.WATER);
+      fillRect(level, 69, 18, 4, 51, Cell.WATER);
+      for (const [col, row, width, height] of [
+        [20, 18, 9, 4], [51, 18, 9, 4], [20, 65, 9, 4], [51, 65, 9, 4],
+        [7, 31, 4, 9], [7, 50, 4, 9], [69, 31, 4, 9], [69, 50, 4, 9],
+      ]) {
+        fillRect(level, col, row, width, height, Cell.EMPTY);
+      }
+      fillRect(level, 19, 29, 42, 27, Cell.ICE);
+      fillRect(level, 24, 34, 32, 17, Cell.TREES);
+      for (const [col, row] of [[3, 7], [29, 8], [61, 7], [4, 75], [31, 78], [64, 74]]) {
+        fillRect(level, col, row, 12, 3, Cell.BRICK);
+        fillRect(level, col + 4, row + 3, 4, 3, Cell.STEEL);
+      }
+      for (const [col, row] of [[14, 25], [58, 25], [14, 55], [58, 55], [34, 14], [34, 70]]) {
+        fillRect(level, col, row, 8, 2, Cell.STEEL);
+        fillRect(level, col + 2, row + 2, 4, 5, Cell.BRICK);
       }
       break;
   }
@@ -282,6 +385,17 @@ export function createEscortLevel(stage = 1): LevelState {
   for (const [col, row, width, height] of roadblocks[variant]) {
     fillRect(level, col, row, width, height, Cell.BRICK);
   }
+
+  // 地形生成后再次保证四名玩家的固定初始/复活点为 2×2 空地；车辆起始走廊由 carveRoute 保证。
+  const start = route[0];
+  const startDir = routeDirection(start, route[1]);
+  const offsets = [-32, 48, -56, 72];
+  for (const offset of offsets) {
+    const behind = ESCORT_SIZE + 8;
+    const x = start.x + (startDir === 'up' || startDir === 'down' ? offset : startDir === 'left' ? behind : -behind);
+    const y = start.y + (startDir === 'up' || startDir === 'down' ? (startDir === 'up' ? behind : -behind) : offset);
+    fillRect(level, Math.floor(x / SUBTILE), Math.floor(y / SUBTILE), 2, 2, Cell.EMPTY);
+  }
   return level;
 }
 
@@ -294,14 +408,12 @@ export function createEscortState(_level: LevelState, stage = 1): EscortState {
     route,
     routeIndex: 1,
     dir: routeDirection(start, route[1]),
-    hp: ESCORT_MAX_HP,
-    maxHp: ESCORT_MAX_HP,
+    timeLeftTicks: ESCORT_TIME_LIMIT_TICKS,
+    timeLimitTicks: ESCORT_TIME_LIMIT_TICKS,
+    timeExpired: false,
     speed: ESCORT_SPEED,
     moving: false,
     arrived: false,
-    destroyed: false,
-    hitInvulnTicks: 0,
-    shieldTicks: 0,
   };
 }
 
@@ -368,9 +480,18 @@ function overlaps(
 // 1–2 人需占据唯一护卫位；3–4 人需同时占据左右两位。满足后车队才沿路线前进。
 export function updateEscort(state: GameState): void {
   const escort = state.escort;
-  if (!escort || escort.destroyed || escort.arrived) return;
-  if (escort.hitInvulnTicks > 0) escort.hitInvulnTicks--;
-  if (escort.shieldTicks > 0) escort.shieldTicks--;
+  if (!escort || escort.timeExpired || escort.arrived) return;
+
+  // 倒计时只在实际游玩帧推进；暂停 / 开场幕布已在 update.ts 更早返回。
+  // 护送关拾取 shovel 时复用 shovelTicks 暂停计时，车辆本身始终无敌。
+  if (state.shovelTicks <= 0) {
+    escort.timeLeftTicks = Math.max(0, escort.timeLeftTicks - 1);
+    if (escort.timeLeftTicks === 0) {
+      escort.timeExpired = true;
+      escort.moving = false;
+      return;
+    }
+  }
 
   if (!escortHasGuard(state)) {
     escort.moving = false;
@@ -412,13 +533,12 @@ export function updateEscort(state: GameState): void {
   }
 }
 
-// 敌弹命中移动鹰巢：护盾期只拦截，否则扣 1 点耐久。
+// 护送车是所有子弹的无敌实体障碍：命中只会消弹并产生钢铁反馈，不存在伤害或得分收益。
 export function resolveEscortHits(state: GameState): void {
   const escort = state.escort;
-  if (!escort || escort.destroyed || escort.arrived) return;
+  if (!escort || escort.timeExpired || escort.arrived) return;
   for (const bullet of state.bullets) {
-    // 智能坦克的 attacksEagle=false：它只猎杀玩家，不伤害任何基地目标（含护送车）。
-    if (!bullet.alive || !bullet.fromEnemy || !bullet.attacksEagle) continue;
+    if (!bullet.alive) continue;
     if (
       !overlaps(
         bullet.x,
@@ -439,27 +559,6 @@ export function resolveEscortHits(state: GameState): void {
       ticksLeft: EXPLOSION_SMALL_TICKS,
       big: false,
     });
-    if (escort.shieldTicks > 0 || escort.hitInvulnTicks > 0) {
-      state.events.push('steelHit');
-      continue;
-    }
-
-    escort.hp--;
-    escort.hitInvulnTicks = ESCORT_HIT_INVULN_TICKS;
-    state.events.push('explosionSmall');
-    if (escort.hp > 0) continue;
-
-    escort.hp = 0;
-    escort.destroyed = true;
-    escort.moving = false;
-    const off = (EXPLOSION_BIG_SIZE - ESCORT_SIZE) / 2;
-    state.explosions.push({
-      x: escort.x - off,
-      y: escort.y - off,
-      ticksLeft: EXPLOSION_BIG_TICKS,
-      big: true,
-    });
-    state.events.push('eagleDeath');
-    break;
+    state.events.push('steelHit');
   }
 }

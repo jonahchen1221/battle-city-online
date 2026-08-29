@@ -58,6 +58,8 @@ export interface TankState {
   alive: boolean;
   hp: number; // 剩余血量：常规 1，装甲 4；≤0 即毁
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
+  smartStuckTicks: number; // 智能坦克连续尝试追踪却没有位移的帧数
+  smartEscapeTicks: number; // 智能坦克保持当前脱困方向的剩余帧数
   escortFarTicks: number; // 护送关普通敌军落在车后且不在玩家视野内的连续帧数；其他情况恒为 0
   invulnTicks: number; // 护盾剩余帧：>0 时对方子弹穿过、不受伤
   level: number; // star 等级 0..3：影响弹速 / 双弹 / 破钢；死亡 / 复活归 0
@@ -65,7 +67,7 @@ export interface TankState {
   slideTicks: number; // 冰面滑行剩余帧：在冰面上移动时装填为 ICE_SLIDE_TICKS，松开方向键后据此继续滑行
   freezeTicks: number; // 友军冻结剩余帧：被队友子弹击中后 >0，期间不能移动 / 开火（敌人恒为 0）
   weapon: WeaponKind; // 当前武器：初始 / 死亡复活均为 'cannon'，由武器道具替换
-  fireCooldown: number; // 连发冷却剩余帧（仅机枪使用：>0 时不能再射，逐帧递减）
+  fireCooldown: number; // 连发冷却剩余帧（机枪与智能坦克使用：>0 时不能再射，逐帧递减）
   fireBufferTicks: number; // 开火输入缓冲剩余帧：按下沿装填，在场子弹清空后的窗口内自动补发（敌人恒为 0）
   speedBoostTicks: number; // boots 快靴剩余帧：>0 时移动速度 ×BOOTS_SPEED_MULT（speed 基值不变）
   hasBoat: boolean; // boat 船：true 时移动碰撞把水面视为可通行（子弹不受影响），死亡即失
@@ -95,6 +97,8 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     alive: true,
     hp: 1,
     aiTicks: 0,
+    smartStuckTicks: 0,
+    smartEscapeTicks: 0,
     escortFarTicks: 0,
     // 实体化即获无敌：开局直接入场、复活经出生闪光后入场，两条路径都从此值起算。
     invulnTicks: PLAYER_INVULN_TICKS,
@@ -157,6 +161,8 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     hp: enemyHp(kind),
     // 智能坦克出生后立即规划路径；传统敌人仍沿出生朝向行进半秒再做首次随机决策。
     aiTicks: kind === 'smart' ? 0 : AI_DECISION_MIN_TICKS,
+    smartStuckTicks: 0,
+    smartEscapeTicks: 0,
     escortFarTicks: 0,
     invulnTicks: 0, // 敌方无出生护盾，但可拾取 helmet 获得护盾
     level: 0,

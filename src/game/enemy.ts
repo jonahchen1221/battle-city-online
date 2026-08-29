@@ -20,18 +20,23 @@ import {
   ESCORT_ENEMY_COMBAT_BEHIND,
   ESCORT_ENEMY_RECYCLE_BEHIND,
   ESCORT_ENEMY_RECYCLE_TICKS,
+  ESCORT_STOPPED_SPAWN_DIVISOR,
   FIELD_WIDTH,
   FIELD_HEIGHT,
   SMART_AI_REPLAN_TICKS,
+  SMART_AI_STUCK_TICKS,
+  SMART_AI_ESCAPE_TICKS,
+  SMART_AI_FIRE_COOLDOWN_TICKS,
   SMART_AI_BRICK_COST,
   SMART_POWERUP_SEEK_RADIUS,
-  BOSS_MINION_MAX,
+  bossMinionsOnField,
   BOSS_MINION_INTERVAL_TICKS,
   BOSS_MINION_CARRIER_EVERY,
   BOSS_MINION_KINDS_A,
   BOSS_MINION_KINDS_B,
   STAGE_COUNT,
   normalizeStage,
+  STAGE_ENEMY_TOTAL,
 } from '../core/constants';
 import { Cell, LevelState, getCell } from './level';
 import {
@@ -49,7 +54,7 @@ import {
   type PowerupState,
 } from './powerup';
 import { collisionTanks } from './boss';
-import type { GameState } from './state';
+import { createStageEnemyQueue, type GameState } from './state';
 import type { EscortState } from './escort';
 
 // 敌方 AI + 生成器。纯逻辑：一切随机取自 state.rng，可复现。
@@ -395,14 +400,52 @@ function shotThreatensEagle(tank: TankState, dir: Direction, state: GameState): 
   return dir === 'left' ? tank.x >= EAGLE_X + EAGLE_SIZE : tank.x + TANK_SIZE <= EAGLE_X;
 }
 
+// 护送车是不可摧毁的实体障碍。智能坦克若朝车体所在射线开火，炮弹只会立即被吸收，
+// 不应把这种“快速腾出弹位”的情况误当成可以连续压制玩家。
+function shotThreatensEscort(tank: TankState, dir: Direction, state: GameState): boolean {
+  const escort = state.escort;
+  if (!escort) return false;
+  const cx = tank.x + TANK_SIZE / 2;
+  const cy = tank.y + TANK_SIZE / 2;
+  const halfBullet = BULLET_SIZE / 2;
+  if (dir === 'up' || dir === 'down') {
+    if (
+      !rangesOverlap(
+        cx - halfBullet,
+        cx + halfBullet,
+        escort.x,
+        escort.x + ESCORT_SIZE,
+      )
+    ) return false;
+    return dir === 'up'
+      ? tank.y >= escort.y + ESCORT_SIZE
+      : tank.y + TANK_SIZE <= escort.y;
+  }
+  if (
+    !rangesOverlap(
+      cy - halfBullet,
+      cy + halfBullet,
+      escort.y,
+      escort.y + ESCORT_SIZE,
+    )
+  ) return false;
+  return dir === 'left'
+    ? tank.x >= escort.x + ESCORT_SIZE
+    : tank.x + TANK_SIZE <= escort.x;
+}
+
 function fireSmartTank(tank: TankState, state: GameState): void {
   const canFire = tank.fireCooldown === 0 &&
     liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
-  if (!canFire || shotThreatensEagle(tank, tank.dir, state)) return;
+  if (
+    !canFire ||
+    shotThreatensEagle(tank, tank.dir, state) ||
+    shotThreatensEscort(tank, tank.dir, state)
+  ) return;
   const spawned = spawnWeaponBullets(tank, state.nextBulletId, state.level);
   state.nextBulletId += spawned.length;
   for (const bullet of spawned) state.bullets.push(bullet);
-  if (tank.weapon === 'machine') tank.fireCooldown = MACHINE_FIRE_INTERVAL_TICKS;
+  tank.fireCooldown = Math.max(MACHINE_FIRE_INTERVAL_TICKS, SMART_AI_FIRE_COOLDOWN_TICKS);
 }
 
 function oppositeDirection(dir: Direction): Direction {
@@ -416,6 +459,40 @@ function oppositeDirection(dir: Direction): Direction {
     case 'right':
       return 'left';
   }
+}
+
+// A* 刻意不把坦克写进静态路径图，因此多台智能坦克追同一目标时可能选择同一条车道。
+// 卡住后优先尝试两个侧向，再尝试后退；id 奇偶让相邻智能坦克倾向不同侧，减少再次互堵。
+function smartEscapeDirections(blockedDir: Direction, tankId: number): Direction[] {
+  const sides: [Direction, Direction] =
+    blockedDir === 'up' || blockedDir === 'down' ? ['left', 'right'] : ['up', 'down'];
+  if (tankId % 2 !== 0) sides.reverse();
+  return [sides[0], sides[1], oppositeDirection(blockedDir)];
+}
+
+function beginSmartEscape(
+  tank: TankState,
+  blockedDir: Direction,
+  state: GameState,
+  level: LevelState,
+  obstacles: TankState[],
+): boolean {
+  for (const dir of smartEscapeDirections(blockedDir, tank.id)) {
+    // 先用纯数据副本探一步，避免失败候选反复改变真实坦克的朝向或吸附坐标。
+    const probe = { ...tank };
+    const probeObstacles = obstacles.map((obstacle) => obstacle === tank ? probe : obstacle);
+    applyInput(probe, driveInput(dir), level, probeObstacles, state.escort ?? undefined);
+    if (probe.x === tank.x && probe.y === tank.y) continue;
+
+    applyInput(tank, driveInput(dir), level, obstacles, state.escort ?? undefined);
+    tank.smartStuckTicks = 0;
+    tank.smartEscapeTicks = SMART_AI_ESCAPE_TICKS;
+    tank.aiTicks = 0;
+    return true;
+  }
+  // 四周确实封死时继续按原逻辑射击清障，稍后再尝试脱困。
+  tank.smartStuckTicks = 0;
+  return false;
 }
 
 // 垂直↔水平转向可能因“最近 8px 吸附点”压到半砖而被拒绝。若仍原地重复同一规划，
@@ -525,7 +602,22 @@ function pickSpawnSpot(
 // 出生点在上半场随机（见 pickSpawnSpot）；找不到可用落点则 SPAWN_RETRY_TICKS 后重试。
 // 所有敌军出生完毕后停止（胜负判定属后续任务）。
 function updateSpawner(state: GameState, obstacles: TankState[]): void {
-  if (state.enemySpawnTimer > 0) state.enemySpawnTimer--;
+  // 护送关以抵达终点为胜利条件，因此原始 20 台耗尽后循环本关编成，持续保持沿途战斗。
+  // 普通关仍保留有限队列与全歼过关规则。
+  if (
+    state.enemyQueue.length === 0 &&
+    state.escort &&
+    !state.escort.arrived &&
+    !state.escort.timeExpired
+  ) {
+    state.enemyQueue.push(...createStageEnemyQueue(state.stage));
+  }
+
+  const spawnTimerAdvances =
+    !state.escort ||
+    state.escort.moving ||
+    state.tick % ESCORT_STOPPED_SPAWN_DIVISOR === 0;
+  if (state.enemySpawnTimer > 0 && spawnTimerAdvances) state.enemySpawnTimer--;
   if (state.enemyQueue.length === 0) return;
   if (enemyCount(state) >= maxEnemiesOnField(state.playerCount)) return;
   if (state.enemySpawnTimer > 0) return;
@@ -543,7 +635,8 @@ function updateSpawner(state: GameState, obstacles: TankState[]): void {
   state.nextEnemyId++;
   // 出队计数（1 起）：第 4/11/18 台为“携带道具”者（红闪，死亡掉落）。按计数标记，不回看队列下标。
   state.enemiesDequeued++;
-  if (CARRIER_QUEUE_POSITIONS.includes(state.enemiesDequeued)) {
+  const cyclePosition = ((state.enemiesDequeued - 1) % STAGE_ENEMY_TOTAL) + 1;
+  if (CARRIER_QUEUE_POSITIONS.includes(cyclePosition)) {
     tank.carriesPowerup = true;
   }
   state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
@@ -581,7 +674,7 @@ function updateSpawning(state: GameState, level: LevelState, obstacles: TankStat
   state.spawning = remaining;
 }
 
-// 仅护送关：普通敌军若远远落在车辆后方且连续不在任何玩家视野内，就以同一实体、同一血量
+// 仅护送关：任意敌军若远远落在车辆后方且连续不在任何玩家视野内，就以同一实体、同一血量
 // 和携带状态重新进入前方出生闪光。这样不会在玩家眼前消失，也不会永久占住场上敌军名额。
 function recycleEscapedEscortEnemies(state: GameState): void {
   const escort = state.escort;
@@ -589,7 +682,7 @@ function recycleEscapedEscortEnemies(state: GameState): void {
   const recycledIds = new Set<number>();
 
   for (const tank of state.tanks) {
-    if (!tank.alive || isPlayerTank(tank) || tank.kind === 'smart') {
+    if (!tank.alive || isPlayerTank(tank)) {
       tank.escortFarTicks = 0;
       continue;
     }
@@ -609,6 +702,8 @@ function recycleEscapedEscortEnemies(state: GameState): void {
     tank.dir = 'down';
     tank.moving = false;
     tank.aiTicks = AI_DECISION_MIN_TICKS;
+    tank.smartStuckTicks = 0;
+    tank.smartEscapeTicks = 0;
     tank.escortFarTicks = 0;
     tank.slideTicks = 0;
     state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
@@ -682,7 +777,24 @@ function updateSmartEnemy(
   const powerupTarget = smartPowerupTarget(tank, state);
   if (!target && !powerupTarget) {
     tank.moving = false;
+    tank.smartStuckTicks = 0;
+    tank.smartEscapeTicks = 0;
     return;
+  }
+
+  // 脱困一旦开始就保持方向足够久，避免刚侧移一帧又被 A* 拉回原拥堵车道。
+  if (tank.smartEscapeTicks > 0) {
+    const px = tank.x;
+    const py = tank.y;
+    applyInput(tank, driveInput(tank.dir), level, obstacles, state.escort ?? undefined);
+    if (tank.x !== px || tank.y !== py) {
+      tank.smartEscapeTicks--;
+      tank.smartStuckTicks = 0;
+      if (tank.smartEscapeTicks === 0) tank.aiTicks = 0;
+      return;
+    }
+    tank.smartEscapeTicks = 0;
+    tank.aiTicks = 0;
   }
 
   tank.aiTicks--;
@@ -690,6 +802,8 @@ function updateSmartEnemy(
     const aim = aimDirection(tank, target);
     if (aim !== null && !shotThreatensEagle(tank, aim, state)) {
       tank.moving = false;
+      tank.smartStuckTicks = 0;
+      tank.smartEscapeTicks = 0;
       // 转向必然生效（吸附不可用时原地转车头，见 tank.ts turnTank），转完即可开火压制。
       turnTank(tank, aim, level, obstacles, state.escort ?? undefined);
       fireSmartTank(tank, state);
@@ -712,7 +826,10 @@ function updateSmartEnemy(
     recoverFromRejectedTurn(tank, state, obstacles, level);
     return;
   }
-  if (tank.x !== px || tank.y !== py) return;
+  if (tank.x !== px || tank.y !== py) {
+    tank.smartStuckTicks = 0;
+    return;
+  }
 
   // 动态障碍或砖墙使本步失败：立即重算。若替代首步存在则原地转向并尝试；仍失败时开炮清障。
   tank.aiTicks = SMART_AI_REPLAN_TICKS;
@@ -723,8 +840,16 @@ function updateSmartEnemy(
       recoverFromRejectedTurn(tank, state, obstacles, level);
       return;
     }
-    if (tank.x !== px || tank.y !== py) return;
+    if (tank.x !== px || tank.y !== py) {
+      tank.smartStuckTicks = 0;
+      return;
+    }
   }
+  tank.smartStuckTicks++;
+  if (
+    tank.smartStuckTicks >= SMART_AI_STUCK_TICKS &&
+    beginSmartEscape(tank, desired, state, level, obstacles)
+  ) return;
   fireSmartTank(tank, state);
 }
 
@@ -756,14 +881,14 @@ export function updateEnemies(state: GameState, level: LevelState): void {
 
 // ── Boss 关小兵补充器 ──
 // Boss 关不走有限出生队列（enemyQueue 为空），改由此处无限补充：
-// 场上至多 BOSS_MINION_MAX 只、每 BOSS_MINION_INTERVAL_TICKS 帧一只，
+// 场上上限按人数为 2 / 3 / 4 / 5，每 BOSS_MINION_INTERVAL_TICKS 帧补一只，
 // 种类按关（A：basic/fast；B：power/smart 对半随机），每第 BOSS_MINION_CARRIER_EVERY 只携带道具。
 // Boss 已死时停止补充（此时正在走 stageclear 延迟）。落点沿用 pickSpawnSpot 的上半场随机采样。
 function updateBossMinions(state: GameState, obstacles: TankState[]): void {
   const boss = state.boss;
   if (!boss || boss.dead) return;
   if (boss.minionTimer > 0) boss.minionTimer--;
-  if (enemyCount(state) >= BOSS_MINION_MAX) return;
+  if (enemyCount(state) >= bossMinionsOnField(state.playerCount)) return;
   if (boss.minionTimer > 0) return;
 
   // 关号决定种类池：最终战（归一后 = STAGE_COUNT，即第 30 关）用 B 池，其余 Boss 关用 A 池。

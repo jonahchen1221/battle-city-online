@@ -93,7 +93,7 @@ function arm(state: GameState, result: Exclude<Phase, 'playing'>, delay: number)
 export function updatePhase(state: GameState): void {
   // 失败优先级始终高于通关：全歼后仍有 3 秒延迟模拟，期间残留敌弹可能摧毁鹰巢
   // 或击杀最后一名玩家。此时必须用 gameover 覆盖已武装的 stageclear。
-  const defeated = state.eagleDestroyed || state.escort?.destroyed === true || playerDefeated(state);
+  const defeated = state.eagleDestroyed || state.escort?.timeExpired === true || playerDefeated(state);
   if (defeated && state.pendingResult !== 'gameover') {
     arm(state, 'gameover', GAMEOVER_DELAY_TICKS);
   } else if (state.pendingResult === null && stageCleared(state)) {

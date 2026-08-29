@@ -156,6 +156,11 @@ function createStageQueue(stage: number): TankKind[] {
   return queue;
 }
 
+// 护送关抵达前会按本关原始编成循环呼叫援军。普通关仍只使用初始化时的一轮有限队列。
+export function createStageEnemyQueue(stage: number): TankKind[] {
+  return createStageQueue(stage);
+}
+
 // 建立一局全新游戏。stage 为 1-based 关号（默认第 1 关），载入对应关卡地形与出生队列。
 // 开局即进入 'stagestart' 幕布（模拟冻结，STAGE_START_TICKS 帧后自动转 playing），并发一次 stageStart 事件。
 export function createGameState(seed: number, playerCount = 1, stage = 1): GameState {
@@ -180,7 +185,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   const rng = createRng(seed);
   // Boss 关走专属中立池（2 星 + 头盔 + 战靴 + 1 件随机武器），普通关 / 护送关维持原 5 种池。
   const neutralQueue = shuffledNeutralQueue(rng, bossStage);
-  // 护送关首枚中立道具固定为扳手，让玩家在 10 秒后稳定获得一次修车机会。
+  // 护送关首枚中立道具固定为扳手，让玩家在 10 秒后稳定获得一次倒计时奖励。
   if (escort) {
     const wrench = neutralQueue.indexOf('wrench');
     if (wrench > 0) [neutralQueue[0], neutralQueue[wrench]] = [neutralQueue[wrench], neutralQueue[0]];

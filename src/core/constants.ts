@@ -13,28 +13,30 @@ export const FIELD_ROWS = 30; // 子格行数
 export const FIELD_WIDTH = FIELD_COLS * SUBTILE; // 320
 export const FIELD_HEIGHT = FIELD_ROWS * SUBTILE; // 240
 
+// 固定逻辑帧率（与 NES 一致）；所有速度单位为 px/tick
+export const TICKS_PER_SECOND = 60;
+
 // ── 护送关 ──
 // 关卡循环为「普通 → 护送 → Boss」三段（见 stageKind）：护送关是每组的第 2 关。
 // 护送关世界是普通战场的 2×3，渲染仍只展示 320×240 视口。
 export const ESCORT_FIELD_COLS = FIELD_COLS * 2; // 80 子格 = 640px
 export const ESCORT_FIELD_ROWS = FIELD_ROWS * 3; // 90 子格 = 720px
 export const ESCORT_SIZE = 32;
-export const ESCORT_MAX_HP = 12;
 export const ESCORT_SPEED = 0.25;
-export const ESCORT_HIT_INVULN_TICKS = 12;
-export const ESCORT_REPAIR_AMOUNT = 3;
+export const ESCORT_TIME_LIMIT_TICKS = 180 * TICKS_PER_SECOND; // 每张移动关限时 3 分钟
+export const ESCORT_TIME_BONUS_TICKS = 15 * TICKS_PER_SECOND; // 扳手：追回 15 秒
 // 护送关普通敌军维持在车辆周围的战区，避免随机游走后长期占用敌军名额。
 export const ESCORT_ENEMY_COMBAT_HALF_WIDTH = 192;
 export const ESCORT_ENEMY_COMBAT_AHEAD = 220;
 export const ESCORT_ENEMY_COMBAT_BEHIND = 96;
 export const ESCORT_ENEMY_RECYCLE_BEHIND = 160;
+// 车队停驶时援军计时减速，避免玩家清障 / 补护送位期间压力继续按行驶节奏堆积。
+export const ESCORT_STOPPED_SPAWN_DIVISOR = 2;
 
 // 战场在屏幕上的偏移（左侧 16px 灰边，顶部 8px，右侧留 32px HUD 栏）
 export const FIELD_X = 16;
 export const FIELD_Y = 8;
 
-// 固定逻辑帧率（与 NES 一致）；所有速度单位为 px/tick
-export const TICKS_PER_SECOND = 60;
 export const ESCORT_ENEMY_RECYCLE_TICKS = 2 * TICKS_PER_SECOND;
 
 // 美术分辨率倍数（仅限渲染层！）：把所有精灵按 2× 重新绘制、画布内部分辨率放大到
@@ -138,6 +140,11 @@ export const AI_DECISION_RANGE_TICKS = 31; // 30 + rng.int(31) → 30..60
 export const AI_FIRE_DENOM = 60;
 // 智能坦克的目标路径刷新间隔；遇阻时不等计时，立即重新规划并尝试清障。
 export const SMART_AI_REPLAN_TICKS = 12;
+// 智能坦克连续无位移达到此帧数后，进入局部脱困；脱困方向保持一段时间以真正绕开动态障碍。
+export const SMART_AI_STUCK_TICKS = 12;
+export const SMART_AI_ESCAPE_TICKS = 24;
+// 智能坦克的最低射击间隔；避免炮弹在近距离立刻消失时逐帧重新开火。
+export const SMART_AI_FIRE_COOLDOWN_TICKS = 20;
 // A* 中进入含砖位置的代价：优先选择短绕路，无路可绕时仍会主动射穿砖墙。
 export const SMART_AI_BRICK_COST = 6;
 // 关卡敌军总数（单一可调常量；暂不随人数变化）。各档 STAGE_ENEMY_MIX 之和均等于此值。
@@ -495,11 +502,15 @@ export const BOSS_SPIN_SPEED = 1.6;
 export const BOSS_DEATH_EXPLOSION_MIN = 3;
 export const BOSS_DEATH_EXPLOSION_RANGE = 3; // → 3..5
 
-// 小兵（Boss 关专属无限补充）：场上至多 2 只、出生间隔 400 帧、每第 2 只携带道具
+// 小兵（Boss 关专属无限补充）：单人基数 2 只、出生间隔 400 帧、每第 2 只携带道具
 //（Boss 关缺乏输出增益来源，靠携带者掉落给玩家补给）。
 export const BOSS_MINION_MAX = 2;
 export const BOSS_MINION_INTERVAL_TICKS = 400;
 export const BOSS_MINION_CARRIER_EVERY = 2;
+// Boss 小兵上限随合作人数扩展：2 / 3 / 4 / 5。
+export function bossMinionsOnField(playerCount: number): number {
+  return BOSS_MINION_MAX + Math.max(0, playerCount - 1);
+}
 // 各 Boss 关的小兵种类池（按 state.rng 等概率取）：最终战（第 STAGE_COUNT 关）用 B 池，其余用 A 池。
 export const BOSS_MINION_KINDS_A: ReadonlyArray<EnemyKind> = ['basic', 'fast'];
 export const BOSS_MINION_KINDS_B: ReadonlyArray<EnemyKind> = ['power', 'smart'];

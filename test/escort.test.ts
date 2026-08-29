@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import {
   ESCORT_FIELD_COLS,
   ESCORT_FIELD_ROWS,
-  ESCORT_REPAIR_AMOUNT,
   STAGE_COUNT,
+  ESCORT_TIME_BONUS_TICKS,
+  ESCORT_TIME_LIMIT_TICKS,
+  SHOVEL_TICKS,
   TANK_SIZE,
   stageKind,
 } from '../src/core/constants';
@@ -14,10 +16,11 @@ import {
   escortGuardSlots,
   escortHasGuard,
   escortRouteForStage,
+  escortProgress,
   updateEscort,
   resolveEscortHits,
 } from '../src/game/escort';
-import { Cell, setCell } from '../src/game/level';
+import { Cell, getCell, isSolidForTank, setCell } from '../src/game/level';
 import { createEmptyLevel } from '../src/game/level';
 import { applyInput, createEnemy } from '../src/game/tank';
 import { spawnBullet } from '../src/game/bullet';
@@ -66,6 +69,35 @@ test('escort stages sit second in every cycle, with six distinct escort maps and
   assert.equal(new Set(movingStages.map((state) => JSON.stringify(state.escort!.route))).size, 6);
 });
 
+test('each escort map has dense mixed terrain and safe four-player spawn positions', () => {
+  for (const stage of ESCORT_STAGES) {
+    const state = createGameState(100 + stage, 4, stage);
+    const tacticalCells = [Cell.BRICK, Cell.STEEL, Cell.WATER, Cell.TREES, Cell.ICE];
+    const counts = tacticalCells.map(
+      (cell) => state.level.cells.filter((candidate) => candidate === cell).length,
+    );
+    assert.ok(counts.every((count) => count > 0), `stage ${stage} should use all terrain types`);
+    assert.ok(
+      counts.reduce((sum, count) => sum + count, 0) >= 1000,
+      `stage ${stage} should have enough terrain to create tactical lanes`,
+    );
+
+    for (const tank of state.tanks) {
+      const col = Math.floor(tank.x / 8);
+      const row = Math.floor(tank.y / 8);
+      for (let dr = 0; dr < 2; dr++) {
+        for (let dc = 0; dc < 2; dc++) {
+          assert.equal(
+            isSolidForTank(getCell(state.level, col + dc, row + dr)),
+            false,
+            `stage ${stage} player ${tank.playerIndex + 1} spawn should be clear`,
+          );
+        }
+      }
+    }
+  }
+});
+
 test('a turning escort switches direction at a waypoint and rotates its guard slots', () => {
   const state = createGameState(13, 1, 5); // 第 2 次护送 → 第 2 条路线（含转弯）
   const escort = state.escort!;
@@ -91,12 +123,45 @@ test('a turning escort switches direction at a waypoint and rotates its guard sl
   assert.ok(escort.x < corner.x);
 });
 
-test('all six escort routes can be completed through every turn', () => {
+test('escort progress accumulates traveled distance across turns', () => {
+  const escort = createGameState(18, 1, 5).escort!;
+  assert.equal(escortProgress(escort), 0);
+
+  const first = escort.route[0];
+  const second = escort.route[1];
+  const third = escort.route[2];
+  const firstLength = Math.abs(second.x - first.x) + Math.abs(second.y - first.y);
+  const secondLength = Math.abs(third.x - second.x) + Math.abs(third.y - second.y);
+  const total = escort.route.slice(1).reduce((distance, point, index) => {
+    const previous = escort.route[index];
+    return distance + Math.abs(point.x - previous.x) + Math.abs(point.y - previous.y);
+  }, 0);
+
+  escort.routeIndex = 2;
+  escort.x = second.x + (third.x - second.x) / 2;
+  escort.y = second.y + (third.y - second.y) / 2;
+  assert.equal(escortProgress(escort), (firstLength + secondLength / 2) / total);
+
+  const goal = escort.route.at(-1)!;
+  escort.x = goal.x;
+  escort.y = goal.y;
+  escort.routeIndex = escort.route.length;
+  escort.arrived = true;
+  assert.equal(escortProgress(escort), 1);
+});
+
+test('all six tactical escort maps can be completed after destructible roadblocks are cleared', () => {
   for (const stage of ESCORT_STAGES) {
     const state = createGameState(200 + stage, 1, stage);
     const escort = state.escort!;
     const player = state.tanks[0];
-    state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
+    for (let row = 0; row < state.level.rows; row++) {
+      for (let col = 0; col < state.level.cols; col++) {
+        if (getCell(state.level, col, row) === Cell.BRICK) {
+          setCell(state.level, col, row, Cell.EMPTY);
+        }
+      }
+    }
     for (let tick = 0; tick < 10000 && !escort.arrived; tick++) {
       const guard = escortGuardSlots(escort)[0];
       Object.assign(player, { x: guard.x, y: guard.y });
@@ -209,6 +274,7 @@ test('guard slots scale from one required two-cell strip to two simultaneously o
 
 test('players can move through the expanded world but cannot drive through the escort', () => {
   const state = createGameState(8, 1, 2);
+  state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
   const player = state.tanks[0];
   Object.assign(player, { x: 400, y: 600, dir: 'right' as const });
   const right = emptyInput();
@@ -235,7 +301,7 @@ test('players respawn at the original escort-stage spawn after the convoy has mo
   assert.deepEqual({ x: respawn.x, y: respawn.y }, originalSpawn);
 });
 
-test('enemy bullets damage the escort once per hit window, while wrench repairs it', () => {
+test('enemy bullets are blocked without affecting time, while wrench adds time', () => {
   const state = createGameState(3, 1, 2);
   const escort = state.escort!;
   const enemy = createEnemy('basic', 99, 0);
@@ -244,20 +310,20 @@ test('enemy bullets damage the escort once per hit window, while wrench repairs 
   bullet.x = escort.x + 8;
   bullet.y = escort.y;
   state.bullets = [bullet];
-  const before = escort.hp;
+  escort.timeLeftTicks = 60 * 60;
+  const before = escort.timeLeftTicks;
 
   resolveEscortHits(state);
-  assert.equal(escort.hp, before - 1);
+  assert.equal(escort.timeLeftTicks, before);
   assert.equal(bullet.alive, false);
 
   const player = state.tanks.find((tank) => tank.kind === 'player')!;
-  escort.hp = 4;
   state.powerups = [{ kind: 'wrench', x: player.x, y: player.y }];
   tryPickupPowerup(state, 'player');
-  assert.equal(escort.hp, 4 + ESCORT_REPAIR_AMOUNT);
+  assert.equal(escort.timeLeftTicks, before + ESCORT_TIME_BONUS_TICKS);
 });
 
-test('smart tank bullets ignore the escort', () => {
+test('smart tank bullets are blocked by the escort without damaging it', () => {
   const state = createGameState(11, 1, 2);
   const escort = state.escort!;
   const smart = createEnemy('smart', 99, 0);
@@ -266,15 +332,53 @@ test('smart tank bullets ignore the escort', () => {
   bullet.x = escort.x + 8;
   bullet.y = escort.y;
   state.bullets = [bullet];
-  const before = escort.hp;
+  const before = escort.timeLeftTicks;
 
   resolveEscortHits(state);
 
-  assert.equal(escort.hp, before);
-  assert.equal(bullet.alive, true);
+  assert.equal(escort.timeLeftTicks, before);
+  assert.equal(bullet.alive, false);
 });
 
-test('escort arrival clears the stage and destruction has failure priority', () => {
+test('player bullets are blocked by the escort without damaging it', () => {
+  const state = createGameState(12, 1, 2);
+  const escort = state.escort!;
+  const player = state.tanks[0];
+  const bullet = spawnBullet(player, state.nextBulletId++, state.level);
+  bullet.x = escort.x + 8;
+  bullet.y = escort.y;
+  state.bullets = [bullet];
+  const before = escort.timeLeftTicks;
+
+  resolveEscortHits(state);
+
+  assert.equal(escort.timeLeftTicks, before);
+  assert.equal(bullet.alive, false);
+});
+
+test('escort countdown advances during play, pauses for shovel, and expires into game over', () => {
+  const state = createGameState(14, 1, 2);
+  const escort = state.escort!;
+  state.phase = 'playing';
+  escort.timeLeftTicks = 2;
+
+  state.shovelTicks = SHOVEL_TICKS;
+  updateEscort(state);
+  assert.equal(escort.timeLeftTicks, 2);
+
+  state.shovelTicks = 0;
+  updateEscort(state);
+  assert.equal(escort.timeLeftTicks, 1);
+  assert.equal(escort.timeExpired, false);
+  updateEscort(state);
+  assert.equal(escort.timeLeftTicks, 0);
+  assert.equal(escort.timeExpired, true);
+
+  updatePhase(state);
+  assert.equal(state.pendingResult, 'gameover');
+});
+
+test('escort arrival clears the stage and time expiry has failure priority', () => {
   const state = createGameState(4, 1, 2);
   const escort = state.escort!;
   state.phase = 'playing';
@@ -282,7 +386,15 @@ test('escort arrival clears the stage and destruction has failure priority', () 
   updatePhase(state);
   assert.equal(state.pendingResult, 'stageclear');
 
-  escort.destroyed = true;
+  escort.timeExpired = true;
   updatePhase(state);
   assert.equal(state.pendingResult, 'gameover');
+});
+
+test('new escort stages start with the full countdown and no health fields', () => {
+  const escort = createGameState(15, 1, 2).escort!;
+  assert.equal(escort.timeLeftTicks, ESCORT_TIME_LIMIT_TICKS);
+  assert.equal(escort.timeLimitTicks, ESCORT_TIME_LIMIT_TICKS);
+  assert.equal('hp' in escort, false);
+  assert.equal('maxHp' in escort, false);
 });

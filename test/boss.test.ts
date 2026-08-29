@@ -30,6 +30,7 @@ import {
   isBossStage,
   stageKind,
   bossMaxHp,
+  bossMinionsOnField,
 } from '../src/core/constants';
 import { createGameState, nextStage, type GameState } from '../src/game/state';
 import { update } from '../src/game/update';
@@ -565,6 +566,18 @@ test('Boss 关小兵：场上至多 2 只、按间隔补充、每第 2 只携带
   }
   assert.ok(peak > 0, '推进 1500 帧后应已补充过小兵');
   assert.ok(peak <= BOSS_MINION_MAX, `场上小兵峰值 ${peak} 超过上限 ${BOSS_MINION_MAX}`);
+});
+
+test('Boss minion cap scales from two to five with player count', () => {
+  assert.deepEqual([1, 2, 3, 4].map(bossMinionsOnField), [2, 3, 4, 5]);
+
+  const state = playingAt(35, 4, 6);
+  const boss = state.boss!;
+  for (let i = 0; i < bossMinionsOnField(state.playerCount) + 2; i++) {
+    boss.minionTimer = 0;
+    updateEnemies(state, state.level);
+  }
+  assert.equal(enemiesOnField(state), bossMinionsOnField(state.playerCount));
 });
 
 test('Boss 关 B（最终战）的小兵为 power / smart', () => {

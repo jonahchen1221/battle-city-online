@@ -66,7 +66,7 @@ export interface BulletState {
   ownerId: number;
   ownerPlayerIndex: number; // 射手的玩家序号（玩家弹为其 playerIndex，敌弹为 -1）：用于击杀记分归属
   fromEnemy: boolean; // 阵营：true=敌弹（只打玩家），false=玩家弹（只打敌人）
-  attacksEagle: boolean; // 智能坦克弹为 false：不伤害普通鹰巢或护送车，只攻击玩家
+  attacksEagle: boolean; // 智能坦克弹为 false：不伤害普通鹰巢；护送车对所有子弹均无敌且会挡弹
   alive: boolean;
   // 大地图中记录开火瞬间的逻辑视口；子弹越过该固定边界即静默销毁。
   // 普通单屏关为 null，继续由地图实体边界按经典规则处理。

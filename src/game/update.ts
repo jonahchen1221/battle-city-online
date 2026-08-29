@@ -97,7 +97,7 @@ export function update(state: GameState, inputs: InputState[]): void {
   state.phaseTicks++;
   const level = state.level;
 
-  // 道具计时递减。timer / hourglass 按阵营分别控制；shovel 仍是玩家基地钢化计时。
+  // 道具与武器冷却计时递减。timer / hourglass 按阵营分别控制；shovel 仍是玩家基地钢化计时。
   // shovel：钢化护墙逐帧递减，归零那帧恢复砖墙。
   if (state.playerFreezeTicks > 0) state.playerFreezeTicks--;
   if (state.playerSlowTicks > 0) state.playerSlowTicks--;

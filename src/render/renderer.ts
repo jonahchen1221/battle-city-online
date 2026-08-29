@@ -54,6 +54,7 @@ import {
   COLOR_BOSS_LASER_EDGE,
   COLOR_BOSS_FREEZE,
   ESCORT_SIZE,
+  TICKS_PER_SECOND,
 } from '../core/constants';
 import { GameState } from '../game/state';
 import { Cell, LevelState, cellIndex, getCell } from '../game/level';
@@ -62,6 +63,7 @@ import {
   escortGuardOccupancy,
   escortGuardSlots,
   escortHasGuard,
+  escortProgress,
 } from '../game/escort';
 import {
   SpriteAtlas,
@@ -349,7 +351,6 @@ export class Renderer {
     const y = snapArt(FIELD_Y + escort.y);
     const treadShift = escort.moving && Math.floor(state.tick / TRACK_ANIM_TICKS) % 2 === 1 ? 2 : 0;
 
-    if (escort.destroyed) ctx.globalAlpha = 0.5;
     const horizontal = escort.dir === 'left' || escort.dir === 'right';
     ctx.fillStyle = '#171c19';
     if (horizontal) {
@@ -360,11 +361,11 @@ export class Renderer {
         ctx.fillRect((x + col) * ART_SCALE, (y + 1) * ART_SCALE, 3 * ART_SCALE, 5 * ART_SCALE);
         ctx.fillRect((x + col) * ART_SCALE, (y + 26) * ART_SCALE, 3 * ART_SCALE, 5 * ART_SCALE);
       }
-      ctx.fillStyle = escort.destroyed ? '#4a4f4b' : '#6f8c4b';
+      ctx.fillStyle = '#6f8c4b';
       ctx.fillRect((x + 2) * ART_SCALE, (y + 6) * ART_SCALE, 28 * ART_SCALE, 20 * ART_SCALE);
-      ctx.fillStyle = escort.destroyed ? '#2c302d' : '#a3b65f';
+      ctx.fillStyle = '#a3b65f';
       ctx.fillRect((x + 5) * ART_SCALE, (y + 9) * ART_SCALE, 4 * ART_SCALE, 14 * ART_SCALE);
-      drawTile(ctx, escort.destroyed ? atlas.eagleDestroyed : atlas.eagle, x + 8, y + 8);
+      drawTile(ctx, atlas.eagle, x + 8, y + 8);
     } else {
       ctx.fillRect(x * ART_SCALE, y * ART_SCALE, 7 * ART_SCALE, ESCORT_SIZE * ART_SCALE);
       ctx.fillRect((x + 25) * ART_SCALE, y * ART_SCALE, 7 * ART_SCALE, ESCORT_SIZE * ART_SCALE);
@@ -373,30 +374,18 @@ export class Renderer {
         ctx.fillRect((x + 1) * ART_SCALE, (y + row) * ART_SCALE, 5 * ART_SCALE, 3 * ART_SCALE);
         ctx.fillRect((x + 26) * ART_SCALE, (y + row) * ART_SCALE, 5 * ART_SCALE, 3 * ART_SCALE);
       }
-      ctx.fillStyle = escort.destroyed ? '#4a4f4b' : '#6f8c4b';
+      ctx.fillStyle = '#6f8c4b';
       ctx.fillRect((x + 6) * ART_SCALE, (y + 2) * ART_SCALE, 20 * ART_SCALE, 28 * ART_SCALE);
-      ctx.fillStyle = escort.destroyed ? '#2c302d' : '#a3b65f';
+      ctx.fillStyle = '#a3b65f';
       ctx.fillRect((x + 9) * ART_SCALE, (y + 5) * ART_SCALE, 14 * ART_SCALE, 4 * ART_SCALE);
-      drawTile(ctx, escort.destroyed ? atlas.eagleDestroyed : atlas.eagle, x + 8, y + 10);
-    }
-    ctx.globalAlpha = 1;
-
-    if (escort.shieldTicks > 0 && Math.floor(state.tick / SHIELD_ANIM_TICKS) % 2 === 0) {
-      ctx.strokeStyle = '#78d8f8';
-      ctx.lineWidth = ART_SCALE;
-      ctx.strokeRect(
-        (x - 2) * ART_SCALE,
-        (y - 2) * ART_SCALE,
-        (ESCORT_SIZE + 4) * ART_SCALE,
-        (ESCORT_SIZE + 4) * ART_SCALE,
-      );
+      drawTile(ctx, atlas.eagle, x + 8, y + 10);
     }
   }
 
   // 车辆护卫位：每位由连续两格组成；四角框、分格线与箭头均不使用容易误读为路线的“+”。
   private drawEscortGuardSlots(state: GameState): void {
     const escort = state.escort;
-    if (!escort || escort.destroyed || escort.arrived) return;
+    if (!escort || escort.timeExpired || escort.arrived) return;
     const { ctx } = this;
     const slots = escortGuardSlots(escort, state.playerCount);
     const occupied = escortGuardOccupancy(state);
@@ -470,34 +459,58 @@ export class Renderer {
     const x = FIELD_X + 4;
     const y = FIELD_Y + 4;
     ctx.fillStyle = 'rgba(0,0,0,0.82)';
-    ctx.fillRect(x * ART_SCALE, y * ART_SCALE, 112 * ART_SCALE, 21 * ART_SCALE);
+    ctx.fillRect(x * ART_SCALE, y * ART_SCALE, 176 * ART_SCALE, 27 * ART_SCALE);
     drawTextOutlined(ctx, atlas, 'ESCORT', x + 4, y + 3, '#ffffff');
     const guarded = escortHasGuard(state);
-    const status = escort.destroyed
-      ? 'DOWN'
+    const timerPaused = state.shovelTicks > 0;
+    const status = escort.timeExpired
+      ? 'TIME'
       : escort.arrived
         ? 'SAFE'
+        : timerPaused
+          ? 'HOLD'
         : escort.moving
           ? 'GO'
           : !guarded
             ? 'WAIT'
             : 'STOP';
-    const statusColor = escort.destroyed ? '#f85838' : escort.moving ? '#78e048' : '#f0c840';
-    drawTextOutlined(ctx, atlas, status, x + 72, y + 3, statusColor);
+    const urgent = escort.timeLeftTicks <= 30 * TICKS_PER_SECOND;
+    const statusColor = escort.timeExpired || urgent
+      ? '#f85838'
+      : timerPaused
+        ? '#78d8f8'
+        : escort.moving
+          ? '#78e048'
+          : '#f0c840';
+    drawTextOutlined(ctx, atlas, status, x + 56, y + 3, statusColor);
+    const secondsLeft = Math.ceil(escort.timeLeftTicks / TICKS_PER_SECOND);
+    drawTextOutlined(ctx, atlas, `${secondsLeft}`, x + 104, y + 3, statusColor);
+    const progress = escortProgress(escort);
+    const progressPercent = escort.arrived ? 100 : Math.min(99, Math.floor(progress * 100));
+    drawTextOutlined(ctx, atlas, `${progressPercent}%`, x + 140, y + 3, '#78d8f8');
     const barX = x + 4;
     const barY = y + 14;
-    const barW = 104;
+    const barW = 168;
     ctx.fillStyle = '#303632';
     ctx.fillRect(barX * ART_SCALE, barY * ART_SCALE, barW * ART_SCALE, 4 * ART_SCALE);
-    const ratio = escort.maxHp > 0 ? escort.hp / escort.maxHp : 0;
-    ctx.fillStyle = ratio > 0.5 ? '#70dc58' : ratio > 0.25 ? '#f0c840' : '#f85838';
+    const ratio = escort.timeLimitTicks > 0 ? escort.timeLeftTicks / escort.timeLimitTicks : 0;
+    ctx.fillStyle = timerPaused ? '#78d8f8' : ratio > 0.5 ? '#70dc58' : ratio > 0.25 ? '#f0c840' : '#f85838';
     ctx.fillRect(barX * ART_SCALE, barY * ART_SCALE, Math.round(barW * ratio) * ART_SCALE, 4 * ART_SCALE);
+    ctx.fillStyle = '#303632';
+    ctx.fillRect(barX * ART_SCALE, (barY + 7) * ART_SCALE, barW * ART_SCALE, 3 * ART_SCALE);
+    ctx.fillStyle = '#78d8f8';
+    ctx.fillRect(
+      barX * ART_SCALE,
+      (barY + 7) * ART_SCALE,
+      Math.round(barW * progress) * ART_SCALE,
+      3 * ART_SCALE,
+    );
 
     const screenX = escort.x + ESCORT_SIZE / 2 - cameraX;
     const screenY = escort.y + ESCORT_SIZE / 2 - cameraY;
     if (screenX >= 0 && screenX <= FIELD_WIDTH && screenY >= 0 && screenY <= FIELD_HEIGHT) return;
     const markerX = FIELD_X + Math.max(8, Math.min(FIELD_WIDTH - 14, screenX));
-    const markerY = FIELD_Y + Math.max(28, Math.min(FIELD_HEIGHT - 14, screenY));
+    const markerY = FIELD_Y + Math.max(36, Math.min(FIELD_HEIGHT - 14, screenY));
     ctx.fillStyle = '#050706';
     ctx.fillRect((markerX - 3) * ART_SCALE, (markerY - 3) * ART_SCALE, 13 * ART_SCALE, 13 * ART_SCALE);
     drawTextOutlined(ctx, atlas, 'E', markerX, markerY, statusColor);

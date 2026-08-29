@@ -14,7 +14,7 @@ const POWERUP_TICKER_COPY: Record<PowerupKind, { name: string; effect: string }>
   grenade: { name: '手榴弹', effect: '摧毁所有敌军' },
   tank: { name: '奖励坦克', effect: '增加一条生命' },
   timer: { name: '时钟', effect: '冻结敌军 10 秒' },
-  shovel: { name: '铁铲', effect: '基地围墙强化 20 秒' },
+  shovel: { name: '铁铲', effect: '强化基地；护送关暂停计时 20 秒' },
   helmet: { name: '头盔', effect: '无敌 10 秒' },
   wpnSpread: { name: '散射炮', effect: '三向射击' },
   wpnSpiral: { name: '螺旋炮', effect: '波浪弹道' },
@@ -24,7 +24,7 @@ const POWERUP_TICKER_COPY: Record<PowerupKind, { name: string; effect: string }>
   boat: { name: '船', effect: '阵亡前可以渡水' },
   ghost: { name: '幽灵', effect: '穿越砖墙 10 秒' },
   hourglass: { name: '沙漏', effect: '敌军减速 12 秒' },
-  wrench: { name: '扳手', effect: '修复基地围墙' },
+  wrench: { name: '扳手', effect: '修复基地；护送关增加 15 秒' },
   drill: { name: '钻头', effect: '炮弹击穿钢墙' },
 };
 
