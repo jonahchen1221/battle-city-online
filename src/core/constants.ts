@@ -172,6 +172,10 @@ export const SMART_AI_ESCAPE_TICKS = 24;
 export const SMART_AI_FIRE_COOLDOWN_TICKS = 20;
 // A* 中进入含砖位置的代价：优先选择短绕路，无路可绕时仍会主动射穿砖墙。
 export const SMART_AI_BRICK_COST = 6;
+// 智能坦克预判玩家弹道的时间窗；36 帧足以让基础速度的智能坦克横移出一条 4px 弹道。
+export const SMART_AI_DODGE_LOOKAHEAD_TICKS = 36;
+// 刚移出弹道后继续侧移片刻，避免 A* 立即把坦克拉回尚未通过的炮弹前。
+export const SMART_AI_DODGE_COMMIT_TICKS = 8;
 // 关卡敌军总数（单一可调常量；暂不随人数变化）。各档 STAGE_ENEMY_MIX 之和均等于此值。
 // Boss 关不走有限队列（编成为空），故不受此值约束。
 export const STAGE_ENEMY_TOTAL = 20;

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState } from '../src/game/state';
-import { createEnemy } from '../src/game/tank';
+import { createEnemy, createPlayer } from '../src/game/tank';
 import { updateEnemies } from '../src/game/enemy';
 import { update } from '../src/game/update';
 import { emptyInput } from '../src/core/types';
@@ -91,6 +91,96 @@ test('smart enemy uses pathfinding to close the distance to the nearest player',
   const after = Math.abs(player.x - smart.x) + Math.abs(player.y - smart.y);
 
   assert.ok(after < before, `expected smart tank to approach player: ${before} -> ${after}`);
+});
+
+test('smart enemy predicts an incoming player bullet and sidesteps its firing lane', () => {
+  const state = createGameState(120, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 80, y: 160, dir: 'up' as const });
+  Object.assign(smart, { x: 80, y: 80, dir: 'down' as const, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.bullets = [spawnBullet(player, state.nextBulletId++, state.level)];
+
+  updateEnemies(state, state.level);
+
+  assert.ok(smart.x < 80, `expected an even-id smart tank to dodge left, got x=${smart.x}`);
+  assert.equal(smart.y, 80);
+  assert.equal(smart.dir, 'left');
+  assert.equal(state.bullets.length, 1, 'dodging should take priority over aimed fire');
+
+  for (let tick = 0; tick < 40; tick++) update(state, [emptyInput()]);
+  assert.equal(smart.alive, true, 'smart tank should stay out of the lane until the bullet passes');
+});
+
+test('smart enemy picks the open dodge side when the other side is walled off', () => {
+  const state = createGameState(121, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  const level = createEmptyLevel();
+  for (const row of [10, 11]) setCell(level, 9, row, Cell.STEEL);
+  Object.assign(player, { x: 80, y: 160, dir: 'up' as const });
+  Object.assign(smart, { x: 80, y: 80, dir: 'down' as const, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = level;
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.bullets = [spawnBullet(player, state.nextBulletId++, level)];
+
+  updateEnemies(state, level);
+
+  assert.ok(smart.x > 80, `expected the smart tank to use the open right side, got x=${smart.x}`);
+  assert.equal(smart.dir, 'right');
+});
+
+test('smart enemy does not dodge one projectile into the path of another', () => {
+  const state = createGameState(123, 1, 1);
+  const player = state.tanks[0];
+  const leftShooter = createPlayer(1, 9);
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 80, y: 160, dir: 'up' as const });
+  Object.assign(leftShooter, { x: 70, y: 160, dir: 'up' as const, level: 1 });
+  Object.assign(smart, { x: 80, y: 80, dir: 'down' as const, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.bullets = [
+    spawnBullet(player, state.nextBulletId++, state.level),
+    spawnBullet(leftShooter, state.nextBulletId++, state.level),
+  ];
+
+  updateEnemies(state, state.level);
+
+  assert.ok(smart.x > 80, `expected the smart tank to avoid the second bullet on its left, got x=${smart.x}`);
+  assert.equal(smart.dir, 'right');
+});
+
+test('smart enemy trusts solid cover instead of dodging a bullet that will hit steel', () => {
+  const state = createGameState(122, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  const level = createEmptyLevel();
+  for (const col of [10, 11]) setCell(level, col, 15, Cell.STEEL);
+  Object.assign(player, { x: 80, y: 160, dir: 'up' as const });
+  Object.assign(smart, { x: 80, y: 80, dir: 'down' as const, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = level;
+  state.tanks = [smart]; // 射手可以已阵亡；它留下的在场炮弹仍需独立判断。
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.bullets = [spawnBullet(player, state.nextBulletId++, level)];
+
+  updateEnemies(state, level);
+
+  assert.deepEqual({ x: smart.x, y: smart.y }, { x: 80, y: 80 });
+  assert.equal(smart.moving, false);
 });
 
 test('smart enemy plans around another tank instead of entering a blocked lane', () => {

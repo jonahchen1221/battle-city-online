@@ -64,7 +64,7 @@ export interface TankState {
   hitFlashTicks: number; // 玩家非致命受击白闪；敌军恒为 0（装甲敌军沿用 hp 周期闪烁）
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
   smartStuckTicks: number; // 智能坦克连续尝试追踪却没有位移的帧数
-  smartEscapeTicks: number; // 智能坦克保持当前脱困方向的剩余帧数
+  smartEscapeTicks: number; // 智能坦克保持当前脱困或闪避方向的剩余帧数
   escortFarTicks: number; // 护送关普通敌军落在车后且不在玩家视野内的连续帧数；其他情况恒为 0
   invulnTicks: number; // 护盾剩余帧：>0 时对方子弹穿过、不受伤
   level: number; // star 等级 0..3；玩家路线见 upgradePlayerTank，死亡 / 复活归 0
