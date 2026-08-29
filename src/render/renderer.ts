@@ -87,6 +87,8 @@ import {
   escortGuardSlots,
   escortHasGuard,
   escortProgress,
+  escortPushSlot,
+  escortPusherCount,
 } from '../game/escort';
 import {
   SpriteAtlas,
@@ -193,6 +195,8 @@ export class Renderer {
     this.drawTanks(state, playerNames);
     // 护卫位压在坦克轮廓上：玩家就位后仍能看到绿色角标确认已激活。
     this.drawEscortGuardSlots(state);
+    // 推车位同样压在坦克之上，但用更暗的虚线，读图优先级低于护卫位。
+    this.drawEscortPushSlot(state);
     this.drawBullets(state);
     // 瞄准线 / 激光绘于坦克之上：前摇与激活相都必须一眼可辨（这是全部躲避判断的依据）。
     this.drawBossBeams(state);
@@ -485,6 +489,63 @@ export class Renderer {
       const arrowY = y + (slot.height - TANK_SIZE) / 2;
       for (const [ox, oy] of arrowDots[slot.inward]) {
         ctx.fillRect((arrowX + ox) * ART_SCALE, (arrowY + oy) * ART_SCALE, 2 * ART_SCALE, 2 * ART_SCALE);
+      }
+    }
+  }
+
+  // 车尾推车位：比护卫位更暗的虚线框，有人站入时点亮；车辆被推着加速时补两条速度线。
+  private drawEscortPushSlot(state: GameState): void {
+    const escort = state.escort;
+    if (!escort || escort.timeExpired || escort.arrived) return;
+    const { ctx } = this;
+    const slot = escortPushSlot(escort);
+    const x = snapArt(FIELD_X + slot.x);
+    const y = snapArt(FIELD_Y + slot.y);
+    const pushers = escortPusherCount(state);
+    const active = pushers > 0;
+
+    ctx.fillStyle = active ? 'rgba(20,58,26,0.34)' : 'rgba(38,32,14,0.24)';
+    ctx.fillRect(x * ART_SCALE, y * ART_SCALE, slot.width * ART_SCALE, slot.height * ART_SCALE);
+
+    // 虚线框：4px 实、4px 空，颜色比护卫位暗一档，避免抢走护卫位的视觉优先级。
+    ctx.fillStyle = active ? '#58a838' : '#786830';
+    const dash = 4;
+    const thick = 1;
+    for (let offset = 0; offset < slot.width; offset += dash * 2) {
+      const len = Math.min(dash, slot.width - offset);
+      ctx.fillRect((x + offset) * ART_SCALE, y * ART_SCALE, len * ART_SCALE, thick * ART_SCALE);
+      ctx.fillRect(
+        (x + offset) * ART_SCALE,
+        (y + slot.height - thick) * ART_SCALE,
+        len * ART_SCALE,
+        thick * ART_SCALE,
+      );
+    }
+    for (let offset = 0; offset < slot.height; offset += dash * 2) {
+      const len = Math.min(dash, slot.height - offset);
+      ctx.fillRect(x * ART_SCALE, (y + offset) * ART_SCALE, thick * ART_SCALE, len * ART_SCALE);
+      ctx.fillRect(
+        (x + slot.width - thick) * ART_SCALE,
+        (y + offset) * ART_SCALE,
+        thick * ART_SCALE,
+        len * ART_SCALE,
+      );
+    }
+
+    // 速度线：仅在真的被推着走时出现，条数等于推车手数，向车后方甩出。
+    if (!active || !escort.moving) return;
+    const horizontal = escort.dir === 'left' || escort.dir === 'right';
+    const away = escort.dir === 'up' || escort.dir === 'left' ? 1 : -1;
+    const phase = Math.floor(state.tick / 4) % 3;
+    for (let i = 0; i < pushers; i++) {
+      const lane = i === 0 ? 8 : 20;
+      const reach = 3 + phase * 2;
+      if (horizontal) {
+        const lineX = away > 0 ? x + slot.width : x - reach;
+        ctx.fillRect(lineX * ART_SCALE, (y + lane) * ART_SCALE, reach * ART_SCALE, ART_SCALE);
+      } else {
+        const lineY = away > 0 ? y + slot.height : y - reach;
+        ctx.fillRect((x + lane) * ART_SCALE, lineY * ART_SCALE, ART_SCALE, reach * ART_SCALE);
       }
     }
   }

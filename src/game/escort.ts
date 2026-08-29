@@ -3,6 +3,8 @@ import {
   BULLET_SIZE,
   ESCORT_FIELD_COLS,
   ESCORT_FIELD_ROWS,
+  ESCORT_PUSH_BONUS_PER_TANK,
+  ESCORT_PUSH_MAX_TANKS,
   ESCORT_SIZE,
   ESCORT_SPEED,
   ESCORT_TIME_LIMIT_TICKS,
@@ -111,6 +113,37 @@ export function escortGuardSlots(escort: EscortState, playerCount = 1): EscortGu
   return playerCount >= 3 ? slots : [slots[0]];
 }
 
+export interface EscortRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// 护卫位与推车位共用的站位口径：坦克中心点落入矩形即算就位；断线玩家一律不计。
+function countPlayersInRect(
+  state: GameState,
+  rect: EscortRect,
+  activePlayers?: readonly boolean[],
+): number {
+  let count = 0;
+  for (const tank of state.tanks) {
+    if (!tank.alive || tank.kind !== 'player') continue;
+    if (activePlayers && activePlayers[tank.playerIndex] !== true) continue;
+    const centerX = tank.x + TANK_SIZE / 2;
+    const centerY = tank.y + TANK_SIZE / 2;
+    if (
+      centerX >= rect.x &&
+      centerX <= rect.x + rect.width &&
+      centerY >= rect.y &&
+      centerY <= rect.y + rect.height
+    ) {
+      count++;
+    }
+  }
+  return count;
+}
+
 // 以玩家坦克中心进入两格标记带为准；同一护卫位只需一名玩家占据。
 export function escortGuardOccupancy(
   state: GameState,
@@ -122,20 +155,43 @@ export function escortGuardOccupancy(
     ? activePlayers.reduce((count, active) => count + (active ? 1 : 0), 0)
     : state.activePlayerCount;
   const slots = escortGuardSlots(escort, activePlayerCount);
-  return slots.map((slot) =>
-    state.tanks.some((tank) => {
-      if (!tank.alive || tank.kind !== 'player') return false;
-      if (activePlayers && activePlayers[tank.playerIndex] !== true) return false;
-      const centerX = tank.x + TANK_SIZE / 2;
-      const centerY = tank.y + TANK_SIZE / 2;
-      return (
-        centerX >= slot.x &&
-        centerX <= slot.x + slot.width &&
-        centerY >= slot.y &&
-        centerY <= slot.y + slot.height
-      );
-    }),
+  return slots.map((slot) => countPlayersInRect(state, slot, activePlayers) > 0);
+}
+
+// 推车位：车辆正后方（与行进方向相反的一侧）一条与车身同宽、纵深一个坦克位的矩形，
+// 与两侧护卫位互不重叠，因此同一玩家不可能既护卫又推车。转弯时随 dir 一并旋转。
+export function escortPushSlot(escort: EscortState): EscortRect {
+  switch (escort.dir) {
+    case 'up':
+      return { x: escort.x, y: escort.y + ESCORT_SIZE, width: ESCORT_SIZE, height: TANK_SIZE };
+    case 'down':
+      return { x: escort.x, y: escort.y - TANK_SIZE, width: ESCORT_SIZE, height: TANK_SIZE };
+    case 'left':
+      return { x: escort.x + ESCORT_SIZE, y: escort.y, width: TANK_SIZE, height: ESCORT_SIZE };
+    case 'right':
+      return { x: escort.x - TANK_SIZE, y: escort.y, width: TANK_SIZE, height: ESCORT_SIZE };
+  }
+}
+
+// 车尾推车手数量，至多计 ESCORT_PUSH_MAX_TANKS 名；不限定 playerIndex，谁站进去都算。
+export function escortPusherCount(
+  state: GameState,
+  activePlayers?: readonly boolean[],
+): number {
+  const escort = state.escort;
+  if (!escort) return 0;
+  return Math.min(
+    ESCORT_PUSH_MAX_TANKS,
+    countPlayersInRect(state, escortPushSlot(escort), activePlayers),
   );
+}
+
+// 推车加速系数：每名推车手 +ESCORT_PUSH_BONUS_PER_TANK。无人推车时为 1（车速不变）。
+function escortPushSpeedScale(
+  state: GameState,
+  activePlayers?: readonly boolean[],
+): number {
+  return 1 + ESCORT_PUSH_BONUS_PER_TANK * escortPusherCount(state, activePlayers);
 }
 
 export function escortHasGuard(
@@ -644,6 +700,7 @@ function overlaps(
 }
 
 // 只要至少一个护卫位有人，车队就沿路线前进；3–4 人局只占一侧时为半速，两侧齐备为全速。
+// 在此之上，车尾推车位每站一名玩家再叠加一档加速（至多两名）。
 export function updateEscort(state: GameState, activePlayers?: readonly boolean[]): void {
   const escort = state.escort;
   if (!escort || escort.timeExpired || escort.arrived) return;
@@ -674,7 +731,9 @@ export function updateEscort(state: GameState, activePlayers?: readonly boolean[
   escort.dir = routeDirection(escort, target);
   const dx = target.x - escort.x;
   const dy = target.y - escort.y;
-  const step = escort.speed * guardSpeedScale;
+  // 车速 = 基础速度 × 护卫位占比 × 推车加成；护卫位没人时上面已提前返回，
+  // 因此单纯站在车尾（或车辆被路障 / 敌军挡住、已到站）不会产生任何位移。
+  const step = escort.speed * guardSpeedScale * escortPushSpeedScale(state, activePlayers);
   const nextX = escort.x + Math.sign(dx) * Math.min(Math.abs(dx), step);
   const nextY = escort.y + Math.sign(dy) * Math.min(Math.abs(dy), step);
   let blocked = rectHitsSolid(state.level, nextX, nextY, ESCORT_SIZE);

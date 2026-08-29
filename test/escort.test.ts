@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ESCORT_FIELD_COLS,
   ESCORT_FIELD_ROWS,
+  ESCORT_SIZE,
   ESCORT_TIME_BONUS_TICKS,
   SHOVEL_TICKS,
   TANK_SIZE,
@@ -11,6 +12,8 @@ import { createGameState } from '../src/game/state';
 import {
   escortGuardSlots,
   escortHasGuard,
+  escortPushSlot,
+  escortPusherCount,
   updateEscort,
   resolveEscortHits,
 } from '../src/game/escort';
@@ -167,6 +170,94 @@ test('guard slots scale from one full-speed strip to two independently contribut
       `${playerCount}P convoy should move at full speed with both guards`,
     );
   }
+});
+
+test('the push slot sits behind the convoy and rotates with its heading', () => {
+  const state = createGameState(600, 1, 2);
+  const escort = state.escort!;
+
+  escort.dir = 'up';
+  assert.deepEqual(escortPushSlot(escort), {
+    x: escort.x,
+    y: escort.y + ESCORT_SIZE,
+    width: ESCORT_SIZE,
+    height: TANK_SIZE,
+  });
+
+  escort.dir = 'right';
+  assert.deepEqual(escortPushSlot(escort), {
+    x: escort.x - TANK_SIZE,
+    y: escort.y,
+    width: TANK_SIZE,
+    height: ESCORT_SIZE,
+  });
+});
+
+test('pushers at the tail add 25% speed each, capped at two', () => {
+  const state = createGameState(601, 4, 2);
+  const escort = state.escort!;
+  state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
+  const slots = escortGuardSlots(escort, 4);
+  Object.assign(state.tanks[0], { x: slots[0].x, y: slots[0].y });
+  Object.assign(state.tanks[1], { x: slots[1].x, y: slots[1].y });
+  const push = escortPushSlot(escort);
+
+  // 两个护卫位都有人 = 基准全速，车尾还没人。
+  assert.equal(escortPusherCount(state), 0);
+  let before = escort.y;
+  updateEscort(state);
+  assert.equal(before - escort.y, escort.speed);
+
+  Object.assign(state.tanks[2], { x: push.x, y: push.y });
+  assert.equal(escortPusherCount(state), 1);
+  before = escort.y;
+  updateEscort(state);
+  assert.equal(before - escort.y, escort.speed * 1.25);
+
+  Object.assign(state.tanks[3], { x: push.x + TANK_SIZE, y: push.y });
+  assert.equal(escortPusherCount(state), 2);
+  before = escort.y;
+  updateEscort(state);
+  assert.equal(before - escort.y, escort.speed * 1.5);
+
+  // 第三名玩家离开护卫位挤进车尾：推车手封顶 2 名，护卫位占比同时掉到一半。
+  Object.assign(state.tanks[1], { x: push.x + TANK_SIZE / 2, y: push.y });
+  assert.equal(escortPusherCount(state), 2);
+  before = escort.y;
+  updateEscort(state);
+  assert.equal(before - escort.y, escort.speed * 0.5 * 1.5);
+});
+
+test('pushing alone never moves the convoy while the guard slot is empty', () => {
+  const state = createGameState(602, 1, 2);
+  const escort = state.escort!;
+  state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
+  const push = escortPushSlot(escort);
+  Object.assign(state.tanks[0], { x: push.x, y: push.y });
+
+  assert.equal(escortPusherCount(state), 1);
+  assert.equal(escortHasGuard(state), false);
+  const before = escort.y;
+  updateEscort(state);
+  assert.equal(escort.y, before);
+  assert.equal(escort.moving, false);
+});
+
+test('disconnected tanks parked at the tail contribute no push bonus', () => {
+  const state = createGameState(603, 2, 2);
+  const escort = state.escort!;
+  state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
+  const activePlayers = [true, false];
+  const guard = escortGuardSlots(escort, 1)[0];
+  Object.assign(state.tanks[0], { x: guard.x, y: guard.y });
+  const push = escortPushSlot(escort);
+  Object.assign(state.tanks[1], { x: push.x, y: push.y });
+
+  assert.equal(escortPusherCount(state), 1);
+  assert.equal(escortPusherCount(state, activePlayers), 0);
+  const before = escort.y;
+  updateEscort(state, activePlayers);
+  assert.equal(before - escort.y, escort.speed);
 });
 
 test('enemy bullets are blocked without affecting time, while wrench adds time', () => {

@@ -35,6 +35,10 @@ export const ESCORT_ENEMY_COMBAT_BEHIND = 96;
 export const ESCORT_ENEMY_RECYCLE_BEHIND = 160;
 // 车队停驶时援军计时减速，避免玩家清障 / 补护送位期间压力继续按行驶节奏堆积。
 export const ESCORT_STOPPED_SPAWN_DIVISOR = 2;
+// 推车位：车尾一条与车身同宽（ESCORT_SIZE）、纵深一个坦克位（TANK_SIZE）的矩形。
+// 每名推车手为车速追加一档加成，最多计 2 名；护卫位没人时车不动，推车也不产生任何效果。
+export const ESCORT_PUSH_BONUS_PER_TANK = 0.25;
+export const ESCORT_PUSH_MAX_TANKS = 2;
 
 // 战场在屏幕上的偏移（左侧 16px 灰边，顶部 8px，右侧留 32px HUD 栏）
 export const FIELD_X = 16;
