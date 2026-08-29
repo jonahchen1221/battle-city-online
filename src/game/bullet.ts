@@ -444,20 +444,43 @@ export function advanceBullets(
 ): void {
   for (const b of bullets) {
     if (!b.alive) continue;
+
+    const startX = b.x;
+    const startY = b.y;
     moveBullet(b);
+    const endX = b.x;
+    const endY = b.y;
+    const dx = endX - startX;
+    const dy = endY - startY;
+    // 激光每帧可移动 8px，而最薄的残砖只有 4px。只检查移动终点会直接跨过半砖；
+    // 因此沿本帧轨迹按不超过弹体宽度的间距采样，并包含出膛起点（炮口可能已贴进残砖）。
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / BULLET_SIZE));
     const bounds = b.viewportBounds;
-    if (
-      bounds &&
-      (b.x < bounds.left ||
-        b.y < bounds.top ||
-        b.x + BULLET_SIZE > bounds.right ||
-        b.y + BULLET_SIZE > bounds.bottom)
-    ) {
-      b.alive = false;
-      continue;
+    let terrainKilled = false;
+    for (let step = 0; step <= steps; step++) {
+      const t = step / steps;
+      b.x = startX + dx * t;
+      b.y = startY + dy * t;
+
+      if (
+        bounds &&
+        (b.x < bounds.left ||
+          b.y < bounds.top ||
+          b.x + BULLET_SIZE > bounds.right ||
+          b.y + BULLET_SIZE > bounds.bottom)
+      ) {
+        b.alive = false;
+        break; // 越过开火时视口仍然静默回收，不产生火花
+      }
+
+      resolveBulletTerrain(b, level, events);
+      if (!b.alive) {
+        terrainKilled = true;
+        break;
+      }
     }
-    resolveBulletTerrain(b, level, events);
-    if (!b.alive) {
+
+    if (terrainKilled) {
       explosions.push(makeSmallExplosion(b.x + BULLET_SIZE / 2, b.y + BULLET_SIZE / 2));
     }
   }
