@@ -373,14 +373,20 @@ export const LASER_SPRITE_SIZE = 8;
 export const LASER_SPRITE_OFFSET = (LASER_SPRITE_SIZE - BULLET_SIZE) / 2; // 2
 
 // ── Boss 关（第 6 / 12 关）──
-// Boss 是一台停驻在上半场正中的 48×48 巨型坦克：对坦克是实心障碍，对小兵子弹是吸收体，
+// Boss 是一台 32×32 巨型坦克（普通坦克的 2×2，即 4 格大小）：对坦克是实心障碍，
+// 对小兵子弹是吸收体，能在战场内四向移动，并以双发破障激光打通砖墙 / 钢墙。
 // 只有玩家子弹能对它造成伤害（受击次数制，见 BOSS_DAMAGE_*）。全部数值以 tick 计。
 
-// 车体尺寸与固定停驻坐标（战场相对像素，48×48 盒左上角）。
-// 恰好覆盖子格 cols 17–22 × rows 6–11，两张竞技场地图在此留出空域。
-export const BOSS_SIZE = 48;
-export const BOSS_X = (FIELD_WIDTH - BOSS_SIZE) / 2; // 136
+// 车体尺寸与初始坐标（战场相对像素，32×32 盒左上角）。
+// 初始位置位于上半场正中；入场后由 Boss AI 自主移动。
+export const BOSS_SIZE = TANK_SIZE * 2;
+export const BOSS_X = (FIELD_WIDTH - BOSS_SIZE) / 2; // 144
 export const BOSS_Y = 48;
+// 移动与破障：Boss 以基础敌军速度追踪最近玩家；被砖 / 钢挡住时发射两枚破钢激光，
+// 两条 16px 破坏带并排，恰好为 32px 车体清出通路。冷却避免贴墙时逐帧刷弹。
+export const BOSS_SPEED = ENEMY_SPEED_BASIC;
+export const BOSS_BREACH_INTERVAL_TICKS = 30;
+export const BOSS_BREACH_BULLET_SPEED = 2.5;
 // Boss 弹幕的射手 id：任何坦克都不会取到 0（玩家 id 从 1 起），故可安全用作哨兵值。
 export const BOSS_OWNER_ID = 0;
 

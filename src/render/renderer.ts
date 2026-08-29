@@ -581,7 +581,7 @@ export class Renderer {
     }
   }
 
-  // Boss 车体（48×48）：按炮塔朝向取帧；阶段 2 换血红配色；受击白闪期间整体提亮。
+  // Boss 车体（32×32，即普通坦克 2×2）：按朝向取帧；阶段 2 换血红配色；受击时整体提亮。
   private drawBoss(state: GameState): void {
     const boss = state.boss;
     if (!boss || boss.dead) return;

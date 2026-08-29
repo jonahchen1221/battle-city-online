@@ -15,6 +15,7 @@ import {
 import { update } from '../game/update';
 import type { LevelState } from '../game/level';
 import type { BulletState } from '../game/bullet';
+import type { BossState } from '../game/boss';
 import { Renderer } from '../render/renderer';
 import { Sfx } from '../audio/sfx';
 import { Keyboard } from '../input/keyboard';
@@ -1064,7 +1065,7 @@ export class App {
 
   // 用抖动缓冲构建插值后的可渲染 GameState 形状对象；无快照时返回 null。
   // 把 now - interpDelay 映射到权威 tick，落在缓冲区两份快照 [from, to] 之间：
-  //   • 全部坦克 / 子弹（含本地玩家坦克）的 x/y 在 from→to 间按 alpha 插值（其余字段取 to）；
+  //   • 全部坦克 / 子弹 / Boss（含本地玩家坦克）的 x/y 在 from→to 间按 alpha 插值（其余字段取 to）；
   //     本地与远程走同一路径——纯服务器权威，无预测、无对账。
   //   • 非位置状态（地形 / HUD / 阶段 / 爆炸）取自 to，避免阶段闪烁；
   //   • renderTime 超出最新快照（卡顿）→ 冻结在最新，不外推；早于最旧 → 用最旧。
@@ -1097,9 +1098,10 @@ export class App {
 
     // 每发子弹都有稳定 id；星级双弹、散弹与机枪弹即使 ownerId 相同也能各自正确插值。
     const bullets = interpolateBulletPositions(from.snap.bullets, base.bullets, alpha);
+    const boss = interpolateBossPosition(from.snap.boss, base.boss, alpha);
 
     // 拼成 GameState 形状：塞入解析后的 level、dummy rng 与空 events（渲染层均不读取后二者）。
-    return { ...base, level, rng: this.dummyRng, events: [], tanks, bullets };
+    return { ...base, level, rng: this.dummyRng, events: [], tanks, bullets, boss };
   }
 
   private drawDisconnectOverlay(): void {
@@ -1329,6 +1331,21 @@ export function interpolateBulletPositions(
     if (!p) return b;
     return { ...b, x: lerp(p.x, b.x, alpha), y: lerp(p.y, b.y, alpha) };
   });
+}
+
+// Boss 原先固定不动；接入移动 AI 后也必须沿权威快照插值，否则联机画面只会以 20Hz 跳动。
+// Boss 新生成 / 消失时没有可匹配的旧实体，直接采用较新的状态。
+export function interpolateBossPosition(
+  fromBoss: BossState | null,
+  toBoss: BossState | null,
+  alpha: number,
+): BossState | null {
+  if (!fromBoss || !toBoss) return toBoss;
+  return {
+    ...toBoss,
+    x: lerp(fromBoss.x, toBoss.x, alpha),
+    y: lerp(fromBoss.y, toBoss.y, alpha),
+  };
 }
 
 // 把本地渲染时刻映射到权威 tick 时间轴，并返回包围它的两份快照及插值比例。

@@ -26,10 +26,15 @@ import {
   BOSS_DEATH_EXPLOSION_MIN,
   BOSS_DEATH_EXPLOSION_RANGE,
   BOSS_MINION_INTERVAL_TICKS,
+  BOSS_SPEED,
+  BOSS_BREACH_INTERVAL_TICKS,
+  BOSS_BREACH_BULLET_SPEED,
   bossMaxHp,
   BULLET_SIZE,
   TANK_SIZE,
   FIELD_WIDTH,
+  FIELD_HEIGHT,
+  SUBTILE,
   EXPLOSION_BIG_TICKS,
   EXPLOSION_BIG_SIZE,
 } from '../core/constants';
@@ -37,10 +42,11 @@ import type { Direction } from '../core/types';
 import { TankState, createEnemy, isPlayerTank } from './tank';
 import { BulletState, makeSmallExplosion } from './bullet';
 import { destroyPlayerTank } from './death';
+import { Cell, brickMaskOverlapsRect, getCell } from './level';
 import type { GameState } from './state';
 
 // Boss 关的核心逻辑（纯模拟层）：一切随机取自 state.rng，BossState 全部为可序列化的纯数据。
-// Boss 不是 TankState —— 它是 48×48、不移动、只有玩家子弹能伤到的独立实体。
+// Boss 不是 TankState —— 它是 32×32、可移动、只有玩家子弹能伤到的独立实体。
 
 // Boss 当前攻击。'none' = 冷却中（attackTimer 递减）。
 export type BossAttackKind = 'none' | 'laser' | 'radial' | 'burst' | 'spin' | 'dualLaser';
@@ -60,10 +66,13 @@ export interface BossState {
   hp: number;
   maxHp: number;
   phase: 1 | 2; // 阶段（hp < maxHp/2 时转 2，单向不回退）
-  x: number; // 48×48 车体左上角（固定，不移动）
+  x: number; // 32×32 车体左上角
   y: number;
   size: number; // 车体边长（= BOSS_SIZE，随快照一并下发，渲染层不必再查常量）
-  dir: Direction; // 炮塔朝向：指向最近玩家（四向），仅影响观感
+  dir: Direction; // 车体 / 炮塔朝向（移动或破障方向）
+  moveDir: Direction; // 当前追踪移动方向
+  moving: boolean; // 本帧是否实际移动（供渲染 / 调试）
+  breachCooldown: number; // 破障双发激光冷却
   hitFlash: number; // 受击白闪剩余帧
   attack: BossAttackKind; // 当前攻击
   attackTimer: number; // 距下次发动攻击的剩余帧（attack==='none' 时递减）
@@ -89,6 +98,9 @@ export function createBoss(playerCount: number): BossState {
     y: BOSS_Y,
     size: BOSS_SIZE,
     dir: 'down',
+    moveDir: 'down',
+    moving: false,
+    breachCooldown: 0,
     hitFlash: 0,
     attack: 'none',
     attackTimer: BOSS_ATTACK_INTERVAL_P1,
@@ -111,12 +123,12 @@ function bossRect(boss: BossState): { x0: number; y0: number; x1: number; y1: nu
 }
 
 // Boss 车体对坦克是实心障碍。移动碰撞（tank.ts）只认 16×16 的 TankState 盒，
-// 因此把 48×48 车体拆成 3×3 个 16×16 的“伪坦克”交给既有夹紧逻辑 —— 它们只在本帧的
+// 因此把 32×32 车体拆成 2×2 个 16×16 的“伪坦克”交给既有夹紧逻辑 —— 它们只在本帧的
 // 碰撞数组里存在，绝不进入 state.tanks，也不参与任何结算（子弹 / 计分 / 胜负）。
 // id 取负数，与真实坦克（≥1）永不冲突。
 export function bossBlockerTanks(boss: BossState | null): TankState[] {
   if (!boss || boss.dead) return [];
-  const cells = boss.size / TANK_SIZE; // 3
+  const cells = boss.size / TANK_SIZE; // 2
   const out: TankState[] = [];
   for (let r = 0; r < cells; r++) {
     for (let c = 0; c < cells; c++) {
@@ -158,6 +170,158 @@ function nearestPlayer(state: GameState, boss: BossState): TankState | null {
     }
   }
   return best;
+}
+
+const EPS = 1e-6;
+const BOSS_MOVE_DIRECTIONS: ReadonlyArray<Direction> = ['up', 'down', 'left', 'right'];
+
+function bossOverlapsTank(x: number, y: number, size: number, tank: TankState): boolean {
+  return (
+    x < tank.x + TANK_SIZE &&
+    x + size > tank.x &&
+    y < tank.y + TANK_SIZE &&
+    y + size > tank.y
+  );
+}
+
+interface BossMoveProbe {
+  x: number;
+  y: number;
+  blocked: boolean;
+  destructible: boolean;
+}
+
+// 探测 Boss 沿某方向走一步后的 32×32 完整车体。砖墙（含残砖）与钢墙可破坏；
+// 水、鹰巢、边界和坦克只能绕行。Boss 不碾压玩家 / 小兵，避免生成无法解开的重叠状态。
+function probeBossMove(state: GameState, boss: BossState, dir: Direction): BossMoveProbe {
+  let x = boss.x;
+  let y = boss.y;
+  if (dir === 'up') y -= BOSS_SPEED;
+  else if (dir === 'down') y += BOSS_SPEED;
+  else if (dir === 'left') x -= BOSS_SPEED;
+  else x += BOSS_SPEED;
+
+  if (x < 0 || y < 0 || x + boss.size > FIELD_WIDTH || y + boss.size > FIELD_HEIGHT) {
+    return { x, y, blocked: true, destructible: false };
+  }
+
+  let blocked = false;
+  let destructible = false;
+  const c0 = Math.floor(x / SUBTILE);
+  const c1 = Math.floor((x + boss.size - EPS) / SUBTILE);
+  const r0 = Math.floor(y / SUBTILE);
+  const r1 = Math.floor((y + boss.size - EPS) / SUBTILE);
+  for (let row = r0; row <= r1; row++) {
+    for (let col = c0; col <= c1; col++) {
+      const cell = getCell(state.level, col, row);
+      if (cell === Cell.BRICK) {
+        if (brickMaskOverlapsRect(state.level, col, row, x, y, x + boss.size, y + boss.size)) {
+          blocked = true;
+          destructible = true;
+        }
+      } else if (cell === Cell.STEEL) {
+        blocked = true;
+        destructible = true;
+      } else if (cell === Cell.WATER || cell === Cell.EAGLE) {
+        blocked = true;
+      }
+    }
+  }
+
+  for (const tank of state.tanks) {
+    if (!tank.alive) continue;
+    if (bossOverlapsTank(x, y, boss.size, tank)) blocked = true;
+  }
+  return { x, y, blocked, destructible };
+}
+
+// 以追踪目标为主生成稳定的候选方向：优先走距离更长的轴，再试另一轴，最后尝试其余方向。
+// 不使用随机数，因此相同状态下的移动选择完全一致，服务器快照可复现。
+function bossMoveCandidates(boss: BossState, target: TankState): Direction[] {
+  const dx = target.x + TANK_SIZE / 2 - (boss.x + boss.size / 2);
+  const dy = target.y + TANK_SIZE / 2 - (boss.y + boss.size / 2);
+  const horizontal: Direction = dx < 0 ? 'left' : 'right';
+  const vertical: Direction = dy < 0 ? 'up' : 'down';
+  const preferred = Math.abs(dx) > Math.abs(dy)
+    ? [horizontal, vertical]
+    : [vertical, horizontal];
+  const out: Direction[] = [];
+  for (const dir of [...preferred, boss.moveDir, ...BOSS_MOVE_DIRECTIONS]) {
+    if (!out.includes(dir)) out.push(dir);
+  }
+  return out;
+}
+
+function makeBreachBullet(
+  state: GameState,
+  boss: BossState,
+  dir: Direction,
+  laneOffset: number,
+): BulletState {
+  let x: number;
+  let y: number;
+  let vx = 0;
+  let vy = 0;
+  if (dir === 'up' || dir === 'down') {
+    x = boss.x + laneOffset - BULLET_SIZE / 2;
+    y = dir === 'up' ? boss.y : boss.y + boss.size - BULLET_SIZE;
+    vy = dir === 'up' ? -BOSS_BREACH_BULLET_SPEED : BOSS_BREACH_BULLET_SPEED;
+  } else {
+    x = dir === 'left' ? boss.x : boss.x + boss.size - BULLET_SIZE;
+    y = boss.y + laneOffset - BULLET_SIZE / 2;
+    vx = dir === 'left' ? -BOSS_BREACH_BULLET_SPEED : BOSS_BREACH_BULLET_SPEED;
+  }
+  return {
+    id: state.nextBulletId++,
+    x,
+    y,
+    dir,
+    speed: BOSS_BREACH_BULLET_SPEED,
+    vx,
+    vy,
+    age: 0,
+    kind: 'laser',
+    ownerId: BOSS_OWNER_ID,
+    ownerPlayerIndex: -1,
+    fromEnemy: true,
+    attacksEagle: false,
+    alive: true,
+    steelPiercing: true,
+  };
+}
+
+// 两枚激光分别从车体 1/4 与 3/4 线出膛。每枚激光开 16px 宽的破坏带，
+// 合起来为 32px Boss 车体清出完整通路；激光沿途可连续击穿砖和钢。
+function fireBreachVolley(state: GameState, boss: BossState, dir: Direction): void {
+  state.bullets.push(
+    makeBreachBullet(state, boss, dir, boss.size / 4),
+    makeBreachBullet(state, boss, dir, (boss.size * 3) / 4),
+  );
+  boss.breachCooldown = BOSS_BREACH_INTERVAL_TICKS;
+}
+
+function moveBoss(state: GameState, boss: BossState, target: TankState | null): void {
+  boss.moving = false;
+  if (boss.breachCooldown > 0) boss.breachCooldown--;
+  if (!target) return;
+
+  for (const dir of bossMoveCandidates(boss, target)) {
+    const probe = probeBossMove(state, boss, dir);
+    if (!probe.blocked) {
+      boss.x = probe.x;
+      boss.y = probe.y;
+      boss.moveDir = dir;
+      boss.dir = dir;
+      boss.moving = true;
+      return;
+    }
+    if (probe.destructible) {
+      boss.moveDir = dir;
+      boss.dir = dir;
+      if (boss.breachCooldown === 0) fireBreachVolley(state, boss, dir);
+      return;
+    }
+  }
 }
 
 // 速度向量的主轴朝向：子弹的地形开凿 / 前沿扫描一律按它定向（斜飞只体现在 vx/vy 上）。
@@ -328,6 +492,7 @@ function advanceAttack(state: GameState, boss: BossState): void {
       const cx = boss.x + boss.size / 2;
       const cy = boss.y + boss.size / 2;
       const angle = Math.atan2(target.y + TANK_SIZE / 2 - cy, target.x + TANK_SIZE / 2 - cx);
+      boss.dir = dominantDir(Math.cos(angle), Math.sin(angle));
       fireBossBullet(state, boss, angle, BOSS_BURST_SPEED);
       boss.stepsLeft--;
       if (boss.stepsLeft <= 0) endAttack(boss);
@@ -372,7 +537,7 @@ function killBoss(state: GameState, boss: BossState): void {
   endAttack(boss);
   const count = BOSS_DEATH_EXPLOSION_MIN + state.rng.int(BOSS_DEATH_EXPLOSION_RANGE);
   for (let i = 0; i < count; i++) {
-    // 32×32 大爆炸精灵，随机散落在 48×48 车体范围内（居中于取样点）。
+    // 32×32 大爆炸精灵，随机散落在 32×32 车体范围内（居中于取样点）。
     const px = boss.x + state.rng.int(boss.size);
     const py = boss.y + state.rng.int(boss.size);
     state.explosions.push({
@@ -385,20 +550,15 @@ function killBoss(state: GameState, boss: BossState): void {
   state.events.push('explosionBig');
 }
 
-// 每帧（playing 期间）调用一次：受击闪烁递减、炮塔转向、阶段转换、攻击状态机推进。
+// 每帧（playing 期间）调用一次：受击闪烁递减、追踪移动 / 破障、阶段转换、攻击状态机推进。
 export function updateBoss(state: GameState): void {
   const boss = state.boss;
   if (!boss || boss.dead) return;
 
   if (boss.hitFlash > 0) boss.hitFlash--;
 
-  // 炮塔朝向最近玩家（四向即可，仅影响观感）。
   const target = nearestPlayer(state, boss);
-  if (target) {
-    const dx = target.x + TANK_SIZE / 2 - (boss.x + boss.size / 2);
-    const dy = target.y + TANK_SIZE / 2 - (boss.y + boss.size / 2);
-    boss.dir = dominantDir(dx, dy);
-  }
+  moveBoss(state, boss, target);
 
   // 阶段转换（单向）：清一次场上 Boss 弹作为喘息窗口与视觉信号，并中止当前攻击。
   if (boss.phase === 1 && boss.hp < boss.maxHp * BOSS_PHASE2_HP_RATIO) {

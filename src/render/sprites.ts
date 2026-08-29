@@ -5,7 +5,7 @@
 // 鹰巢 32×32 …）。图集本身即以美术像素存储；drawTile/drawText/drawQuarter 接收 *逻辑* 目标
 // 坐标，内部乘以 ART_SCALE 后落到 512×448 画布。silhouette / 色系与 NES 原版一致，仅细化。
 
-import { ART_SCALE, QUARTER } from '../core/constants';
+import { ART_SCALE, BOSS_SIZE, QUARTER } from '../core/constants';
 import type { Direction } from '../core/types';
 import { POWERUP_KINDS, type PowerupKind } from '../game/powerup';
 
@@ -532,10 +532,10 @@ const TANK_POWER = makeTankTemplate('power');
 const TANK_ARMOR_HD = makeTankTemplate('armor');
 const TANK_SMART = makeTankTemplate('smart');
 
-// ── Boss（96×96 美术 = 48×48 逻辑，朝上基准帧）──
+// ── Boss（64×64 美术 = 32×32 逻辑，朝上基准帧）──
 // 与普通坦克使用同一套记号（H/L/S/Z/D/O/K/B/R/T/t/E），因此可以复用 recolor 换配色：
 // phase1 = 钢蓝重甲，phase2 = 血红暴走，受击白闪 = 整体提亮。其余三朝向由 rotateCW 生成。
-const BOSS_ART = 96; // 美术像素边长（= BOSS_SIZE 48 逻辑像素 × ART_SCALE 2）
+const BOSS_ART = BOSS_SIZE * ART_SCALE;
 
 function bossTrack(g: CharGrid, x0: number, x1: number, y0: number, y1: number): void {
   for (let y = y0; y <= y1; y++) {
@@ -558,7 +558,7 @@ function bossBarrel(g: CharGrid, x0: number, y0: number, x1: number, y1: number)
   fillRectG(g, x0, y0, x1, y1, 'R');
 }
 
-// 装甲板：黑轮廓 + 主体 + 顶部高光 / 左侧过渡 / 右下阴影，比例照搬 tankPlate 放大到 96 网格。
+// 装甲板：黑轮廓 + 主体 + 顶部高光 / 左侧过渡 / 右下阴影。
 function bossPlate(
   g: CharGrid,
   x0: number,
@@ -585,7 +585,7 @@ function bossPlate(
 function shadeBossInterior(g: CharGrid): void {
   const source = g.map((row) => [...row]);
   for (let y = 0; y < BOSS_ART; y++) {
-    for (let x = 22; x <= BOSS_ART - 23; x++) {
+    for (let x = 15; x <= BOSS_ART - 16; x++) {
       if (source[y][x] !== 'O') continue;
       let touchesTransparency = false;
       for (let dy = -1; dy <= 1; dy++) {
@@ -608,35 +608,35 @@ function makeBossTemplate(): string[] {
   const g = blankGrid(BOSS_ART);
 
   // 满高双履带（比任何小坦克都宽，形成“压路机”体量）。
-  bossTrack(g, 2, 21, 10, 93);
-  bossTrack(g, 74, 93, 10, 93);
+  bossTrack(g, 1, 13, 7, 62);
+  bossTrack(g, 50, 62, 7, 62);
 
   // 双联粗炮管，先画后被车体覆盖根部。
-  bossBarrel(g, 34, 0, 43, 34);
-  bossBarrel(g, 52, 0, 61, 34);
+  bossBarrel(g, 22, 0, 27, 23);
+  bossBarrel(g, 36, 0, 41, 23);
 
   // 底盘（宽）+ 炮塔（窄高），双层结构。
-  bossPlate(g, 14, 30, 81, 90, 4);
-  bossPlate(g, 26, 16, 69, 70, 6);
+  bossPlate(g, 9, 20, 54, 60, 3);
+  bossPlate(g, 17, 11, 46, 47, 4);
 
   // 两侧外挂炮舱：左亮右暗，强化立体感与“武装到牙齿”的剪影。
-  fillRectG(g, 6, 40, 22, 64, 'O');
-  fillRectG(g, 9, 43, 21, 61, 'S');
-  fillRectG(g, 73, 40, 89, 64, 'O');
-  fillRectG(g, 74, 43, 86, 61, 'Z');
+  fillRectG(g, 4, 27, 14, 43, 'O');
+  fillRectG(g, 6, 29, 13, 41, 'S');
+  fillRectG(g, 49, 27, 59, 43, 'O');
+  fillRectG(g, 50, 29, 57, 41, 'Z');
 
   // 炮塔面：两道散热槽 + 中央能量核心（核心色随阶段变化）。
-  fillRectG(g, 33, 46, 44, 52, 'B');
-  fillRectG(g, 51, 46, 62, 52, 'B');
-  ringG(g, 47.5, 62, 11, 8, 'B');
-  fillCircleG(g, 47.5, 62, 7.5, 'R');
+  fillRectG(g, 22, 31, 29, 35, 'B');
+  fillRectG(g, 34, 31, 41, 35, 'B');
+  ringG(g, 31.5, 42, 7, 5, 'B');
+  fillCircleG(g, 31.5, 42, 5, 'R');
 
   // 底盘铆钉：四枚亮点，缩小后仍可见。
   for (const [rx, ry] of [
-    [20, 36],
-    [75, 36],
-    [20, 84],
-    [75, 84],
+    [13, 24],
+    [49, 24],
+    [13, 55],
+    [49, 55],
   ]) {
     fillRectG(g, rx, ry, rx + 2, ry + 2, 'L');
   }
@@ -1267,7 +1267,7 @@ export interface SpriteAtlas {
   shield: [Sprite, Sprite]; // 出生护盾 2 帧（32×32）
   explosionSmall: [Sprite, Sprite, Sprite]; // 小爆炸 3 帧（32×32）
   explosionBig: [Sprite, Sprite]; // 大爆炸 2 帧（64×64）
-  boss: Array<Record<Direction, Sprite>>; // Boss 车体（48×48 逻辑）：索引 0=阶段1、1=阶段2
+  boss: Array<Record<Direction, Sprite>>; // Boss 车体（32×32 逻辑）：索引 0=阶段1、1=阶段2
   bossFlash: Record<Direction, Sprite>; // Boss 受击白闪帧
   hudEnemy: Sprite; // HUD 剩余敌军小坦克（16×16）
   hudLifeTank: Sprite[]; // HUD 玩家生命迷你坦克（16×16），按 playerIndex 着色
@@ -1316,10 +1316,10 @@ const Y_RED_SMART = 592;
 // 道具图标行（POWERUP_KINDS.length 个 32×32，x=0/32/…）。
 const Y_POWERUP = 624;
 const Y_SMART_SPAWN = 656;
-// Boss 行（各 96 高、四朝向 × 96 宽 = 384）：阶段 1 / 阶段 2 / 受击白闪。
+// Boss 行（各 64 高、四朝向 × 64 宽 = 256）：阶段 1 / 阶段 2 / 受击白闪。
 const Y_BOSS_P1 = 688;
-const Y_BOSS_P2 = 784;
-const Y_BOSS_FLASH = 880;
+const Y_BOSS_P2 = 752;
+const Y_BOSS_FLASH = 816;
 
 // 把一台坦克的朝上两帧铺到某一行：旋转生成其余朝向，
 // 按 up0,up1,down0,down1,left0,left1,right0,right1 排布于 x=0,32,…,224。
@@ -1351,30 +1351,30 @@ function tankFramesAt(canvas: HTMLCanvasElement, y: number): TankFrames {
   };
 }
 
-// 把 Boss 的朝上帧铺到某一行：旋转生成其余朝向，按 up,down,left,right 排布于 x=0,96,192,288。
+// 把 Boss 的朝上帧铺到某一行：旋转生成其余朝向，按 up,down,left,right 排布。
 function paintBossRow(ctx: CanvasRenderingContext2D, up: string[], y: number): void {
   const right = rotateCW(up);
   const down = rotateCW(right);
   const left = rotateCW(down);
   paint(ctx, up, 0, y);
-  paint(ctx, down, 96, y);
-  paint(ctx, left, 192, y);
-  paint(ctx, right, 288, y);
+  paint(ctx, down, BOSS_ART, y);
+  paint(ctx, left, BOSS_ART * 2, y);
+  paint(ctx, right, BOSS_ART * 3, y);
 }
 
-// 取某 Boss 行的四朝向取样矩形（96×96 美术 = 48×48 逻辑）。
+// 取某 Boss 行的四朝向取样矩形（64×64 美术 = 32×32 逻辑）。
 function bossFramesAt(canvas: HTMLCanvasElement, y: number): Record<Direction, Sprite> {
-  const s = (sx: number): Sprite => ({ src: canvas, sx, sy: y, w: 96, h: 96 });
-  return { up: s(0), down: s(96), left: s(192), right: s(288) };
+  const s = (sx: number): Sprite => ({ src: canvas, sx, sy: y, w: BOSS_ART, h: BOSS_ART });
+  return { up: s(0), down: s(BOSS_ART), left: s(BOSS_ART * 2), right: s(BOSS_ART * 3) };
 }
 
 // 启动时调用一次，构建离屏图集并返回带取样矩形的 API。
 export function createSpriteAtlas(): SpriteAtlas {
   // 宽度需容下最宽的一行：道具图标行（POWERUP_KINDS.length 个 32×32 —— 6 经典 + 4 武器 + 5 新道具）。
   // 其余行最宽为坦克行（8 帧 × 32 = 256），故按两者取大。
-  // Boss 行需要 4 朝向 × 96 = 384；道具图标行为 POWERUP_KINDS.length × 32；坦克行 256。
-  const width = Math.max(256, 384, POWERUP_KINDS.length * 32);
-  const height = 976; // + 智能坦克常态/红闪、道具图标、智能出生闪光、Boss 三套配色
+  // Boss 行需要 4 朝向 × 64 = 256；道具图标行为 POWERUP_KINDS.length × 32；坦克行 256。
+  const width = Math.max(256, BOSS_ART * 4, POWERUP_KINDS.length * 32);
+  const height = 880; // + 智能坦克常态/红闪、道具图标、智能出生闪光、Boss 三套配色
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;

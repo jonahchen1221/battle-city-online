@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyInput } from '../src/core/types';
+import { emptyInput, type Direction } from '../src/core/types';
 import {
   BOSS_STAGES,
   BOSS_SIZE,
   BOSS_X,
   BOSS_Y,
   BOSS_OWNER_ID,
+  BOSS_SPEED,
+  BOSS_BREACH_INTERVAL_TICKS,
   BOSS_LASER_WINDUP_TICKS,
   BOSS_LASER_ACTIVE_TICKS,
   BOSS_SPIN_BULLETS,
@@ -27,11 +29,11 @@ import {
 } from '../src/core/constants';
 import { createGameState, nextStage, type GameState } from '../src/game/state';
 import { update } from '../src/game/update';
-import { updateBoss, resolveBulletBoss } from '../src/game/boss';
+import { bossBlockerTanks, updateBoss, resolveBulletBoss } from '../src/game/boss';
 import { updateEnemies } from '../src/game/enemy';
 import { isPlayerTank, type TankState } from '../src/game/tank';
 import type { BulletState } from '../src/game/bullet';
-import { Cell, getCell } from '../src/game/level';
+import { Cell, createEmptyLevel, getCell, setCell } from '../src/game/level';
 import { STAGES } from '../src/game/levels';
 
 // ── 测试工具 ──
@@ -152,6 +154,82 @@ test('Boss 只在 Boss 关生成，血量随人数放大', () => {
   nextStage(state);
   assert.equal(state.stage, 12);
   assert.equal(state.boss?.maxHp, 160);
+});
+
+test('Boss 车体为普通坦克的 2×2，并以四个实心格参与坦克碰撞', () => {
+  const boss = createGameState(2, 1, 6).boss!;
+  assert.equal(BOSS_SIZE, TANK_SIZE * 2);
+  assert.equal(boss.size, TANK_SIZE * 2);
+
+  const blockers = bossBlockerTanks(boss);
+  assert.equal(blockers.length, 4);
+  assert.deepEqual(
+    blockers.map((t) => [t.x, t.y]),
+    [
+      [boss.x, boss.y],
+      [boss.x + TANK_SIZE, boss.y],
+      [boss.x, boss.y + TANK_SIZE],
+      [boss.x + TANK_SIZE, boss.y + TANK_SIZE],
+    ],
+  );
+});
+
+test('Boss 可在空场上向四个方向追踪玩家', () => {
+  const cases: Array<{ playerX: number; playerY: number; dir: Direction }> = [
+    { playerX: 144, playerY: 0, dir: 'up' },
+    { playerX: 144, playerY: 208, dir: 'down' },
+    { playerX: 0, playerY: 96, dir: 'left' },
+    { playerX: 288, playerY: 96, dir: 'right' },
+  ];
+  for (const c of cases) {
+    const state = playingAt(3, 1, 6);
+    state.level = createEmptyLevel();
+    const boss = state.boss!;
+    boss.x = 144;
+    boss.y = 96;
+    const player = state.tanks.find(isPlayerTank)!;
+    player.x = c.playerX;
+    player.y = c.playerY;
+    const before = { x: boss.x, y: boss.y };
+
+    updateBoss(state);
+
+    assert.equal(boss.dir, c.dir);
+    assert.equal(boss.moveDir, c.dir);
+    assert.equal(boss.moving, true);
+    if (c.dir === 'up') assert.equal(boss.y, before.y - BOSS_SPEED);
+    if (c.dir === 'down') assert.equal(boss.y, before.y + BOSS_SPEED);
+    if (c.dir === 'left') assert.equal(boss.x, before.x - BOSS_SPEED);
+    if (c.dir === 'right') assert.equal(boss.x, before.x + BOSS_SPEED);
+  }
+});
+
+test('Boss 遇到钢墙会停下并发射双发破障激光，清出 32px 通路后继续移动', () => {
+  const state = playingAt(4, 1, 6);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  const wallRow = (boss.y + boss.size) / SUBTILE;
+  const wallCol = boss.x / SUBTILE;
+  for (let col = wallCol; col < wallCol + boss.size / SUBTILE; col++) {
+    setCell(state.level, col, wallRow, Cell.STEEL);
+  }
+  const startY = boss.y;
+
+  update(state, noInputs(1));
+
+  assert.equal(boss.y, startY, '破障开火帧应先停下，不直接穿墙');
+  assert.equal(boss.moving, false);
+  assert.equal(boss.breachCooldown, BOSS_BREACH_INTERVAL_TICKS);
+  const breachShots = state.bullets.filter((b) => b.ownerId === BOSS_OWNER_ID && b.kind === 'laser');
+  assert.equal(breachShots.length, 2);
+  assert.ok(breachShots.every((b) => b.dir === 'down' && b.steelPiercing));
+  for (let col = wallCol; col < wallCol + boss.size / SUBTILE; col++) {
+    assert.equal(getCell(state.level, col, wallRow), Cell.EMPTY, `钢墙 (${col},${wallRow}) 应被击穿`);
+  }
+
+  update(state, noInputs(1));
+  assert.equal(boss.y, startY + BOSS_SPEED, '通路清开后下一帧应继续追踪移动');
+  assert.equal(boss.moving, true);
 });
 
 // ── 伤害结算 ──

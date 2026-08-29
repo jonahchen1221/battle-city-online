@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { interpolateBulletPositions, snapshotInterpolationWindow } from '../src/client/app';
+import {
+  interpolateBossPosition,
+  interpolateBulletPositions,
+  snapshotInterpolationWindow,
+} from '../src/client/app';
 import { spawnWeaponBullets } from '../src/game/bullet';
+import { createBoss } from '../src/game/boss';
 import { createPlayer } from '../src/game/tank';
 
 test('catch-up snapshots with the same arrival time are spaced by authoritative tick', () => {
@@ -48,4 +53,16 @@ test('multiple bullets from one owner interpolate independently by bullet id', (
       { x: 210, y: 45 },
     ],
   );
+});
+
+test('moving Boss is interpolated on the authoritative snapshot timeline', () => {
+  const from = createBoss(1);
+  const to = { ...from, x: from.x + 12, y: from.y + 6, moving: true };
+
+  const interpolated = interpolateBossPosition(from, to, 0.25);
+
+  assert.ok(interpolated);
+  assert.equal(interpolated.x, from.x + 3);
+  assert.equal(interpolated.y, from.y + 1.5);
+  assert.equal(interpolated.moving, true, '非位置字段应取较新的权威快照');
 });

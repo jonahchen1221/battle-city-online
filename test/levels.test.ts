@@ -102,7 +102,7 @@ test('每个普通关都有位于底部正中的 2×2 鹰巢', () => {
   }
 });
 
-test('Boss 关没有鹰巢、留出 Boss 停驻空域、且下半场有掩体', () => {
+test('Boss 关没有鹰巢、留出 Boss 初始空域、且下半场有掩体', () => {
   for (const stage of BOSS_STAGES) {
     const level = STAGES[stage - 1];
     // 1) 全图不得出现任何鹰巢格。
