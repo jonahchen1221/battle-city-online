@@ -57,7 +57,7 @@ import { createGameState, nextStage, type GameState } from '../src/game/state';
 import { update } from '../src/game/update';
 import { startBossAttack, updateBoss, updateMines, resolveBulletBoss } from '../src/game/boss';
 import { updateEnemies } from '../src/game/enemy';
-import { tryPickupPowerup, type PowerupKind } from '../src/game/powerup';
+import { tryPickupPowerup, BOSS_NEUTRAL_WEAPONS, NEUTRAL_POWERUP_KINDS, type PowerupKind } from '../src/game/powerup';
 import { createEnemy, isPlayerTank } from '../src/game/tank';
 import type { BulletState } from '../src/game/bullet';
 import { Cell, createEmptyLevel, getCell, setCell } from '../src/game/level';

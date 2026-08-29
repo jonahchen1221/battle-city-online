@@ -5,7 +5,7 @@ import { createEnemy } from '../src/game/tank';
 import { updateEnemies } from '../src/game/enemy';
 import { update } from '../src/game/update';
 import { emptyInput } from '../src/core/types';
-import { createEmptyLevel } from '../src/game/level';
+import { Cell, createEmptyLevel, setCell } from '../src/game/level';
 import { spawnBullet } from '../src/game/bullet';
 import { resolveEagleHit } from '../src/game/phase';
 import {
@@ -16,6 +16,7 @@ import {
   SMART_AI_FIRE_COOLDOWN_TICKS,
   STAGE_ENEMY_TOTAL,
   SUBTILE,
+  SMART_AI_STUCK_TICKS,
 } from '../src/core/constants';
 
 test('escort stages refill their enemy composition while normal stages stay finite', () => {
