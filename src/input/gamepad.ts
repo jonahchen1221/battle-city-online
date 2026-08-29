@@ -126,6 +126,13 @@ export class GamepadInput {
     return out;
   }
 
+  // 菜单切入对局时截断仍按住的方向。保留 prevButtons / stickDir 作为物理基线，
+  // 因而按键或摇杆必须先回中再重新按下，才会成为新的游戏内方向输入。
+  suppressHeldDirections(): void {
+    this.dirs.clear();
+    for (const dir of DIRS) this.edges[dir] = false;
+  }
+
   // 选定当前生效的手柄：只认第一个。Chrome 要按一下键才会在 getGamepads() 里露面，
   // 且数组内可能有空洞，故每帧懒扫描；某些环境甚至没有 navigator.getGamepads。
   private activePad(): Gamepad | null {

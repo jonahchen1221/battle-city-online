@@ -382,6 +382,9 @@ export class App {
       case 'started':
         // 大厅座位存在空洞时，服务端会在开局时压紧为连续的对局序号。
         this.myPlayerIndex = msg.playerIndex;
+        // 大厅的 S / Start 同时属于游戏输入；服务端可能在对应 keyup / 回中前就完成开局。
+        // 截断菜单期方向，避免第一帧把“开始游戏”误当成持续移动。
+        this.resetInputsForGameStart();
         // 清空快照缓冲，等待第一份 snapshot 才真正进入渲染。
         this.resetNetPlayState();
         this.disconnected = false;
@@ -551,6 +554,9 @@ export class App {
       this.statusMsg = '';
     } else if (this.titleSel === 1) {
       // 1 PLAYER：全新本地单机局。设 prevStart=true，避免刚按下的 Enter 被当作暂停边沿。
+      // 标题菜单与游戏复用同一个 Keyboard；若用方向键选中 1 PLAYER 后立刻按 Enter，
+      // 对应 keyup 可能尚未来得及到达。开局先清空菜单期按键，避免坦克出生后沿旧方向继续走。
+      this.resetInputsForGameStart();
       resetGameState(this.localState, (Date.now() >>> 0) || 20260708);
       this.localState.prevStart = true;
       this.clearPowerupTicker();
@@ -567,6 +573,11 @@ export class App {
       this.statusMsg = '';
       this.screen = 'joinCode';
     }
+  }
+
+  private resetInputsForGameStart(): void {
+    this.keyboard.reset();
+    this.gamepad.suppressHeldDirections();
   }
 
   private onNameEditKey(e: KeyboardEvent): void {

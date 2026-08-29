@@ -555,7 +555,9 @@ export class Renderer {
     const enemiesFrozen = state.enemyFreezeTicks > 0;
     for (const tank of state.tanks) {
       if (!tank.alive) continue;
-      const previous = this.previousTankPositions.get(tank.id);
+      // 本地玩家必须直接画最新逻辑位置：使用上一帧插值会平白增加最多一个逻辑帧
+      // （16.7ms）的输入延迟，表现为转向和松键“粘滞”。敌军保留插值来维持 120Hz 平滑。
+      const previous = tank.kind === 'player' ? undefined : this.previousTankPositions.get(tank.id);
       const renderX = previous ? previous.x + (tank.x - previous.x) * alpha : tank.x;
       const renderY = previous ? previous.y + (tank.y - previous.y) * alpha : tank.y;
       const px = snapArt(FIELD_X + renderX);
