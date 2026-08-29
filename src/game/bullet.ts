@@ -29,6 +29,7 @@ import {
 import {
   Cell,
   LevelState,
+  brickMaskOverlapsRect,
   getCell,
   isSolidForBullet,
   removeBrickQuarters,
@@ -329,7 +330,9 @@ function resolveBulletTerrain(b: BulletState, level: LevelState, events: GameEve
     const type = getCell(level, col, row);
     if (!isSolidForBullet(type)) return;
     if (type === Cell.BRICK) {
-      hitBrick = true;
+      if (brickMaskOverlapsRect(level, col, row, b.x, b.y, b.x + BULLET_SIZE, b.y + BULLET_SIZE)) {
+        hitBrick = true;
+      }
     } else if (type === Cell.STEEL) {
       // getCell 对越界返回 STEEL；区分“战场内真实钢块”与“边界”。
       const inField = col >= 0 && row >= 0 && col < level.cols && row < level.rows;

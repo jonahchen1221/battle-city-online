@@ -5,6 +5,7 @@
 import { ART_SCALE, NATIVE_WIDTH, NATIVE_HEIGHT } from '../core/constants';
 import type { PowerupKind } from '../game/powerup';
 import type { PowerupPickupEvent } from '../game/state';
+import type { LobbyPlayer } from '../net/protocol';
 import { SpriteAtlas, FONT_ADVANCE, drawText, drawTextOutlined, textWidth } from '../render/sprites';
 
 // 跑马灯文案刻意保持短促、全大写：既适配 5×7 NES 像素字，也让玩家在战斗中一眼读懂效果。
@@ -26,9 +27,16 @@ const POWERUP_TICKER_COPY: Record<PowerupKind, { name: string; effect: string }>
   wrench: { name: 'WRENCH', effect: 'BASE WALLS REPAIRED' },
 };
 
-export function powerupTickerText(event: PowerupPickupEvent): string {
+export function powerupTickerText(event: PowerupPickupEvent, playerName: string): string {
   const copy = POWERUP_TICKER_COPY[event.kind];
-  return `${event.playerIndex + 1}P GOT ${copy.name}: ${copy.effect}`;
+  return `${playerName} GOT ${copy.name}: ${copy.effect}`;
+}
+
+// 大厅座位可能有空洞，开局后会按旧座位号压紧成连续的对局 playerIndex。
+// 这里与服务端 gameSlots 使用同样的排序，让 HUD / 坦克标签稳定取到真实名字。
+export function gamePlayerNames(players: readonly LobbyPlayer[], playerCount: number): string[] {
+  const sorted = [...players].sort((a, b) => a.playerIndex - b.playerIndex);
+  return Array.from({ length: playerCount }, (_, i) => sorted[i]?.name ?? `P${i + 1}`);
 }
 
 // 用黑色铺满整个画布（标题/大厅/连接界面的底）。

@@ -41,7 +41,8 @@ export interface LobbyPlayer {
 // ── 客户端 → 服务器 ──
 export type ClientMessage =
   | { t: 'create'; name: string } // 建房；成功后收到 joined（自己为 0 号位/房主）
-  | { t: 'join'; code: string; name: string } // 按房间码加入（进行中的房间若有断线空位则顶替重连）
+  // resumeToken 由服务器在 joined 中签发；带 token 时恢复原座位，不带时仅可加入尚未开局的房间。
+  | { t: 'join'; code: string; name: string; resumeToken?: string }
   | { t: 'ready'; ready: boolean } // 大厅内切换准备状态
   | { t: 'start' } // 房主开局（要求全员 ready）
   // 输入快照；状态变化时发送，服务器保留每人最新值逐帧应用。
@@ -50,7 +51,8 @@ export type ClientMessage =
 
 // ── 服务器 → 客户端 ──
 export type ServerMessage =
-  | { t: 'joined'; code: string; playerIndex: number; players: LobbyPlayer[] } // 入房成功（含重连）
+  // resumeToken 是座位凭证：客户端只保存在当前浏览器会话中，不展示或分享。
+  | { t: 'joined'; code: string; playerIndex: number; players: LobbyPlayer[]; resumeToken: string }
   | { t: 'lobby'; players: LobbyPlayer[] } // 大厅状态变更广播
   // playerIndex 是紧凑后的对局内序号；大厅座位有空洞时可能与 joined 中的序号不同。
   | { t: 'started'; playerCount: number; playerIndex: number } // 开局；随后开始收 snapshot
@@ -63,6 +65,8 @@ export type ServerErrorCode =
   | 'already_started'
   | 'not_host'
   | 'not_all_ready'
+  | 'invalid_resume'
+  | 'server_busy'
   | 'bad_message';
 
 // ── 快照 ──

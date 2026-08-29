@@ -1,4 +1,14 @@
-import { FIELD_COLS, FIELD_ROWS, BRICK_FULL } from '../core/constants';
+import {
+  FIELD_COLS,
+  FIELD_ROWS,
+  BRICK_FULL,
+  BRICK_TL,
+  BRICK_TR,
+  BRICK_BL,
+  BRICK_BR,
+  QUARTER,
+  SUBTILE,
+} from '../core/constants';
 
 // 地形子格类型。存为数字码，保证 LevelState 可序列化（无类实例、无函数）。
 export const Cell = {
@@ -46,6 +56,32 @@ export function getBrickMask(level: LevelState, col: number, row: number): numbe
     return 0;
   }
   return level.brickMask[cellIndex(level, col, row)];
+}
+
+// 一个任意轴对齐矩形是否与指定砖块子格中仍存活的 4×4 象限严格重叠。
+// 坐标均为战场相对像素，[x0,x1) × [y0,y1)；边缘相贴不算碰撞。
+export function brickMaskOverlapsRect(
+  level: LevelState,
+  col: number,
+  row: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): boolean {
+  if (getCell(level, col, row) !== Cell.BRICK) return false;
+  const mask = getBrickMask(level, col, row);
+  const cellX = col * SUBTILE;
+  const cellY = row * SUBTILE;
+  const overlaps = (qx: number, qy: number): boolean =>
+    x0 < qx + QUARTER && x1 > qx && y0 < qy + QUARTER && y1 > qy;
+
+  return (
+    ((mask & BRICK_TL) !== 0 && overlaps(cellX, cellY)) ||
+    ((mask & BRICK_TR) !== 0 && overlaps(cellX + QUARTER, cellY)) ||
+    ((mask & BRICK_BL) !== 0 && overlaps(cellX, cellY + QUARTER)) ||
+    ((mask & BRICK_BR) !== 0 && overlaps(cellX + QUARTER, cellY + QUARTER))
+  );
 }
 
 // 坦克不可穿透：砖、钢、水、鹰巢。可穿透：树林、冰面、空地。

@@ -103,7 +103,7 @@ export class Renderer {
     this.atlas = createSpriteAtlas();
   }
 
-  draw(state: GameState, _alpha: number): void {
+  draw(state: GameState, _alpha: number, playerNames: readonly string[] = []): void {
     const { ctx } = this;
 
     this.drawCabinetFrame();
@@ -120,7 +120,7 @@ export class Renderer {
     ctx.rect(FIELD_X * ART_SCALE, FIELD_Y * ART_SCALE, FIELD_WIDTH * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
     ctx.clip();
     this.drawSpawnStars(state);
-    this.drawTanks(state);
+    this.drawTanks(state, playerNames);
     this.drawBullets(state);
     this.drawExplosions(state);
 
@@ -131,13 +131,13 @@ export class Renderer {
     ctx.restore();
 
     // 右侧 HUD 栏（剩余敌军 / 生命 / 关卡旗）
-    this.drawHud(state);
+    this.drawHud(state, playerNames);
 
     // 结果覆盖层（GAME OVER / STAGE CLEAR），绘制在最上层
-    this.drawOverlay(state);
+    this.drawOverlay(state, playerNames);
 
     // 暂停覆盖层（黄色 "PAUSE" 闪烁），凌驾于一切之上
-    this.drawPause(state);
+    this.drawPause(state, playerNames);
 
     // 关卡开场幕布（STAGE N）：铺满战场的灰色幕布 + 黑字，凌驾于战场内一切之上。
     this.drawStageStart(state);
@@ -218,7 +218,7 @@ export class Renderer {
   }
 
   // 右侧 32px 灰栏 HUD：黑色图标/文字，经典 NES 布局。
-  private drawHud(state: GameState): void {
+  private drawHud(state: GameState, playerNames: readonly string[]): void {
     const { ctx, atlas } = this;
     const hudX = FIELD_X + FIELD_WIDTH;
 
@@ -240,15 +240,15 @@ export class Renderer {
     }
 
     // 玩家生命：每名在场玩家一行（自上而下堆叠于 32px 栏内）。
-    // 每行：'nP' 标签 + 该玩家配色的迷你坦克 + 存量数字（= lives-1，与 NES 一致，不含当前在场）。
+    // 每行：2 位玩家名 + 该玩家配色的迷你坦克 + 存量数字（= lives-1，与 NES 一致）。
     const livesTop = FIELD_Y + 124;
     const rowH = 19;
     ctx.fillStyle = '#676d69';
     ctx.fillRect((hudX + 5) * ART_SCALE, (livesTop - 6) * ART_SCALE, 23 * ART_SCALE, ART_SCALE);
     for (let i = 0; i < state.playerCount; i++) {
       const rowY = livesTop + i * rowH;
-      drawText(ctx, atlas, `${i + 1}P`, hudX + 6, rowY, COLOR_HUD_ICON);
-      // 当前武器字母，紧贴 'nP' 标签右侧（栏宽 32px：标签 6..18、字母 24..30）。
+      drawText(ctx, atlas, this.playerName(playerNames, i), hudX + 6, rowY, COLOR_HUD_ICON);
+      // 当前武器字母，紧贴 2 位名字右侧（栏宽 32px：名字 6..18、字母 24..30）。
       const weapon = this.playerWeapon(state, i);
       drawText(ctx, atlas, WEAPON_LETTER[weapon], hudX + 24, rowY, WEAPON_LETTER_COLOR[weapon]);
       const stock = Math.max(0, state.livesByPlayer[i] - 1);
@@ -265,6 +265,12 @@ export class Renderer {
     drawText(ctx, atlas, String(state.stage), hudX + 12, flagY + 20, COLOR_HUD_ICON);
   }
 
+  // 正常本地/联机路径都会传入真实的 2 位名字。备用值仅供旧调试钩子或不完整快照渲染，
+  // 仍保持两字符宽度，避免挤破 HUD 与结算表格。
+  private playerName(playerNames: readonly string[], playerIndex: number): string {
+    return playerNames[playerIndex] ?? `P${playerIndex + 1}`;
+  }
+
   // 某玩家当前的武器：优先取在场坦克，其次取出生闪光中（复活）的坦克；都没有则视为 cannon。
   private playerWeapon(state: GameState, playerIndex: number): WeaponKind {
     for (const t of state.tanks) {
@@ -278,7 +284,7 @@ export class Renderer {
 
   // 结果覆盖层。GAME OVER：经典红，phaseTicks 前 GAMEOVER_SLIDE_TICKS 帧由底部滑到中央后停住。
   // STAGE CLEAR：白色，居中静止。
-  private drawOverlay(state: GameState): void {
+  private drawOverlay(state: GameState, playerNames: readonly string[]): void {
     const { ctx, atlas } = this;
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const cy = FIELD_Y + FIELD_HEIGHT / 2 - 4;
@@ -312,7 +318,7 @@ export class Renderer {
         if (state.playerCount > 1) {
           let ly = cy + 20;
           for (let i = 0; i < state.playerCount; i++) {
-            const line = `${i + 1}P ${state.scoreByPlayer[i]}`;
+            const line = `${this.playerName(playerNames, i)} ${state.scoreByPlayer[i]}`;
             const color = PLAYER_LABEL_COLORS[i] ?? COLOR_STAGE_CLEAR;
             drawTextOutlined(ctx, atlas, line, cx - Math.round(textWidth(line) / 2), ly, color);
             ly += 12;
@@ -321,7 +327,7 @@ export class Renderer {
         this.drawRestartHint(state, hintY);
       }
     } else if (state.phase === 'stageclear') {
-      this.drawStageClear(state);
+      this.drawStageClear(state, playerNames);
     }
     ctx.restore();
   }
@@ -336,7 +342,7 @@ export class Renderer {
   }
 
   // 通关结算画面：标题 + 每名玩家一列的战果表（逐类击毁数 + 累计总分），经典多人战果统计版式。
-  private drawStageClear(state: GameState): void {
+  private drawStageClear(state: GameState, playerNames: readonly string[]): void {
     const { ctx, atlas } = this;
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const white = COLOR_STAGE_CLEAR;
@@ -359,10 +365,10 @@ export class Renderer {
     const title = `STAGE ${state.stage} CLEAR`;
     drawTextOutlined(ctx, atlas, title, cx - Math.round(textWidth(title) / 2), FIELD_Y + 40, white);
 
-    // 表头行：每列 "1P".."4P"，用各玩家 PLAYER_LABEL_COLORS 配色。
+    // 表头行：每列显示 2 位玩家名，用各玩家 PLAYER_LABEL_COLORS 配色。
     const headerY = FIELD_Y + 58;
     for (let i = 0; i < pc; i++) {
-      const label = `${i + 1}P`;
+      const label = this.playerName(playerNames, i);
       const color = PLAYER_LABEL_COLORS[i] ?? white;
       drawTextOutlined(ctx, atlas, label, colLeft(i) + cellPadL, headerY, color);
     }
@@ -399,7 +405,7 @@ export class Renderer {
   }
 
   // 暂停覆盖层：黄色 "PAUSE" 居中，按 PAUSE_BLINK_TICKS 周期闪烁（半亮半灭）。
-  private drawPause(state: GameState): void {
+  private drawPause(state: GameState, playerNames: readonly string[]): void {
     if (!state.paused) return;
     if (Math.floor(state.tick / (PAUSE_BLINK_TICKS / 2)) % 2 !== 0) return; // 灭相
     const { ctx, atlas } = this;
@@ -418,7 +424,7 @@ export class Renderer {
 
     // 多人局显示是谁暂停的（该玩家配色）；单人不显示。均提示 "P = RESUME"。
     if (state.playerCount > 1 && state.pausedBy >= 0) {
-      const who = `${state.pausedBy + 1}P PAUSED`;
+      const who = `${this.playerName(playerNames, state.pausedBy)} PAUSED`;
       const color = PLAYER_LABEL_COLORS[state.pausedBy] ?? COLOR_STAGE_CLEAR;
       drawTextOutlined(ctx, atlas, who, cx - Math.round(textWidth(who) / 2), cy + 16, color);
     }
@@ -438,7 +444,7 @@ export class Renderer {
 
   // 坦克。按 kind 选用精灵；装甲坦克受损时每 ARMOR_FLASH_TICKS 帧在银/白间闪烁。
   // 履带动画：移动时每 TRACK_ANIM_TICKS 帧切换两帧，静止时冻结在第 0 帧。
-  private drawTanks(state: GameState): void {
+  private drawTanks(state: GameState, playerNames: readonly string[]): void {
     const { ctx, atlas } = this;
     const enemiesFrozen = state.enemyFreezeTicks > 0;
     for (const tank of state.tanks) {
@@ -470,11 +476,11 @@ export class Renderer {
         drawTile(ctx, atlas.shield[shieldFrame], px, py);
       }
 
-      // 多人局：在每台在场玩家坦克上方绘制该玩家配色的 "1P".."4P" 小标签，
+      // 多人局：在每台在场玩家坦克上方绘制该玩家配色的 2 位名字，
       // 居中于坦克、夹紧在战场矩形内（与坦克同处裁剪区内，故也会被树林遮挡）。
       // 单机局（playerCount===1）不绘制，保持原版清爽观感。
       if (state.playerCount > 1 && tank.kind === 'player') {
-        const label = `${tank.playerIndex + 1}P`;
+        const label = this.playerName(playerNames, tank.playerIndex);
         const w = textWidth(label);
         const color = PLAYER_LABEL_COLORS[tank.playerIndex] ?? COLOR_HUD_ICON;
         let lx = Math.round(px + TANK_SIZE / 2 - w / 2);

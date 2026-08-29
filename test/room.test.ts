@@ -15,6 +15,10 @@ class FakeWebSocket {
     this.messages.push(JSON.parse(payload) as ServerMessage);
   }
 
+  close(): void {
+    this.readyState = 3;
+  }
+
   latest<T extends ServerMessage['t']>(type: T): Extract<ServerMessage, { t: T }> | undefined {
     return this.messages.filter((message) => message.t === type).at(-1) as
       | Extract<ServerMessage, { t: T }>
@@ -121,4 +125,66 @@ test('a new level epoch forces a full terrain snapshot even when rev remains zer
   assert.equal(restarted?.snap.level?.rev, 0);
 
   internal.destroyNow();
+});
+
+test('resume tokens restore the exact in-game seat instead of the lowest disconnected seat', () => {
+  const room = new Room('TOKN', () => {});
+  const host = new FakeWebSocket();
+  const second = new FakeWebSocket();
+  const third = new FakeWebSocket();
+  room.addHost(asWebSocket(host), 'H1');
+  assert.equal(room.join(asWebSocket(second), 'S2'), 1);
+  assert.equal(room.join(asWebSocket(third), 'T3'), 2);
+  const secondToken = second.latest('joined')?.resumeToken;
+  const thirdToken = third.latest('joined')?.resumeToken;
+  assert.ok(secondToken);
+  assert.ok(thirdToken);
+
+  room.setReady(0, true);
+  room.setReady(1, true);
+  room.setReady(2, true);
+  room.start(0);
+  room.handleDisconnect(1, asWebSocket(second));
+  room.handleDisconnect(2, asWebSocket(third));
+
+  const noCredential = new FakeWebSocket();
+  assert.equal(room.join(asWebSocket(noCredential), 'XX'), 'invalid_resume');
+
+  const resumedThird = new FakeWebSocket();
+  assert.equal(room.join(asWebSocket(resumedThird), 'T3', thirdToken), 2);
+  assert.deepEqual(resumedThird.latest('started'), {
+    t: 'started',
+    playerCount: 3,
+    playerIndex: 2,
+  });
+
+  const resumedSecond = new FakeWebSocket();
+  assert.equal(room.join(asWebSocket(resumedSecond), 'S2', secondToken), 1);
+  assert.deepEqual(resumedSecond.latest('started'), {
+    t: 'started',
+    playerCount: 3,
+    playerIndex: 1,
+  });
+  assert.notEqual(resumedSecond.latest('joined')?.resumeToken, secondToken);
+
+  internals(room).destroyNow();
+});
+
+test('a replaced socket cannot disconnect or control its resumed seat', () => {
+  const room = new Room('RACE', () => {});
+  const oldSocket = new FakeWebSocket();
+  room.addHost(asWebSocket(oldSocket), 'H1');
+  const token = oldSocket.latest('joined')?.resumeToken;
+  assert.ok(token);
+  room.setReady(0, true);
+  room.start(0);
+
+  const replacement = new FakeWebSocket();
+  assert.equal(room.join(asWebSocket(replacement), 'H1', token), 0);
+  room.handleDisconnect(0, asWebSocket(oldSocket));
+
+  assert.equal(room.wsForIndex(0), asWebSocket(replacement));
+  assert.equal(replacement.latest('started')?.playerIndex, 0);
+
+  internals(room).destroyNow();
 });

@@ -11,7 +11,7 @@ import { networkInterfaces } from 'node:os';
 import { createServer as createHttpServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 
 import {
   normalizePlayerName,
@@ -24,6 +24,20 @@ import { Room, RoomManager } from './room';
 
 // 端口：默认 8080，可用 PORT 环境变量覆盖。
 export const DEFAULT_PORT = 8080;
+
+// 所有客户端消息都远小于 1 KiB。显式限制负载，避免 ws 默认 100 MiB 上限在 JSON.parse 前
+// 造成巨额字符串复制 / 解压内存；其余限额防止未认证连接或建房请求耗尽单进程资源。
+export const MAX_WS_PAYLOAD_BYTES = 4 * 1024;
+export const MAX_WS_CONNECTIONS = 256;
+export const MAX_WS_CONNECTIONS_PER_IP = 16;
+export const MAX_ROOMS = 128;
+export const MAX_MESSAGES_PER_SECOND = 120;
+const UNJOINED_CONNECTION_TIMEOUT_MS = 10_000;
+const DEFAULT_PING_INTERVAL_MS = 30_000;
+
+export interface ServerOptions {
+  heartbeatIntervalMs?: number;
+}
 
 // 构建产物目录：相对本模块定位（src/server/ → ../../dist），与运行时 cwd 无关。
 const DIST_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../dist');
@@ -134,7 +148,10 @@ function sendError(ws: WebSocket, code: ServerErrorCode, msg: string): void {
 
 // 启动服务器：创建 HTTP 服务（静态 + /healthz），并把 WebSocket 挂到同一 http.Server 上
 // （同端口 upgrade）。返回 { httpServer, wss } 以便 smoke.ts / 入口把控生命周期。
-export function createServer(port: number): { httpServer: HttpServer; wss: WebSocketServer } {
+export function createServer(
+  port: number,
+  options: ServerOptions = {},
+): { httpServer: HttpServer; wss: WebSocketServer } {
   const manager = new RoomManager();
   // 启动时探测一次 dist/index.html 是否存在，决定静态层行为并写入启动日志。
   const distExists = existsSync(join(DIST_DIR, 'index.html'));
@@ -144,6 +161,7 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
   // 是跨境等弱网线路可玩性的关键（阈值 512B：小消息不压，省 CPU）。
   const wss = new WebSocketServer({
     server: httpServer,
+    maxPayload: MAX_WS_PAYLOAD_BYTES,
     perMessageDeflate: { threshold: 512 },
   });
   // 每个连接的归属（哪个房间、哪个座位）。连接关闭后移除。
@@ -152,19 +170,64 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
   // 保活心跳：每 30s 对所有连接 ping 一次（浏览器自动回 pong）。
   // 大厅等阶段没有任何应用层流量，公网上的 NAT/代理会按空闲超时静默断开连接
   //（实测：大厅闲置约 2 分钟即掉线、房间随之销毁），心跳可避免这一点。
-  const PING_INTERVAL_MS = 30_000;
+  const heartbeatAlive = new WeakMap<WebSocket, boolean>();
+  const pingIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
   const pingTimer = setInterval(() => {
     for (const client of wss.clients) {
-      if (client.readyState === 1) client.ping();
+      if (client.readyState !== 1) continue;
+      if (heartbeatAlive.get(client) === false) {
+        client.terminate();
+        continue;
+      }
+      heartbeatAlive.set(client, false);
+      client.ping();
     }
-  }, PING_INTERVAL_MS);
-  wss.on('close', () => clearInterval(pingTimer));
+  }, pingIntervalMs);
+  wss.on('close', () => {
+    clearInterval(pingTimer);
+    manager.shutdown();
+  });
+
+  const connectionsByIp = new Map<string, number>();
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     // 关闭 Nagle 算法：快照以 ~100ms 固定节奏发出的小帧，不应为等待合并而滞留在内核缓冲，
     // 否则跨境高 RTT 线路上会额外叠加一段延迟。逐连接设置（底层 TCP socket）。
     req.socket.setNoDelay(true);
-    ws.on('message', (data: Buffer) => {
+    // 先挂 error 处理，确保下面因容量拒绝而 close 的连接也不会产生未处理事件。
+    ws.on('error', () => {});
+    heartbeatAlive.set(ws, true);
+    ws.on('pong', () => heartbeatAlive.set(ws, true));
+
+    const remoteIp = req.socket.remoteAddress ?? 'unknown';
+    const ipConnections = connectionsByIp.get(remoteIp) ?? 0;
+    if (wss.clients.size > MAX_WS_CONNECTIONS || ipConnections >= MAX_WS_CONNECTIONS_PER_IP) {
+      ws.close(1013, 'server busy');
+      return;
+    }
+    connectionsByIp.set(remoteIp, ipConnections + 1);
+
+    let cleanedUp = false;
+    let joined = false;
+    let rateWindowStartedAt = Date.now();
+    let messagesInWindow = 0;
+    const unjoinedTimer = setTimeout(() => {
+      if (!joined && ws.readyState === 1) ws.close(1008, 'join timeout');
+    }, UNJOINED_CONNECTION_TIMEOUT_MS);
+
+    ws.on('message', (data: RawData) => {
+      const now = Date.now();
+      if (now - rateWindowStartedAt >= 1000) {
+        rateWindowStartedAt = now;
+        messagesInWindow = 0;
+      }
+      messagesInWindow++;
+      if (messagesInWindow > MAX_MESSAGES_PER_SECOND) {
+        sendError(ws, 'bad_message', '消息发送过快');
+        ws.close(1008, 'rate limit');
+        return;
+      }
+
       let msg: ClientMessage;
       try {
         msg = JSON.parse(data.toString()) as ClientMessage;
@@ -178,6 +241,12 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
       }
 
       const ctx = contexts.get(ws);
+      // 刷新 / 重连会用新 socket 替换旧连接。旧 socket 的迟到消息不得再操作同一座位。
+      if (ctx && ctx.room.wsForIndex(ctx.playerIndex) !== ws) {
+        contexts.delete(ws);
+        ws.close(1008, 'session replaced');
+        return;
+      }
 
       try {
         switch (msg.t) {
@@ -189,9 +258,15 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
               sendError(ws, 'bad_message', 'name 必须为 2 位字母或数字');
               return;
             }
+            if (manager.size >= MAX_ROOMS) {
+              sendError(ws, 'server_busy', '房间数量已达上限');
+              return;
+            }
             const room = manager.createRoom();
             const idx = room.addHost(ws, name);
             contexts.set(ws, { room, playerIndex: idx });
+            joined = true;
+            clearTimeout(unjoinedTimer);
             break;
           }
 
@@ -206,17 +281,26 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
               sendError(ws, 'bad_message', 'name 必须为 2 位字母或数字');
               return;
             }
+            if (
+              msg.resumeToken !== undefined &&
+              (typeof msg.resumeToken !== 'string' || msg.resumeToken.length > 128)
+            ) {
+              sendError(ws, 'bad_message', 'resumeToken 非法');
+              return;
+            }
             const room = manager.getRoom(msg.code.toUpperCase());
             if (!room) {
               sendError(ws, 'room_not_found', '房间不存在');
               return;
             }
-            const res = room.join(ws, name);
+            const res = room.join(ws, name, msg.resumeToken);
             if (typeof res === 'string') {
               sendError(ws, res, '无法加入房间');
               return;
             }
             contexts.set(ws, { room, playerIndex: res });
+            joined = true;
+            clearTimeout(unjoinedTimer);
             break;
           }
 
@@ -250,7 +334,7 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
           case 'leave': {
             if (!ctx) return;
             // 主动离开：走断线清理路径（大厅释放座位 / 进行中保留待重连），随后关闭连接。
-            ctx.room.handleDisconnect(ctx.playerIndex);
+            ctx.room.handleDisconnect(ctx.playerIndex, ws);
             contexts.delete(ws);
             ws.close();
             break;
@@ -268,15 +352,19 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
     });
 
     ws.on('close', () => {
+      if (!cleanedUp) {
+        cleanedUp = true;
+        clearTimeout(unjoinedTimer);
+        const count = connectionsByIp.get(remoteIp) ?? 0;
+        if (count <= 1) connectionsByIp.delete(remoteIp);
+        else connectionsByIp.set(remoteIp, count - 1);
+      }
       const ctx = contexts.get(ws);
       if (ctx) {
-        ctx.room.handleDisconnect(ctx.playerIndex);
+        ctx.room.handleDisconnect(ctx.playerIndex, ws);
         contexts.delete(ws);
       }
     });
-
-    // 忽略 socket 层错误（如异常断开），close 事件会随后触发清理。
-    ws.on('error', () => {});
   });
 
   httpServer.listen(port, () => {

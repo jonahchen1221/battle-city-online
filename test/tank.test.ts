@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { BRICK_BL, BRICK_BR, BRICK_TL, BRICK_TR } from '../src/core/constants';
 import { emptyInput } from '../src/core/types';
-import { createEmptyLevel } from '../src/game/level';
-import { applyInput, createEnemy, createPlayer } from '../src/game/tank';
+import { Cell, createEmptyLevel, removeBrickQuarters, setCell } from '../src/game/level';
+import { applyInput, canTankOccupy, createEnemy, createPlayer } from '../src/game/tank';
 
 test('perpendicular turn is rejected when axis snap would overlap another tank', () => {
   const level = createEmptyLevel();
@@ -49,4 +50,25 @@ test('an overlapping tank behind cannot push a moving tank in the opposite direc
 
   assert.equal(tank.x, 187);
   assert.equal(tank.y, 0);
+});
+
+test('tank collision follows surviving brick quarters instead of the whole subtile', () => {
+  const level = createEmptyLevel();
+  setCell(level, 5, 5, Cell.BRICK);
+  removeBrickQuarters(level, 5, 5, BRICK_TL | BRICK_TR);
+  const tank = createPlayer(0, 1);
+
+  // Candidate box ends exactly where the surviving bottom quarters begin.
+  assert.equal(canTankOccupy(tank, 40, 28, level, [tank]), true);
+  assert.equal(canTankOccupy(tank, 40, 29, level, [tank]), false);
+
+  Object.assign(tank, { x: 40, y: 27.5, dir: 'down' });
+  const input = emptyInput();
+  input.down = true;
+  applyInput(tank, input, level, [tank]);
+  assert.ok(Math.abs(tank.y - 28) < 1e-6, `expected y=28, got ${tank.y}`);
+
+  // Keep the imported bottom-bit constants tied to the intended surviving mask.
+  const idx = 5 * level.cols + 5;
+  assert.equal(level.brickMask[idx], BRICK_BL | BRICK_BR);
 });

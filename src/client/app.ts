@@ -52,6 +52,7 @@ import {
   drawLogoTextCentered,
   drawPixelPanel,
   drawTextCentered,
+  gamePlayerNames,
   powerupTickerText,
 } from './ui';
 
@@ -62,9 +63,15 @@ const TITLE_ITEMS = ['NAME', '1 PLAYER', 'CREATE ROOM', 'JOIN ROOM'] as const;
 
 // 玩家名只保存在当前浏览器；联机时随 create / join 消息交给服务器广播。
 const PLAYER_NAME_STORAGE_KEY = 'battle-city-player-name';
+const RESUME_TOKEN_STORAGE_PREFIX = 'battle-city-resume-token:';
 
 // 联机输入心跳：即便输入未变化，也每 500ms 重发一次最近输入（对抗丢包 / 保活）。
 const INPUT_HEARTBEAT_MS = 500;
+// 服务端保留空房 60 秒；客户端在略短的窗口内指数退避重连，给最后一次握手留出余量。
+const RECONNECT_WINDOW_MS = 55_000;
+const RECONNECT_DELAY_MIN_MS = 250;
+const RECONNECT_DELAY_MAX_MS = 5_000;
+const RECONNECT_ATTEMPT_TIMEOUT_MS = 8_000;
 
 // ── 房间分享 URL ──
 // 地址栏查询参数名：`?room=ABCD`。进房后写入地址栏，同伴打开即自动加入。
@@ -105,6 +112,8 @@ const ERROR_TEXT: Record<ServerErrorCode, string> = {
   already_started: 'GAME ALREADY STARTED',
   not_host: 'NOT HOST',
   not_all_ready: 'NOT ALL READY',
+  invalid_resume: 'SESSION EXPIRED',
+  server_busy: 'SERVER BUSY',
   bad_message: 'BAD MESSAGE',
 };
 
@@ -147,9 +156,13 @@ export class App {
   private roomCode = '';
   private myPlayerIndex = 0;
   private players: LobbyPlayer[] = [];
+  private gamePlayerNames: string[] = [];
   private statusMsg = ''; // 普通状态行（如 CONNECTING）
   private statusError = ''; // 红色错误行
-  private pendingAction: { t: 'create' } | { t: 'join'; code: string } | null = null;
+  private pendingAction:
+    | { t: 'create' }
+    | { t: 'join'; code: string; resumeToken?: string }
+    | null = null;
   private linkCopiedUntil = 0; // 复制成功提示的截止时刻（performance.now() 口径，0 = 无提示）
 
   // 联机游戏快照 / 插值（抖动缓冲）。客户端不做预测：本地与远程坦克全部走同一条插值路径。
@@ -162,6 +175,11 @@ export class App {
   private lastSentInput: InputState = emptyInput();
   private lastSendTime = 0;
   private disconnected = false;
+  private resumeToken = '';
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectDeadline = 0;
+  private reconnectAttempts = 0;
+  private reconnecting = false;
 
   // 道具拾取跑马灯：只保留最新一条，新拾取会立即覆盖当前消息并重新从右侧入场。
   private activePowerupTicker: ActivePowerupTicker | null = null;
@@ -222,7 +240,7 @@ export class App {
 
     this.codeBuffer = code;
     this.screen = 'joinCode';
-    this.pendingAction = { t: 'join', code };
+    this.pendingAction = { t: 'join', code, resumeToken: loadResumeToken(code) ?? undefined };
     this.statusMsg = 'CONNECTING';
     this.net.connect();
   }
@@ -257,7 +275,7 @@ export class App {
     } else if (this.screen === 'netGame') {
       // 断线覆盖层：键盘走 Enter，手柄走 A / Start。
       if (this.disconnected) {
-        if (pad.confirm || pad.start) this.resetNetToTitle();
+        if (pad.back || (!this.reconnecting && (pad.confirm || pad.start))) this.resetNetToTitle();
       } else {
         this.tickNet();
       }
@@ -309,7 +327,7 @@ export class App {
         this.drawLobby();
         break;
       case 'localGame':
-        this.renderer.draw(this.localState, alpha);
+        this.renderer.draw(this.localState, alpha, [this.playerName]);
         this.updatePowerupTicker();
         break;
       case 'netGame':
@@ -353,25 +371,36 @@ export class App {
       this.net.send({ t: 'create', name: this.playerName });
       this.statusMsg = 'CREATING ROOM';
     } else if (this.pendingAction?.t === 'join') {
-      this.net.send({ t: 'join', code: this.pendingAction.code, name: this.playerName });
+      this.net.send({
+        t: 'join',
+        code: this.pendingAction.code,
+        name: this.playerName,
+        resumeToken: this.pendingAction.resumeToken,
+      });
       this.statusMsg = 'JOINING';
     }
   }
 
   private onNetMessage(msg: ServerMessage): void {
     switch (msg.t) {
-      case 'joined':
+      case 'joined': {
+        const wasReconnecting = this.screen === 'netGame' && this.disconnected;
+        this.cancelReconnectTimer();
         this.roomCode = msg.code;
+        this.resumeToken = msg.resumeToken;
+        saveResumeToken(msg.code, msg.resumeToken);
         this.myPlayerIndex = msg.playerIndex;
         this.players = msg.players;
         this.statusMsg = '';
         this.statusError = '';
         this.pendingAction = null;
+        this.reconnecting = false;
         this.linkCopiedUntil = 0;
-        this.screen = 'lobby';
+        if (!wasReconnecting) this.screen = 'lobby';
         // 地址栏始终带上房间码：建房者直接复制地址栏即可分享。
         history.replaceState(null, '', `${location.pathname}?${URL_ROOM_PARAM}=${msg.code}`);
         break;
+      }
       case 'lobby':
         this.players = msg.players;
         break;
@@ -380,6 +409,11 @@ export class App {
         this.myPlayerIndex = msg.playerIndex;
         // 清空快照缓冲，等待第一份 snapshot 才真正进入渲染。
         this.resetNetPlayState();
+        this.gamePlayerNames = gamePlayerNames(this.players, msg.playerCount);
+        this.cancelReconnectTimer();
+        this.reconnectAttempts = 0;
+        this.reconnectDeadline = 0;
+        this.reconnecting = false;
         this.disconnected = false;
         this.lastSentInput = emptyInput();
         this.lastSendTime = 0;
@@ -394,6 +428,14 @@ export class App {
         this.statusError = ERROR_TEXT[msg.code] ?? msg.msg.toUpperCase();
         this.statusMsg = '';
         this.pendingAction = null;
+        if (
+          this.screen === 'netGame' &&
+          this.disconnected &&
+          (msg.code === 'invalid_resume' || msg.code === 'room_not_found' || msg.code === 'already_started')
+        ) {
+          this.cancelReconnectTimer();
+          this.reconnecting = false;
+        }
         break;
     }
   }
@@ -435,8 +477,9 @@ export class App {
 
   private onNetClose(): void {
     if (this.screen === 'netGame') {
-      // 游戏中断线：冻结当前帧并提示，Enter 返回标题。
+      // 游戏中断线：冻结当前帧，在服务端 60 秒座位宽限期内自动用 resume token 恢复。
       this.disconnected = true;
+      this.beginReconnect();
     } else if (this.screen === 'lobby') {
       this.statusError = 'CONNECTION LOST';
       this.resetNetToTitle();
@@ -449,17 +492,84 @@ export class App {
   }
 
   private resetNetToTitle(): void {
+    const departingRoom = this.roomCode;
+    this.cancelReconnectTimer();
     this.net.close();
     this.pendingAction = null;
     this.statusMsg = '';
     this.players = [];
     this.roomCode = '';
+    this.resumeToken = '';
     this.disconnected = false;
+    this.reconnecting = false;
+    this.reconnectDeadline = 0;
+    this.reconnectAttempts = 0;
     this.linkCopiedUntil = 0;
     this.resetNetPlayState();
     this.screen = 'title';
     // 清掉地址栏的房间码，避免刷新后又自动加入已退出的房间。
     history.replaceState(null, '', location.pathname);
+    if (departingRoom) clearResumeToken(departingRoom);
+  }
+
+  private beginReconnect(): void {
+    if (!this.roomCode || !this.resumeToken) {
+      this.reconnecting = false;
+      return;
+    }
+    if (this.reconnectDeadline === 0) {
+      this.reconnectDeadline = performance.now() + RECONNECT_WINDOW_MS;
+      this.reconnectAttempts = 0;
+    }
+    this.reconnecting = true;
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
+    this.cancelReconnectTimer();
+    const remaining = this.reconnectDeadline - performance.now();
+    if (remaining <= 0) {
+      this.reconnecting = false;
+      this.statusError = 'RECONNECT FAILED';
+      return;
+    }
+    const delay = Math.min(
+      RECONNECT_DELAY_MAX_MS,
+      RECONNECT_DELAY_MIN_MS * 2 ** this.reconnectAttempts,
+      remaining,
+    );
+    this.reconnectAttempts++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.disconnected || !this.reconnecting) return;
+      this.pendingAction = {
+        t: 'join',
+        code: this.roomCode,
+        resumeToken: this.resumeToken,
+      };
+      this.statusMsg = 'RECONNECTING';
+      this.statusError = '';
+      this.net.connect();
+      // 浏览器的 WebSocket 握手在断网 / 黑洞路由下可能长时间既不开启也不关闭。
+      // 给每次尝试设上限，主动回到退避循环，并严格服从总重连截止时间。
+      const attemptRemaining = this.reconnectDeadline - performance.now();
+      this.reconnectTimer = setTimeout(
+        () => {
+          this.reconnectTimer = null;
+          if (!this.disconnected || !this.reconnecting) return;
+          this.net.close();
+          this.scheduleReconnect();
+        },
+        Math.max(0, Math.min(RECONNECT_ATTEMPT_TIMEOUT_MS, attemptRemaining)),
+      );
+    }, delay);
+  }
+
+  private cancelReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   // 清空一切联机对局态（快照缓冲 / 自适应统计 / 地形）。开局与返回标题共用。
@@ -469,6 +579,7 @@ export class App {
     this.lastArrival = 0;
     this.interpDelay = INTERP_DELAY_START;
     this.clientLevel = null;
+    this.gamePlayerNames = [];
     this.clearPowerupTicker();
   }
 
@@ -489,6 +600,11 @@ export class App {
     // 断线覆盖层：任意时刻的 netGame 断线态下，Enter 返回标题。
     if (this.screen === 'netGame') {
       if (this.disconnected && e.code === 'Enter' && !e.repeat) {
+        if (!this.reconnecting) {
+          e.preventDefault();
+          this.resetNetToTitle();
+        }
+      } else if (this.disconnected && e.code === 'Escape' && !e.repeat) {
         e.preventDefault();
         this.resetNetToTitle();
       }
@@ -648,7 +764,11 @@ export class App {
 
   private submitJoinCode(): void {
     if (this.codeBuffer.length === ROOM_CODE_LENGTH) {
-      this.pendingAction = { t: 'join', code: this.codeBuffer };
+      this.pendingAction = {
+        t: 'join',
+        code: this.codeBuffer,
+        resumeToken: loadResumeToken(this.codeBuffer) ?? undefined,
+      };
       this.statusMsg = 'CONNECTING';
       this.statusError = '';
       this.net.connect();
@@ -931,7 +1051,7 @@ export class App {
   private drawNet(): void {
     const rs = this.buildNetRenderState();
     if (rs) {
-      this.renderer.draw(rs, 0);
+      this.renderer.draw(rs, 0, this.gamePlayerNames);
       this.updatePowerupTicker();
     } else {
       // 尚未收到首份快照：黑屏 + 提示。
@@ -990,7 +1110,15 @@ export class App {
     const cx = FIELD_X + FIELD_WIDTH / 2;
     const cy = FIELD_Y + FIELD_HEIGHT / 2;
     drawTextCentered(ctx, atlas, 'CONNECTION LOST', cx, cy - 12, COLOR_ERROR);
-    drawTextCentered(ctx, atlas, 'PRESS ENTER', cx, cy + 8, COLOR_MENU);
+    drawTextCentered(
+      ctx,
+      atlas,
+      this.reconnecting ? 'RECONNECTING' : 'PRESS ENTER',
+      cx,
+      cy + 8,
+      this.reconnecting ? COLOR_HIGHLIGHT : COLOR_MENU,
+    );
+    if (this.reconnecting) drawTextCentered(ctx, atlas, 'ESC TO LEAVE', cx, cy + 24, COLOR_MENU_DIM);
   }
 
   // ───────────────────────── 顶部道具跑马灯 ─────────────────────────
@@ -1010,7 +1138,10 @@ export class App {
     const track = this.powerupTickerElement;
     const textElement = this.powerupTickerTextElement;
     if (!track || !textElement) return;
-    textElement.textContent = powerupTickerText(event);
+    const name = this.screen === 'localGame'
+      ? this.playerName
+      : this.gamePlayerNames[event.playerIndex] ?? `P${event.playerIndex + 1}`;
+    textElement.textContent = powerupTickerText(event, name);
     textElement.style.color = PLAYER_LABEL_COLORS[event.playerIndex] ?? COLOR_HIGHLIGHT;
     textElement.style.transform = `translate3d(${track.clientWidth + TICKER_EDGE_PAD}px, 0, 0)`;
     track.classList.add('is-active');
@@ -1075,6 +1206,32 @@ function savePlayerName(name: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+// 座位凭证只需跨页面刷新，不应跨浏览器会话长期留存；sessionStorage 关闭标签页后自然清理。
+// 所有存储访问都兜底捕获（隐私模式 / 禁止存储时仍可正常联机，只是无法自动恢复座位）。
+function loadResumeToken(code: string): string | null {
+  try {
+    return sessionStorage.getItem(`${RESUME_TOKEN_STORAGE_PREFIX}${code.toUpperCase()}`);
+  } catch {
+    return null;
+  }
+}
+
+function saveResumeToken(code: string, token: string): void {
+  try {
+    sessionStorage.setItem(`${RESUME_TOKEN_STORAGE_PREFIX}${code.toUpperCase()}`, token);
+  } catch {
+    // 存储不可用时退化为仅当前页面内存重连。
+  }
+}
+
+function clearResumeToken(code: string): void {
+  try {
+    sessionStorage.removeItem(`${RESUME_TOKEN_STORAGE_PREFIX}${code.toUpperCase()}`);
+  } catch {
+    // 主动退出本身仍然有效；忽略浏览器存储异常。
   }
 }
 

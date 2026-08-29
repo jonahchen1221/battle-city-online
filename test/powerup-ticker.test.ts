@@ -26,5 +26,5 @@ test('marquee copy identifies the player, item, and effect', () => {
     kind: 'ghost',
   };
 
-  assert.equal(powerupTickerText(event), '3P GOT GHOST: PASS THROUGH BRICKS 10 SEC');
+  assert.equal(powerupTickerText(event, 'AX'), 'AX GOT GHOST: PASS THROUGH BRICKS 10 SEC');
 });

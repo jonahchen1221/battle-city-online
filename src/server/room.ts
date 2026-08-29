@@ -4,7 +4,7 @@
 // 本文件位于服务器层（src/server/），可自由使用 Node API / crypto / 计时器 ——
 // 但绝不修改 src/game 的纯模拟层，只调用 createGameState / update / pickSnapshot。
 
-import { randomInt } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import type { WebSocket } from 'ws';
 
 import {
@@ -40,6 +40,8 @@ interface Slot {
   connected: boolean;
   isHost: boolean;
   ws: WebSocket | null; // 断线时置 null
+  // 服务端签发的不可猜测座位凭证。每次成功接管连接后轮换，避免旧凭证重放。
+  resumeToken: string;
   input: InputState; // 该玩家最新输入（逐帧应用，收到新消息才更新）
   // 已成功下发给该连接的地形 epoch / rev（增量地形，见 protocol.ts）。-1 = 尚未发过；
   // 入房 / 重连时二者都重置为 -1，保证新连接的第一份快照必含完整地形。
@@ -121,6 +123,25 @@ export class Room {
   }
 
   // ── 加入 / 建房 ──
+  private static newResumeToken(): string {
+    return randomBytes(24).toString('base64url');
+  }
+
+  private attach(slot: Slot, ws: WebSocket, name: string): void {
+    const previous = slot.ws;
+    slot.ws = ws;
+    slot.name = name;
+    slot.connected = true;
+    slot.input = emptyInput();
+    slot.sentLevelEpoch = -1;
+    slot.sentLevelRev = -1;
+    slot.resumeToken = Room.newResumeToken();
+    this.cancelDestroyTimer();
+    // 刷新页面时新连接可能先于旧连接的 close 到达。主动关闭旧 socket；server.ts 还会按
+    // wsForIndex 校验连接归属，旧 socket 的迟到消息 / close 都不能影响新连接。
+    if (previous && previous !== ws && previous.readyState === 1) previous.close(1000, 'session replaced');
+  }
+
   // 建房者：分配 0 号位并成为房主。
   addHost(ws: WebSocket, name: string): number {
     const slot: Slot = {
@@ -130,46 +151,56 @@ export class Room {
       connected: true,
       isHost: true,
       ws,
+      resumeToken: Room.newResumeToken(),
       input: emptyInput(),
       sentLevelEpoch: -1,
       sentLevelRev: -1,
     };
     this.slots.set(0, slot);
     this.cancelDestroyTimer();
-    Room.send(ws, { t: 'joined', code: this.code, playerIndex: 0, players: this.toLobbyPlayers() });
+    Room.send(ws, {
+      t: 'joined',
+      code: this.code,
+      playerIndex: 0,
+      players: this.toLobbyPlayers(),
+      resumeToken: slot.resumeToken,
+    });
     return 0;
   }
 
   // 加入：大厅内取最低空位；进行中的房间仅允许顶替断线座位（重连）。
   // 返回分配到的 playerIndex，失败返回错误码。
-  join(ws: WebSocket, name: string): number | ServerErrorCode {
-    if (this.phase === 'in-game') {
-      // 重连：寻找一个断线且已保留的座位顶替。
-      const reclaimed = [...this.slots.values()]
-        .filter((s) => !s.connected)
-        .sort((a, b) => a.playerIndex - b.playerIndex)[0];
-      if (!reclaimed) return 'already_started';
-      reclaimed.ws = ws;
-      reclaimed.name = name;
-      reclaimed.connected = true;
-      reclaimed.input = emptyInput();
-      reclaimed.sentLevelEpoch = -1;
-      reclaimed.sentLevelRev = -1; // 重连：强制下一份快照重发完整地形
-      this.cancelDestroyTimer();
-      // 先发 joined（含旧座位号），再补一条 started 让客户端直接进入游戏画面。
+  join(ws: WebSocket, name: string, resumeToken?: string): number | ServerErrorCode {
+    // 有效凭证始终精确恢复其原座位。允许替换仍被服务器视为在线的旧 socket，以修复网络
+    // 半开 / 刷新竞态；旧连接会被 attach 主动关闭，且其后续消息会被 server.ts 拒绝。
+    const resumed = resumeToken
+      ? [...this.slots.values()].find((s) => s.resumeToken === resumeToken)
+      : undefined;
+    if (resumed) {
+      this.attach(resumed, ws, name);
       Room.send(ws, {
         t: 'joined',
         code: this.code,
-        playerIndex: reclaimed.playerIndex,
+        playerIndex: resumed.playerIndex,
         players: this.toLobbyPlayers(),
+        resumeToken: resumed.resumeToken,
       });
-      const gamePlayerIndex = this.gameSlots.indexOf(reclaimed);
-      Room.send(ws, {
-        t: 'started',
-        playerCount: this.game?.playerCount ?? this.gameSlots.length,
-        playerIndex: gamePlayerIndex,
-      });
-      return reclaimed.playerIndex;
+      if (this.phase === 'in-game') {
+        const gamePlayerIndex = this.gameSlots.indexOf(resumed);
+        Room.send(ws, {
+          t: 'started',
+          playerCount: this.game?.playerCount ?? this.gameSlots.length,
+          playerIndex: gamePlayerIndex,
+        });
+      } else {
+        this.broadcastLobby();
+      }
+      return resumed.playerIndex;
+    }
+
+    if (this.phase === 'in-game') {
+      // 对局开始后不再按“最低断线座位”猜身份；缺失 / 过期 / 伪造凭证一律拒绝。
+      return 'invalid_resume';
     }
 
     // 大厅：分配最低空位。
@@ -182,13 +213,20 @@ export class Room {
       connected: true,
       isHost: false,
       ws,
+      resumeToken: Room.newResumeToken(),
       input: emptyInput(),
       sentLevelEpoch: -1,
       sentLevelRev: -1,
     };
     this.slots.set(idx, slot);
     this.cancelDestroyTimer();
-    Room.send(ws, { t: 'joined', code: this.code, playerIndex: idx, players: this.toLobbyPlayers() });
+    Room.send(ws, {
+      t: 'joined',
+      code: this.code,
+      playerIndex: idx,
+      players: this.toLobbyPlayers(),
+      resumeToken: slot.resumeToken,
+    });
     this.broadcastLobby();
     return idx;
   }
@@ -228,9 +266,11 @@ export class Room {
 
   // ── 断线 ──
   // 大厅：彻底释放座位。进行中：保留座位待重连，输入清零。
-  handleDisconnect(playerIndex: number): void {
+  handleDisconnect(playerIndex: number, ws?: WebSocket): void {
     const slot = this.slots.get(playerIndex);
     if (!slot) return;
+    // 被新连接替换的旧 socket 迟到 close 时不得删除 / 断开新连接的座位。
+    if (ws && slot.ws !== ws) return;
 
     if (this.phase === 'lobby') {
       const wasHost = slot.isHost;
@@ -379,6 +419,11 @@ export class Room {
     this.slots.clear();
     this.onDestroy(this.code);
   }
+
+  // 服务器整体停机时立即释放循环与宽限期定时器；常规房间生命周期仍走内部销毁策略。
+  shutdown(): void {
+    this.destroyNow();
+  }
 }
 
 // 房间注册表：建房 / 按码查房 / 生成唯一房间码。
@@ -409,5 +454,10 @@ export class RoomManager {
 
   get size(): number {
     return this.rooms.size;
+  }
+
+  shutdown(): void {
+    for (const room of [...this.rooms.values()]) room.shutdown();
+    this.rooms.clear();
   }
 }

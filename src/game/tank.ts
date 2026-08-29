@@ -21,7 +21,14 @@ import {
   ICE_SLIDE_TICKS,
   BOOTS_SPEED_MULT,
 } from '../core/constants';
-import { Cell, CellType, LevelState, getCell, isSolidForTank } from './level';
+import {
+  Cell,
+  CellType,
+  LevelState,
+  brickMaskOverlapsRect,
+  getCell,
+  isSolidForTank,
+} from './level';
 
 // 敌方坦克种类（用于计分/计数等以种类为键的表）。
 export type EnemyKind = 'basic' | 'fast' | 'power' | 'armor';
@@ -187,7 +194,19 @@ function overlapsBrick(tank: TankState, level: LevelState): boolean {
   const r1 = Math.floor((tank.y + TANK_SIZE - EPS) / SUBTILE);
   for (let r = r0; r <= r1; r++) {
     for (let c = c0; c <= c1; c++) {
-      if (getCell(level, c, r) === Cell.BRICK) return true;
+      if (
+        brickMaskOverlapsRect(
+          level,
+          c,
+          r,
+          tank.x,
+          tank.y,
+          tank.x + TANK_SIZE,
+          tank.y + TANK_SIZE,
+        )
+      ) {
+        return true;
+      }
     }
   }
   return false;
@@ -208,36 +227,50 @@ function tankSolidTest(tank: TankState, level: LevelState): SolidTest {
   };
 }
 
-// 检查一段水平区间 [xLeft, xRight) 在某子格行 row 上是否触及不可穿透地形。
-function rowBlocked(
+// 完整 16×16 车体在候选位置是否与当前坦克不可穿透的地形重叠。
+// 砖块须进一步检查仍存活的 4×4 象限；其余实心地形仍按整个 8×8 子格判定。
+function terrainBlocksTankAt(
   level: LevelState,
-  row: number,
-  xLeft: number,
-  xRight: number,
+  x: number,
+  y: number,
   solid: SolidTest,
 ): boolean {
-  const c0 = Math.floor(xLeft / SUBTILE);
-  const c1 = Math.floor((xRight - EPS) / SUBTILE);
-  for (let c = c0; c <= c1; c++) {
-    if (solid(getCell(level, c, row))) return true;
+  const c0 = Math.floor(x / SUBTILE);
+  const c1 = Math.floor((x + TANK_SIZE - EPS) / SUBTILE);
+  const r0 = Math.floor(y / SUBTILE);
+  const r1 = Math.floor((y + TANK_SIZE - EPS) / SUBTILE);
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const cell = getCell(level, c, r);
+      if (!solid(cell)) continue;
+      if (
+        cell !== Cell.BRICK ||
+        brickMaskOverlapsRect(level, c, r, x, y, x + TANK_SIZE, y + TANK_SIZE)
+      ) {
+        return true;
+      }
+    }
   }
   return false;
 }
 
-// 检查一段竖直区间 [yTop, yBottom) 在某子格列 col 上是否触及不可穿透地形。
-function colBlocked(
-  level: LevelState,
-  col: number,
-  yTop: number,
-  yBottom: number,
-  solid: SolidTest,
-): boolean {
-  const r0 = Math.floor(yTop / SUBTILE);
-  const r1 = Math.floor((yBottom - EPS) / SUBTILE);
-  for (let r = r0; r <= r1; r++) {
-    if (solid(getCell(level, col, r))) return true;
+// 一帧最多移动 1.5px，远小于最小砖象限 4px。若终点穿入地形，在起点到终点之间
+// 二分出最远的无碰撞坐标，使坦克能贴到半砖（4px）边缘，而不是退回整个 8px 子格边缘。
+function furthestTerrainClear(
+  from: number,
+  to: number,
+  blockedAt: (position: number) => boolean,
+): number {
+  if (!blockedAt(to)) return to;
+  if (blockedAt(from)) return from;
+  let clear = from;
+  let blocked = to;
+  for (let i = 0; i < 24; i++) {
+    const mid = (clear + blocked) / 2;
+    if (blockedAt(mid)) blocked = mid;
+    else clear = mid;
   }
-  return false;
+  return clear;
 }
 
 // 两个 16×16 坦克盒是否严格重叠（紧贴相邻不算重叠，便于吸附贴合）。
@@ -255,15 +288,8 @@ export function canTankOccupy(
   others: TankState[],
 ): boolean {
   if (x < 0 || y < 0 || x > MAX_X || y > MAX_Y) return false;
-  const c0 = Math.floor(x / SUBTILE);
-  const c1 = Math.floor((x + TANK_SIZE - EPS) / SUBTILE);
-  const r0 = Math.floor(y / SUBTILE);
-  const r1 = Math.floor((y + TANK_SIZE - EPS) / SUBTILE);
-  for (let r = r0; r <= r1; r++) {
-    for (let c = c0; c <= c1; c++) {
-      if (isSolidForTank(getCell(level, c, r))) return false;
-    }
-  }
+  const solid = tankSolidTest(tank, level);
+  if (terrainBlocksTankAt(level, x, y, solid)) return false;
   for (const o of others) {
     if (o === tank || !o.alive) continue;
     if (tanksOverlap(x, y, o.x, o.y)) return false;
@@ -280,11 +306,10 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
   const { x, y } = tank;
   switch (tank.dir) {
     case 'up': {
-      let ny = Math.max(0, y - d);
-      const row = Math.floor(ny / SUBTILE); // 前沿（顶边）所在行
-      if (rowBlocked(level, row, x, x + TANK_SIZE, solid)) {
-        ny = (row + 1) * SUBTILE; // 紧贴该行下边界
-      }
+      const target = Math.max(0, y - d);
+      let ny = furthestTerrainClear(y, target, (candidate) =>
+        terrainBlocksTankAt(level, x, candidate, solid),
+      );
       for (const o of others) {
         if (o === tank || !o.alive) continue;
         // 只允许位于移动方向前方的坦克收紧候选位置。若状态中已经存在重叠，后方坦克
@@ -295,12 +320,10 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
       break;
     }
     case 'down': {
-      let ny = Math.min(MAX_Y, y + d);
-      const bottom = ny + TANK_SIZE;
-      const row = Math.floor((bottom - EPS) / SUBTILE); // 前沿（底边）所在行
-      if (rowBlocked(level, row, x, x + TANK_SIZE, solid)) {
-        ny = row * SUBTILE - TANK_SIZE; // 紧贴该行上边界
-      }
+      const target = Math.min(MAX_Y, y + d);
+      let ny = furthestTerrainClear(y, target, (candidate) =>
+        terrainBlocksTankAt(level, x, candidate, solid),
+      );
       for (const o of others) {
         if (o === tank || !o.alive) continue;
         if (o.y > y && tanksOverlap(x, ny, o.x, o.y)) ny = Math.min(ny, o.y - TANK_SIZE);
@@ -309,11 +332,10 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
       break;
     }
     case 'left': {
-      let nx = Math.max(0, x - d);
-      const col = Math.floor(nx / SUBTILE); // 前沿（左边）所在列
-      if (colBlocked(level, col, y, y + TANK_SIZE, solid)) {
-        nx = (col + 1) * SUBTILE; // 紧贴该列右边界
-      }
+      const target = Math.max(0, x - d);
+      let nx = furthestTerrainClear(x, target, (candidate) =>
+        terrainBlocksTankAt(level, candidate, y, solid),
+      );
       for (const o of others) {
         if (o === tank || !o.alive) continue;
         if (o.x < x && tanksOverlap(nx, y, o.x, o.y)) nx = Math.max(nx, o.x + TANK_SIZE);
@@ -322,12 +344,10 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
       break;
     }
     case 'right': {
-      let nx = Math.min(MAX_X, x + d);
-      const right = nx + TANK_SIZE;
-      const col = Math.floor((right - EPS) / SUBTILE); // 前沿（右边）所在列
-      if (colBlocked(level, col, y, y + TANK_SIZE, solid)) {
-        nx = col * SUBTILE - TANK_SIZE; // 紧贴该列左边界
-      }
+      const target = Math.min(MAX_X, x + d);
+      let nx = furthestTerrainClear(x, target, (candidate) =>
+        terrainBlocksTankAt(level, candidate, y, solid),
+      );
       for (const o of others) {
         if (o === tank || !o.alive) continue;
         if (o.x > x && tanksOverlap(nx, y, o.x, o.y)) nx = Math.min(nx, o.x - TANK_SIZE);
