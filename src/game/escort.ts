@@ -136,7 +136,7 @@ export function escortHasGuard(state: GameState): boolean {
   return occupied.length > 0 && occupied.every(Boolean);
 }
 
-// 六条护送路线，按“第几次护送”轮换（见 escortVariant）。
+// 十条护送路线，每个护送关独占一条；后期路线通过折返、环绕与反向钩形改变交战方向。
 export const ESCORT_ROUTES: ReadonlyArray<ReadonlyArray<EscortWaypoint>> = [
   // 路线 1：中央直路，教学版。
   [{ x: 304, y: 656 }, { x: 304, y: 16 }],
@@ -170,10 +170,36 @@ export const ESCORT_ROUTES: ReadonlyArray<ReadonlyArray<EscortWaypoint>> = [
     { x: 384, y: 304 }, { x: 384, y: 144 }, { x: 240, y: 144 },
     { x: 240, y: 16 },
   ],
+  // 路线 7：蛇形峡谷，车队在四道高地间反复横切。
+  [
+    { x: 112, y: 656 }, { x: 112, y: 560 }, { x: 400, y: 560 },
+    { x: 400, y: 448 }, { x: 176, y: 448 }, { x: 176, y: 336 },
+    { x: 464, y: 336 }, { x: 464, y: 224 }, { x: 256, y: 224 },
+    { x: 256, y: 128 }, { x: 368, y: 128 }, { x: 368, y: 16 },
+  ],
+  // 路线 8：群岛船坞，沿外侧港道左右摆渡后切入中央。
+  [
+    { x: 464, y: 656 }, { x: 144, y: 656 }, { x: 144, y: 480 },
+    { x: 480, y: 480 }, { x: 480, y: 288 }, { x: 192, y: 288 },
+    { x: 192, y: 128 }, { x: 336, y: 128 }, { x: 336, y: 16 },
+  ],
+  // 路线 9：风暴棋盘，在宽阔冰区和窄桥之间交替转向。
+  [
+    { x: 304, y: 656 }, { x: 480, y: 656 }, { x: 480, y: 520 },
+    { x: 144, y: 520 }, { x: 144, y: 368 }, { x: 432, y: 368 },
+    { x: 432, y: 240 }, { x: 224, y: 240 }, { x: 224, y: 96 },
+    { x: 304, y: 96 }, { x: 304, y: 16 },
+  ],
+  // 路线 10：回钩堡垒，深入内环后向下折返，再从核心走廊突围。
+  [
+    { x: 464, y: 656 }, { x: 464, y: 544 }, { x: 176, y: 544 },
+    { x: 176, y: 224 }, { x: 432, y: 224 }, { x: 432, y: 400 },
+    { x: 288, y: 400 }, { x: 288, y: 112 }, { x: 368, y: 112 },
+    { x: 368, y: 16 },
+  ],
 ];
 
-// 第 e 次护送（e = 组号 stageGroup）取 ESCORT_ROUTES[(e-1) % 路线数]：十次护送里前六次各用一条，
-// 第 7–10 次回头复用第 1–4 条。
+// 第 e 次护送（e = 组号 stageGroup）直接取第 e 条路线；取模仅为越界关号提供安全回卷。
 function escortVariant(stage: number): number {
   return (stageGroup(stage) - 1) % ESCORT_ROUTES.length;
 }
@@ -222,7 +248,7 @@ function carveRoute(level: LevelState, route: ReadonlyArray<EscortWaypoint>): vo
   }
 }
 
-// 六套 80×90 子格移动地图。先布置各自地貌，再沿对应折线路线开出护送走廊。
+// 十套 80×90 子格移动地图。先布置各自地貌，再沿对应折线路线开出护送走廊。
 export function createEscortLevel(stage = 1): LevelState {
   const size = ESCORT_FIELD_COLS * ESCORT_FIELD_ROWS;
   const level: LevelState = {
@@ -346,7 +372,7 @@ export function createEscortLevel(stage = 1): LevelState {
       fillRect(level, 48, 49, 14, 8, Cell.ICE);
       fillRect(level, 20, 72, 40, 7, Cell.ICE);
       break;
-    default:
+    case 5:
       // 终局回廊：环形水障、冰庭院与内外两层掩体，长折线路线不断改变交战方向。
       fillRect(level, 7, 18, 66, 4, Cell.WATER);
       fillRect(level, 7, 65, 66, 4, Cell.WATER);
@@ -369,6 +395,70 @@ export function createEscortLevel(stage = 1): LevelState {
         fillRect(level, col + 2, row + 2, 4, 5, Cell.BRICK);
       }
       break;
+    case 6:
+      // 蛇形峡谷：交错水崖把战场分层，车队每次横切都会暴露新的侧翼。
+      for (const [row, fromLeft] of [[16, true], [35, false], [54, true], [73, false]] as const) {
+        fillRect(level, fromLeft ? 0 : 48, row, 32, 7, Cell.WATER);
+        fillRect(level, fromLeft ? 32 : 0, row + 2, 16, 3, Cell.ICE);
+        fillRect(level, fromLeft ? 58 : 10, row - 3, 12, 4, Cell.TREES);
+      }
+      for (const [col, row] of [[8, 7], [34, 10], [60, 27], [14, 43], [48, 47], [8, 65], [58, 78]]) {
+        fillRect(level, col, row, 10, 3, Cell.BRICK);
+        fillRect(level, col + 3, row + 3, 4, 3, Cell.STEEL);
+      }
+      fillRect(level, 27, 24, 26, 8, Cell.ICE);
+      fillRect(level, 24, 62, 30, 7, Cell.TREES);
+      break;
+    case 7:
+      // 群岛船坞：大片水域分成四座战斗岛，树林码头遮挡桥头视线。
+      for (const [col, row, width, height] of [
+        [0, 12, 28, 17], [52, 8, 28, 20], [4, 42, 24, 18], [51, 45, 29, 17],
+        [0, 73, 25, 17], [55, 70, 25, 20],
+      ]) fillRect(level, col, row, width, height, Cell.WATER);
+      for (const [col, row] of [[30, 8], [35, 29], [31, 52], [27, 74]]) {
+        fillRect(level, col, row, 18, 7, Cell.ICE);
+        fillRect(level, col - 4, row + 2, 4, 5, Cell.TREES);
+        fillRect(level, col + 18, row + 1, 4, 6, Cell.TREES);
+      }
+      for (const [col, row] of [[6, 32], [58, 33], [8, 65], [60, 64], [34, 18], [36, 83]]) {
+        fillRect(level, col, row, 12, 2, Cell.STEEL);
+        fillRect(level, col + 3, row + 2, 6, 4, Cell.BRICK);
+      }
+      break;
+    case 8:
+      // 风暴棋盘：冰面方阵鼓励高速包抄，水渠和钢制棋子形成短促交火线。
+      for (let row = 7; row <= 71; row += 16) {
+        for (let col = 5; col <= 61; col += 14) {
+          const even = ((row - 7) / 16 + (col - 5) / 14) % 2 === 0;
+          fillRect(level, col, row, 10, 9, even ? Cell.ICE : Cell.TREES);
+        }
+      }
+      for (const row of [24, 49, 76]) fillRect(level, 0, row, ESCORT_FIELD_COLS, 3, Cell.WATER);
+      for (const col of [18, 40, 62]) fillRect(level, col, 0, 3, ESCORT_FIELD_ROWS, Cell.WATER);
+      for (const [col, row] of [[8, 19], [28, 29], [50, 18], [66, 40], [9, 58], [35, 67], [57, 78]]) {
+        fillRect(level, col, row, 8, 2, Cell.BRICK);
+        fillRect(level, col + 2, row - 2, 4, 6, Cell.STEEL);
+      }
+      break;
+    default:
+      // 回钩堡垒：双层城墙围出内环，路线进入核心后反向折返，敌军可从外圈持续夹击。
+      for (const [inset, thickness] of [[6, 4], [22, 3]] as const) {
+        fillRect(level, inset, inset + 7, ESCORT_FIELD_COLS - inset * 2, thickness, Cell.WATER);
+        fillRect(level, inset, ESCORT_FIELD_ROWS - inset - 7, ESCORT_FIELD_COLS - inset * 2, thickness, Cell.WATER);
+        fillRect(level, inset, inset + 7, thickness, ESCORT_FIELD_ROWS - inset * 2 - 14, Cell.WATER);
+        fillRect(level, ESCORT_FIELD_COLS - inset - thickness, inset + 7, thickness, ESCORT_FIELD_ROWS - inset * 2 - 14, Cell.WATER);
+      }
+      fillRect(level, 28, 31, 24, 27, Cell.ICE);
+      fillRect(level, 32, 36, 16, 17, Cell.TREES);
+      for (const [col, row] of [[3, 5], [29, 7], [61, 6], [5, 76], [31, 80], [63, 75], [13, 35], [57, 48]]) {
+        fillRect(level, col, row, 12, 3, Cell.BRICK);
+        fillRect(level, col + 4, row + 3, 4, 3, Cell.STEEL);
+      }
+      for (const [col, row] of [[16, 24], [56, 24], [16, 60], [56, 60]]) {
+        fillRect(level, col, row, 8, 2, Cell.STEEL);
+        fillRect(level, col + 2, row + 2, 4, 5, Cell.BRICK);
+      }
+      break;
   }
 
   carveRoute(level, route);
@@ -381,6 +471,10 @@ export function createEscortLevel(stage = 1): LevelState {
     [[57, 76, 6, 2], [43, 69, 2, 6]],
     [[37, 77, 6, 2], [24, 72, 2, 6]],
     [[37, 79, 6, 2], [60, 62, 2, 6]],
+    [[49, 49, 6, 2], [44, 27, 2, 6]],
+    [[17, 70, 6, 2], [40, 35, 2, 6]],
+    [[59, 72, 6, 2], [31, 45, 2, 6]],
+    [[21, 47, 6, 2], [53, 38, 6, 2]],
   ];
   for (const [col, row, width, height] of roadblocks[variant]) {
     fillRect(level, col, row, width, height, Cell.BRICK);

@@ -29,10 +29,10 @@ import { updatePhase } from '../src/game/phase';
 import { destroyPlayerTank } from '../src/game/death';
 import { emptyInput } from '../src/core/types';
 
-// 三段循环下的护送关号：每组第 2 关。前六次护送各用一条路线。
-const ESCORT_STAGES = [2, 5, 8, 11, 14, 17];
+// 三段循环下的护送关号：每组第 2 关，十次护送各用一张独立地图与路线。
+const ESCORT_STAGES = [2, 5, 8, 11, 14, 17, 20, 23, 26, 29];
 
-test('escort stages sit second in every cycle, with six distinct escort maps and routes', () => {
+test('escort stages sit second in every cycle, with ten distinct escort maps and routes', () => {
   const movingStages = ESCORT_STAGES.map((stage) => createGameState(stage, 1, stage));
   for (let stage = 1; stage <= STAGE_COUNT; stage++) {
     const state = createGameState(stage, 1, stage);
@@ -42,7 +42,7 @@ test('escort stages sit second in every cycle, with six distinct escort maps and
       assert.equal(state.level.rows, 30);
     }
   }
-  // 十次护送轮换六条路线：第 7–10 次回头复用第 1–4 条。
+  // 十次护送各自使用同序号的独立路线。
   for (let e = 1; e <= 10; e++) {
     const stage = e * 3 - 1;
     assert.equal(stageKind(stage), 'escort');
@@ -65,8 +65,8 @@ test('escort stages sit second in every cycle, with six distinct escort maps and
       assert.ok(point.x === previous.x || point.y === previous.y, '路线节点必须正交连接');
     }
   }
-  assert.equal(new Set(movingStages.map((state) => state.level.cells.join(','))).size, 6);
-  assert.equal(new Set(movingStages.map((state) => JSON.stringify(state.escort!.route))).size, 6);
+  assert.equal(new Set(movingStages.map((state) => state.level.cells.join(','))).size, 10);
+  assert.equal(new Set(movingStages.map((state) => JSON.stringify(state.escort!.route))).size, 10);
 });
 
 test('each escort map has dense mixed terrain and safe four-player spawn positions', () => {
@@ -150,7 +150,7 @@ test('escort progress accumulates traveled distance across turns', () => {
   assert.equal(escortProgress(escort), 1);
 });
 
-test('all six tactical escort maps can be completed after destructible roadblocks are cleared', () => {
+test('all ten tactical escort maps can be completed after destructible roadblocks are cleared', () => {
   for (const stage of ESCORT_STAGES) {
     const state = createGameState(200 + stage, 1, stage);
     const escort = state.escort!;
