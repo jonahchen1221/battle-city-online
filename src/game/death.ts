@@ -84,9 +84,10 @@ export function destroyPlayerTank(state: GameState, tank: TankState): void {
 }
 
 // 玩家统一受伤入口：3 级护甲优先吸收一次伤害；之后才扣车体生命。
-// 非致命命中产生白闪与火花，护甲破裂额外产生一簇火花并播放金属音。
+// 非致命命中产生短暂无伤白闪与火花，避免同一轮散弹 / 同帧重叠弹一次剥掉多层耐久；
+// 护甲破裂额外产生一簇火花并播放金属音。明确的即死机制直接走 destroyPlayerTank，不受此窗口影响。
 export function damagePlayerTank(state: GameState, tank: TankState): void {
-  if (!tank.alive) return;
+  if (!tank.alive || tank.hitFlashTicks > 0) return;
   const armorBroken = tank.armor > 0;
   if (armorBroken) tank.armor--;
   else tank.hp--;

@@ -442,7 +442,7 @@ export const PLAYER_MAX_LEVEL = 3;
 export const STAR_BULLET_SPEED = 3;
 // star 等级 ≥2 时同屏可存在的玩家子弹数（原为 1）。
 export const PLAYER_MAX_BULLETS_UPGRADED = 2;
-// 玩家受到非致命伤害后的白闪持续时间；残血会另有持续冒烟反馈。
+// 玩家受到非致命伤害后的白闪 / 无伤窗口持续时间；残血会另有持续冒烟反馈。
 export const PLAYER_DAMAGE_FLASH_TICKS = 18;
 // 道具浮标闪烁：一个周期 32 帧内前 24 帧可见、后 8 帧隐藏。
 export const POWERUP_BLINK_CYCLE_TICKS = 32;

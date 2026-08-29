@@ -63,7 +63,7 @@ export interface TankState {
   alive: boolean;
   hp: number; // 剩余血量：常规 1，装甲 4；≤0 即毁
   armor: number; // 玩家 3 级的一次性外层护甲（0/1）；敌军恒为 0
-  hitFlashTicks: number; // 玩家非致命受击白闪；敌军恒为 0（装甲敌军沿用 hp 周期闪烁）
+  hitFlashTicks: number; // 玩家非致命受击后的白闪 / 无伤窗口；敌军恒为 0（装甲敌军沿用 hp 周期闪烁）
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
   smartStuckTicks: number; // 智能坦克连续尝试追踪却没有位移的帧数
   smartEscapeTicks: number; // 智能坦克保持当前脱困或闪避方向的剩余帧数

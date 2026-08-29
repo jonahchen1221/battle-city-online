@@ -2,13 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BULLET_SPEED,
+  PLAYER_DAMAGE_FLASH_TICKS,
   PLAYER_SPEED,
   PLAYER_SPEED_UPGRADED,
   STAR_BULLET_SPEED,
 } from '../src/core/constants';
 import { emptyInput } from '../src/core/types';
-import { maxBulletsFor, spawnBullet } from '../src/game/bullet';
+import { maxBulletsFor, spawnBullet, spawnWeaponBullets } from '../src/game/bullet';
 import { damagePlayerTank } from '../src/game/death';
+import { createEmptyLevel } from '../src/game/level';
 import { tryPickupPowerup } from '../src/game/powerup';
 import { createGameState, nextStage, type GameState } from '../src/game/state';
 import { createEnemy, isPlayerTank } from '../src/game/tank';
@@ -78,6 +80,7 @@ test('stage transition preserves damage and broken armor instead of silently hea
   giveStar(state);
   giveStar(state);
   damagePlayerTank(state, player); // armor 1 -> 0
+  player.hitFlashTicks = 0; // 模拟上一击的短暂无伤窗口已经结束。
   damagePlayerTank(state, player); // hp 2 -> 1
 
   nextStage(state);
@@ -97,6 +100,55 @@ test('stage transition preserves damage and broken armor instead of silently hea
       armor: 0,
     },
   );
+});
+
+test('one close-range spread volley removes only one durability layer', () => {
+  const state = createGameState(6, 1, 1);
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.neutralQueue = [];
+  state.neutralTimer = 9999;
+  state.enemyFreezeTicks = 60;
+
+  const player = playerOf(state);
+  Object.assign(player, {
+    x: 100,
+    y: 100,
+    level: 3,
+    hp: 2,
+    armor: 1,
+    invulnTicks: 0,
+  });
+  const enemy = createEnemy('smart', 20, 0);
+  Object.assign(enemy, {
+    x: 100,
+    y: 72,
+    dir: 'down' as const,
+    weapon: 'spread' as const,
+  });
+  state.tanks = [player, enemy];
+  state.bullets = spawnWeaponBullets(enemy, state.nextBulletId, state.level);
+  state.nextBulletId += state.bullets.length;
+
+  // 这个距离下三颗散弹会在相邻逻辑帧内全部擦过车体；整轮只能打掉外层护甲。
+  for (let i = 0; i < 12; i++) update(state, [emptyInput()]);
+
+  assert.deepEqual(
+    { alive: player.alive, hp: player.hp, armor: player.armor },
+    { alive: true, hp: 2, armor: 0 },
+  );
+  assert.ok(player.hitFlashTicks > 0);
+
+  // 窗口按固定 tick 正常结束，之后的新一次命中仍会扣除下一层耐久。
+  while (player.hitFlashTicks > 0) update(state, [emptyInput()]);
+  damagePlayerTank(state, player);
+  assert.deepEqual(
+    { alive: player.alive, hp: player.hp, armor: player.armor },
+    { alive: true, hp: 1, armor: 0 },
+  );
+  assert.equal(player.hitFlashTicks, PLAYER_DAMAGE_FLASH_TICKS);
 });
 
 test('holding fire across a level three armor break retriggers the cannon next tick', () => {
