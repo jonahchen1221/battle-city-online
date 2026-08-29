@@ -6,6 +6,7 @@
 // 坐标，内部乘以 ART_SCALE 后落到 512×448 画布。silhouette / 色系与 NES 原版一致，仅细化。
 
 import { ART_SCALE, QUARTER } from '../core/constants';
+import type { Direction } from '../core/types';
 import { POWERUP_KINDS, type PowerupKind } from '../game/powerup';
 
 // 共享调色板（近似 NES 取色 + 若干“中间过渡色”以获得更细腻的分色带）。'.' 为透明。
@@ -408,6 +409,37 @@ const BULLET = assertGrid([
   '..cccc..',
 ], 8, 8, 'bullet');
 
+// ── 螺旋弹（8×8 美术 = 4×4 逻辑）──：橙红火球，黄芯 + 亮红过渡 + 暗红外缘（同心圆填充）。
+const BULLET_SPIRAL = ((): string[] => {
+  const g = blankGrid(8);
+  fillCircleG(g, 3.5, 3.5, 3.6, '3'); // 暗红外缘
+  fillCircleG(g, 3.5, 3.5, 2.4, '2'); // 亮红过渡
+  fillCircleG(g, 3.5, 3.5, 1.2, 'Y'); // 黄芯
+  return assertGrid(gridToRows(g), 8, 8, 'bulletSpiral');
+})();
+
+// ── 激光（16×16 美术 = 8×8 逻辑）──：白芯 + 亮青边的细长亮条（2×8 逻辑），两端收窄。
+// 只授权朝上帧，其余三向由 rotateCW 旋转生成；绘制时按 LASER_SPRITE_OFFSET 居中于 4×4 弹体盒。
+// prettier-ignore
+const BULLET_LASER_UP = assertGrid([
+  '.......II.......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '......IwwI......',
+  '.......II.......',
+], 16, 16, 'bulletLaser');
+
 // ── HUD 迷你坦克（16×16）──
 // 敌军是方炮塔宽履带，玩家是箭头车鼻窄履带；HUD 中同样不只靠颜色辨认。
 // prettier-ignore
@@ -747,6 +779,93 @@ function helmetSym(): CharGrid {
   fillCircleG(g, 13, 14, 3, 'w'); // 高光
   return g;
 }
+// 武器道具：卡片内叠画一个放大的像素字母（S / F / L / M），沿用 FONT 的 5×7 掩码，
+// 按 scale 逐点放大后居中于 32×32 卡片。四种武器各用一色，与 HUD 字母配色一致。
+function letterSym(ch: string, scale: number, color: string): CharGrid {
+  const g = blankGrid(32);
+  const glyph = FONT[ch];
+  if (!glyph) return g;
+  const ox = Math.round((32 - 5 * scale) / 2);
+  const oy = Math.round((32 - 7 * scale) / 2);
+  for (let gy = 0; gy < glyph.length; gy++) {
+    const line = glyph[gy];
+    for (let gx = 0; gx < line.length; gx++) {
+      if (line[gx] !== '#') continue;
+      const x0 = ox + gx * scale;
+      const y0 = oy + gy * scale;
+      fillRectG(g, x0, y0, x0 + scale - 1, y0 + scale - 1, color);
+    }
+  }
+  return g;
+}
+const WEAPON_LETTER_SCALE = 4; // 5×7 掩码 ×4 = 20×28，正好落在 32×32 卡片的黑色面板内
+
+// boots 快靴：侧视皮靴（暗黄革面 + 灰鞋底）+ 左侧三道白色速度线，一眼即“跑得快”。
+function bootsSym(): CharGrid {
+  const g = blankGrid(32);
+  fillRectG(g, 13, 5, 20, 21, 'z'); // 靴筒
+  fillRectG(g, 13, 5, 15, 21, 'd'); // 靴筒暗侧
+  fillRectG(g, 13, 18, 27, 24, 'z'); // 靴面（脚背 → 鞋头）
+  fillRectG(g, 16, 18, 27, 20, 'h'); // 靴面高光
+  fillRectG(g, 12, 25, 27, 27, 'c'); // 鞋底
+  fillRectG(g, 4, 8, 11, 9, 'w'); // 速度线 ×3（收在面板内，不压卡片斜角）
+  fillRectG(g, 6, 14, 12, 15, 'w');
+  fillRectG(g, 4, 20, 11, 21, 'w');
+  return g;
+}
+// boat 船：白帆 + 灰桅杆 + 木色梯形船身 + 蓝色水波，明示“能下水”。
+function boatSym(): CharGrid {
+  const g = blankGrid(32);
+  for (let y = 5; y <= 18; y++) {
+    fillRectG(g, 16, y, 16 + Math.floor((y - 5) * 0.7), y, 'w'); // 三角帆
+  }
+  fillRectG(g, 14, 4, 15, 19, 'c'); // 桅杆
+  for (let y = 20; y <= 24; y++) {
+    const inset = y - 20;
+    fillRectG(g, 5 + inset, y, 26 - inset, y, y <= 21 ? 'z' : 'd'); // 梯形船身
+  }
+  fillRectG(g, 4, 26, 27, 27, 'i'); // 水面
+  fillRectG(g, 5, 25, 11, 25, 'l'); // 浪花
+  fillRectG(g, 19, 25, 26, 25, 'l');
+  return g;
+}
+// ghost 幽灵：白色圆顶身躯 + 波浪下摆（镂空到黑底）+ 黑眼，右侧一道冷色阴影。
+function ghostSym(): CharGrid {
+  const g = blankGrid(32);
+  fillCircleG(g, 16, 14, 9, 'w'); // 圆顶
+  fillRectG(g, 7, 14, 25, 26, 'w'); // 身躯
+  fillRectG(g, 22, 15, 25, 23, 'p'); // 右侧冷色阴影
+  fillRectG(g, 9, 24, 12, 26, '.'); // 波浪下摆（三个凹口）
+  fillRectG(g, 16, 25, 19, 26, '.');
+  fillRectG(g, 23, 24, 25, 26, '.');
+  fillCircleG(g, 12, 13, 2.4, 'e'); // 双眼
+  fillCircleG(g, 20, 13, 2.4, 'e');
+  return g;
+}
+// hourglass 沙漏：灰上下框 + 白玻璃双三角 + 黄沙（上半剩余 / 细流 / 下半堆积）。
+function hourglassSym(): CharGrid {
+  const g = blankGrid(32);
+  fillRectG(g, 6, 3, 25, 6, 'c'); // 顶框
+  fillRectG(g, 6, 25, 25, 27, 'c'); // 底框
+  for (let y = 7; y <= 15; y++) fillRectG(g, 8 + (y - 7), y, 23 - (y - 7), y, 'w'); // 上玻璃
+  for (let y = 16; y <= 24; y++) fillRectG(g, 8 + (24 - y), y, 23 - (24 - y), y, 'w'); // 下玻璃
+  for (let y = 8; y <= 12; y++) fillRectG(g, 9 + (y - 7), y, 22 - (y - 7), y, 'Y'); // 上半余沙
+  for (let y = 20; y <= 24; y++) fillRectG(g, 9 + (24 - y), y, 22 - (24 - y), y, 'Y'); // 下半积沙
+  fillRectG(g, 15, 13, 16, 21, 'Y'); // 细流
+  return g;
+}
+// wrench 扳手：银色开口钳头（环 + 朝上的缺口）+ 竖直手柄，对应“修墙”。
+function wrenchSym(): CharGrid {
+  const g = blankGrid(32);
+  fillRectG(g, 13, 11, 19, 27, 'c'); // 手柄
+  fillRectG(g, 13, 11, 14, 27, 'w'); // 手柄高光
+  fillCircleG(g, 16, 10, 8, 'c'); // 钳头外圆
+  fillCircleG(g, 16, 10, 4.2, '.'); // 内孔
+  fillRectG(g, 13, 0, 19, 10, '.'); // 朝上的开口
+  fillCircleG(g, 10, 6, 1.8, 'w'); // 高光
+  return g;
+}
+
 const POWERUP_SYMBOLS: Record<PowerupKind, CharGrid> = {
   star: starSym(),
   grenade: grenadeSym(),
@@ -754,6 +873,15 @@ const POWERUP_SYMBOLS: Record<PowerupKind, CharGrid> = {
   timer: timerSym(),
   shovel: shovelSym(),
   helmet: helmetSym(),
+  wpnSpread: letterSym('S', WEAPON_LETTER_SCALE, 'Y'), // 黄
+  wpnSpiral: letterSym('F', WEAPON_LETTER_SCALE, '2'), // 橙红
+  wpnLaser: letterSym('L', WEAPON_LETTER_SCALE, 'I'), // 亮青
+  wpnMachine: letterSym('M', WEAPON_LETTER_SCALE, 'A'), // 亮绿
+  boots: bootsSym(),
+  boat: boatSym(),
+  ghost: ghostSym(),
+  hourglass: hourglassSym(),
+  wrench: wrenchSym(),
 };
 const POWERUP_ICON_ROWS: Record<PowerupKind, string[]> = POWERUP_KINDS.reduce(
   (acc, kind) => {
@@ -822,8 +950,10 @@ export interface SpriteAtlas {
     power: TankFrames;
     armor: TankFrames;
   }; // 携带道具敌军红闪变体（各种类）
-  powerup: Record<PowerupKind, Sprite>; // 六种道具图标（16×16）
+  powerup: Record<PowerupKind, Sprite>; // 各种道具图标（16×16 逻辑）
   bullet: Sprite;
+  bulletSpiral: Sprite; // 螺旋弹火球（4×4 逻辑）
+  bulletLaser: Record<Direction, Sprite>; // 激光细长条（8×8 逻辑，四朝向）
   spawnStar: [Sprite, Sprite, Sprite, Sprite]; // 出生闪光 4 帧（32×32）
   shield: [Sprite, Sprite]; // 出生护盾 2 帧（32×32）
   explosionSmall: [Sprite, Sprite, Sprite]; // 小爆炸 3 帧（32×32）
@@ -869,7 +999,7 @@ const Y_RED_BASIC = 432;
 const Y_RED_FAST = 464;
 const Y_RED_POWER = 496;
 const Y_RED_ARMOR = 528;
-// 道具图标行（6 个 32×32，x=0/32/…/160）。
+// 道具图标行（POWERUP_KINDS.length 个 32×32，x=0/32/…）。
 const Y_POWERUP = 560;
 
 // 把一台坦克的朝上两帧铺到某一行：旋转生成其余朝向，
@@ -904,7 +1034,9 @@ function tankFramesAt(canvas: HTMLCanvasElement, y: number): TankFrames {
 
 // 启动时调用一次，构建离屏图集并返回带取样矩形的 API。
 export function createSpriteAtlas(): SpriteAtlas {
-  const width = 256;
+  // 宽度需容下最宽的一行：道具图标行（POWERUP_KINDS.length 个 32×32 —— 6 经典 + 4 武器 + 5 新道具）。
+  // 其余行最宽为坦克行（8 帧 × 32 = 256），故按两者取大。
+  const width = Math.max(256, POWERUP_KINDS.length * 32);
   const height = 592; // + 4 行红闪敌军坦克（各 32）+ 1 行道具图标（32）
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -928,11 +1060,21 @@ export function createSpriteAtlas(): SpriteAtlas {
     paint(ctx, HUD_LIFE_TANKS[i], 112 + i * 16, Y_TERRAIN);
   }
 
-  // 鹰巢行（32×32）+ 子弹（8×8）
+  // 鹰巢行（32×32）+ 子弹（8×8）+ 螺旋弹（8×8）+ 激光四朝向（各 16×16）
   paint(ctx, EAGLE, 0, Y_EAGLE);
   paint(ctx, EAGLE_DESTROYED, 32, Y_EAGLE);
   paint(ctx, HUD_FLAG, 64, Y_EAGLE);
   paint(ctx, BULLET, 96, Y_EAGLE);
+  paint(ctx, BULLET_SPIRAL, 104, Y_EAGLE);
+  // 激光：朝上帧 + 逐次 rotateCW 得右 / 下 / 左，排布于 x=112/128/144/160。
+  const laserUp = BULLET_LASER_UP;
+  const laserRight = rotateCW(laserUp);
+  const laserDown = rotateCW(laserRight);
+  const laserLeft = rotateCW(laserDown);
+  paint(ctx, laserUp, 112, Y_EAGLE);
+  paint(ctx, laserRight, 128, Y_EAGLE);
+  paint(ctx, laserDown, 144, Y_EAGLE);
+  paint(ctx, laserLeft, 160, Y_EAGLE);
 
   // 玩家坦克行：四套配色，各占一行（P1 在 Y_PLAYER，P2/P3/P4 在图集底部追加行）。
   for (let i = 0; i < MAP_PLAYERS.length; i++) {
@@ -1006,6 +1148,13 @@ export function createSpriteAtlas(): SpriteAtlas {
       {} as Record<PowerupKind, Sprite>,
     ),
     bullet: s(96, Y_EAGLE, 8, 8),
+    bulletSpiral: s(104, Y_EAGLE, 8, 8),
+    bulletLaser: {
+      up: s(112, Y_EAGLE, 16, 16),
+      right: s(128, Y_EAGLE, 16, 16),
+      down: s(144, Y_EAGLE, 16, 16),
+      left: s(160, Y_EAGLE, 16, 16),
+    },
     spawnStar: [
       s(0, Y_FX, 32, 32),
       s(32, Y_FX, 32, 32),

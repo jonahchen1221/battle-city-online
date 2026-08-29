@@ -14,14 +14,38 @@ import {
   ENEMY_SCORE,
   EXPLOSION_BIG_TICKS,
   EXPLOSION_BIG_SIZE,
+  MAX_POWERUPS_ON_FIELD,
+  BOOTS_TICKS,
+  GHOST_TICKS,
+  ENEMY_SLOW_TICKS,
+  NEUTRAL_POWERUP_INTERVAL_TICKS,
+  NEUTRAL_POWERUP_RETRY_TICKS,
+  NEUTRAL_POWERUP_MAX_TRIES,
 } from '../core/constants';
-import { Cell, setCell } from './level';
-import { TankState, EnemyKind, isPlayerTank } from './tank';
+import type { Rng } from '../core/rng';
+import { Cell, setCell, getCell } from './level';
+import { TankState, EnemyKind, WeaponKind, isPlayerTank } from './tank';
 import type { GameState } from './state';
 
 // 道具系统（纯模拟层）：一切随机取自 state.rng，可复现；GameState 保持可序列化。
-// 六种经典道具。rng.int(6) → POWERUP_KINDS[idx]（顺序即取值映射，务必稳定）。
-export type PowerupKind = 'star' | 'grenade' | 'tank' | 'timer' | 'shovel' | 'helmet';
+// 六种经典道具 + 四种魂斗罗风格武器道具 + 五种“中立”道具（每关必出，见 updateNeutralPowerups）。
+// rng.int(POWERUP_KINDS.length) → POWERUP_KINDS[idx]（顺序即取值映射，务必稳定：只在尾部追加）。
+export type PowerupKind =
+  | 'star'
+  | 'grenade'
+  | 'tank'
+  | 'timer'
+  | 'shovel'
+  | 'helmet'
+  | 'wpnSpread' // S：散弹
+  | 'wpnSpiral' // F：螺旋弹
+  | 'wpnLaser' // L：激光
+  | 'wpnMachine' // M：机枪
+  | 'boots' // 快靴：拾取者限时加速
+  | 'boat' // 船：拾取者可驶入水面（直到死亡）
+  | 'ghost' // 幽灵：拾取者限时穿砖
+  | 'hourglass' // 沙漏：敌军限时半速
+  | 'wrench'; // 扳手：即时修复鹰巢护墙环
 export const POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
   'star',
   'grenade',
@@ -29,7 +53,45 @@ export const POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
   'timer',
   'shovel',
   'helmet',
+  'wpnSpread',
+  'wpnSpiral',
+  'wpnLaser',
+  'wpnMachine',
+  'boots',
+  'boat',
+  'ghost',
+  'hourglass',
+  'wrench',
 ];
+
+// 每关必出的“中立”道具（由定时器刷新到战场随机空位，与携带者掉落无关）。
+export const NEUTRAL_POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
+  'boots',
+  'boat',
+  'ghost',
+  'hourglass',
+  'wrench',
+];
+
+// MVP 开局奖励可选的“强力道具”池（仅多人局，见 state.ts nextStage）。
+export const MVP_POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
+  'star',
+  'grenade',
+  'tank',
+  'helmet',
+  'wpnSpread',
+  'wpnSpiral',
+  'wpnLaser',
+  'wpnMachine',
+];
+
+// 武器道具 → 武器种类的映射（拾取即替换旧武器）。
+export const POWERUP_WEAPON: Partial<Record<PowerupKind, WeaponKind>> = {
+  wpnSpread: 'spread',
+  wpnSpiral: 'spiral',
+  wpnLaser: 'laser',
+  wpnMachine: 'machine',
+};
 
 // 场上道具浮标：纯数据（x/y 为 16×16 包围盒左上角战场相对像素坐标）。
 export interface PowerupState {
@@ -66,9 +128,17 @@ function boxOverlapsEagleArea(colX: number, rowY: number): boolean {
   return colX <= pc1 && colX + 1 >= pc0 && rowY <= pr1 && rowY + 1 >= pr0;
 }
 
-// 携带道具的敌军死亡时调用：把当前场上道具（若有）替换为一枚新的随机道具，随机落点。
-// rng 调用顺序（决定性）：先 rng.int(6) 取种类；随后每次拒绝采样先 rng.int(FIELD_COLS-1) 取列、
-// 再 rng.int(FIELD_ROWS-1) 取行，直到落点不与鹰巢禁区重叠（最多 MAX_TRIES 次，超限用兜底格）。
+// 把一枚道具放到场上：追加到数组尾部；超过上限则移除最旧的一枚（数组头）。
+// 场上道具的“年龄序”即数组序（越靠前越旧），拾取时按此序遍历。
+export function pushPowerup(state: GameState, p: PowerupState): void {
+  state.powerups.push(p);
+  while (state.powerups.length > MAX_POWERUPS_ON_FIELD) state.powerups.shift();
+}
+
+// 携带道具的敌军死亡时调用：向场上追加一枚新的随机道具，随机落点（不再替换旧道具）。
+// rng 调用顺序（决定性）：先 rng.int(POWERUP_KINDS.length) 取种类；随后每次拒绝采样先
+// rng.int(FIELD_COLS-1) 取列、再 rng.int(FIELD_ROWS-1) 取行，直到落点不与鹰巢禁区重叠
+//（最多 MAX_TRIES 次，超限用兜底格）。
 export function dropPowerup(state: GameState): void {
   const kind = POWERUP_KINDS[state.rng.int(POWERUP_KINDS.length)];
   const NUM_COL_POS = FIELD_COLS - 1; // 39：colX 0..38（16px 盒右缘 ≤ FIELD_WIDTH）
@@ -86,7 +156,63 @@ export function dropPowerup(state: GameState): void {
       rowY = 0;
     }
   }
-  state.powerup = { kind, x: colX * SUBTILE, y: rowY * SUBTILE };
+  pushPowerup(state, { kind, x: colX * SUBTILE, y: rowY * SUBTILE });
+  state.events.push('powerupSpawn');
+}
+
+// 用 state.rng 对一组道具种类做 Fisher-Yates 洗牌，返回新数组（本关的中立道具刷新顺序）。
+// 每关调用一次（createGameState / nextStage），保证 5 种新道具每关各出现恰一次。
+export function shuffledNeutralQueue(rng: Rng): PowerupKind[] {
+  const queue = NEUTRAL_POWERUP_KINDS.slice();
+  for (let i = queue.length - 1; i > 0; i--) {
+    const j = rng.int(i + 1);
+    const tmp = queue[i];
+    queue[i] = queue[j];
+    queue[j] = tmp;
+  }
+  return queue;
+}
+
+// 中立道具的落点采样：子格对齐的 16×16 盒，完全落在战场内，且
+//   (1) 不与鹰巢禁区重叠；(2) 覆盖的 4 个子格中至少一格既非水面也非钢块（否则玩家够不着）。
+// 最多 MAX_TRIES 次拒绝采样；全失败返回 null（由调用方顺延本枚）。
+function sampleNeutralSpot(state: GameState): { x: number; y: number } | null {
+  const NUM_COL_POS = FIELD_COLS - 1; // colX 0..38
+  const NUM_ROW_POS = FIELD_ROWS - 1; // rowY 0..28
+  for (let tries = 0; tries < NEUTRAL_POWERUP_MAX_TRIES; tries++) {
+    const colX = state.rng.int(NUM_COL_POS);
+    const rowY = state.rng.int(NUM_ROW_POS);
+    if (boxOverlapsEagleArea(colX, rowY)) continue;
+    let reachable = false;
+    for (let r = rowY; r <= rowY + 1 && !reachable; r++) {
+      for (let c = colX; c <= colX + 1 && !reachable; c++) {
+        const cell = getCell(state.level, c, r);
+        if (cell !== Cell.WATER && cell !== Cell.STEEL) reachable = true;
+      }
+    }
+    if (!reachable) continue;
+    return { x: colX * SUBTILE, y: rowY * SUBTILE };
+  }
+  return null;
+}
+
+// 中立道具定时刷新（每关必出）：仅在 playing 期间由 update 每帧调用。
+// neutralTimer 归零且队列非空 → 出队一枚并刷到随机空位，随后按 INTERVAL 刷下一枚；
+// 落点采样全失败则本枚顺延（RETRY 帧后重试，队列不消耗）。
+export function updateNeutralPowerups(state: GameState): void {
+  if (state.neutralQueue.length === 0) return;
+  if (state.neutralTimer > 0) {
+    state.neutralTimer--;
+    if (state.neutralTimer > 0) return; // 归零那一帧即刷新（间隔恰为 FIRST / INTERVAL 帧）
+  }
+  const spot = sampleNeutralSpot(state);
+  if (!spot) {
+    state.neutralTimer = NEUTRAL_POWERUP_RETRY_TICKS;
+    return;
+  }
+  const kind = state.neutralQueue.shift()!;
+  pushPowerup(state, { kind, x: spot.x, y: spot.y });
+  state.neutralTimer = NEUTRAL_POWERUP_INTERVAL_TICKS;
   state.events.push('powerupSpawn');
 }
 
@@ -100,19 +226,24 @@ function pickupOverlap(t: TankState, p: PowerupState): boolean {
   );
 }
 
-// 拾取检测（玩家移动后调用）：任一存活玩家坦克与浮标重叠即拾取——加分、生效、清除浮标、发声。
+// 拾取检测（玩家移动后调用）：遍历场上全部浮标（自旧到新），任一存活玩家坦克与之重叠即
+// 拾取——加分、生效、从数组移除、发声。同一帧可拾取多枚（各自结算）。
 export function tryPickupPowerup(state: GameState): void {
-  const p = state.powerup;
-  if (!p) return;
-  for (const t of state.tanks) {
-    if (!t.alive || !isPlayerTank(t)) continue;
-    if (!pickupOverlap(t, p)) continue;
-    state.scoreByPlayer[t.playerIndex] += POWERUP_SCORE;
-    applyPowerupEffect(state, t, p.kind);
-    state.powerup = null;
-    // tank 道具（加命）用独立的欢快 1UP 音效；其余用统一拾取提示音。
-    state.events.push(p.kind === 'tank' ? 'lifeUp' : 'powerupPickup');
-    break;
+  for (let i = 0; i < state.powerups.length; ) {
+    const p = state.powerups[i];
+    let taken = false;
+    for (const t of state.tanks) {
+      if (!t.alive || !isPlayerTank(t)) continue;
+      if (!pickupOverlap(t, p)) continue;
+      state.scoreByPlayer[t.playerIndex] += POWERUP_SCORE;
+      applyPowerupEffect(state, t, p.kind);
+      // tank 道具（加命）用独立的欢快 1UP 音效；其余用统一拾取提示音。
+      state.events.push(p.kind === 'tank' ? 'lifeUp' : 'powerupPickup');
+      taken = true;
+      break;
+    }
+    if (taken) state.powerups.splice(i, 1);
+    else i++;
   }
 }
 
@@ -142,6 +273,38 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       // 无敌：复用出生护盾计时 / 渲染。
       collector.invulnTicks = HELMET_INVULN_TICKS;
       break;
+    case 'boots':
+      // 快靴：限时加速（仅作用于移动计算，不改 speed 基值）；重复拾取重置计时。
+      collector.speedBoostTicks = BOOTS_TICKS;
+      break;
+    case 'boat':
+      // 船：水面视为可通行，直到该玩家死亡（复活即用 createPlayer 重建 → 自然消失）。
+      collector.hasBoat = true;
+      break;
+    case 'ghost':
+      // 幽灵：限时穿砖；重复拾取重置计时。
+      collector.ghostTicks = GHOST_TICKS;
+      break;
+    case 'hourglass':
+      // 沙漏：敌军限时半速（enemyFreezeTicks 全冻结优先，见 enemy.ts updateEnemies）。
+      state.enemySlowTicks = ENEMY_SLOW_TICKS;
+      break;
+    case 'wrench':
+      // 扳手：即时把鹰巢护墙环修复为全新完整砖；若正处于 shovel 钢化期间则刷成钢（不降级）。
+      // 鹰巢本身不修复（已毁即已毁）。
+      if (state.shovelTicks > 0) fortifyEagleRing(state);
+      else restoreEagleRingBrick(state);
+      break;
+    default: {
+      // 武器道具：替换拾取者当前武器（不叠加、不保留旧武器），连发冷却清零以便立即开火。
+      // star 等级不受影响，仍与武器并存（见 bullet.ts maxBulletsFor / spawnWeaponBullets）。
+      const weapon = POWERUP_WEAPON[kind];
+      if (weapon) {
+        collector.weapon = weapon;
+        collector.fireCooldown = 0;
+      }
+      break;
+    }
   }
 }
 

@@ -239,3 +239,60 @@ export const POWERUP_BLINK_CYCLE_TICKS = 32;
 export const POWERUP_BLINK_VISIBLE_TICKS = 24;
 // 道具浮标包围盒尺寸（= 一个大格 16×16）。
 export const POWERUP_SIZE = TILE;
+
+// ── 道具系统（扩展：场上多枚并存 + 五种新道具）──
+// 场上同时存在的道具浮标上限：超限时移除最旧的一枚（数组头）。
+export const MAX_POWERUPS_ON_FIELD = 6;
+// boots 快靴：拾取者加速持续帧数与倍率（仅作用于移动计算，不改坦克 speed 基值）。
+export const BOOTS_TICKS = 20 * TICKS_PER_SECOND; // 1200 帧 = 20 秒
+export const BOOTS_SPEED_MULT = 1.5;
+// ghost 幽灵：可穿砖持续帧数（到期时若车体仍与砖重叠，砖对其保持可通行直到完全脱离）。
+export const GHOST_TICKS = 10 * TICKS_PER_SECOND; // 600 帧 = 10 秒
+// 幽灵态坦克的渲染透明度（半透明，与友军冻结的明灭闪烁明显区分）。
+export const GHOST_RENDER_ALPHA = 0.45;
+// hourglass 沙漏：敌军半速持续帧数（期间敌军仅在偶数 tick 行动；enemyFreezeTicks 全冻结优先）。
+export const ENEMY_SLOW_TICKS = 12 * TICKS_PER_SECOND; // 720 帧 = 12 秒
+// 中立道具定时刷新（每关必出五种新道具）：首枚延迟、后续间隔、落点采样失败时的顺延重试间隔。
+export const NEUTRAL_POWERUP_FIRST_TICKS = 10 * TICKS_PER_SECOND; // 600 帧 = 10 秒
+export const NEUTRAL_POWERUP_INTERVAL_TICKS = 15 * TICKS_PER_SECOND; // 900 帧 = 15 秒
+export const NEUTRAL_POWERUP_RETRY_TICKS = 60; // 采样 20 次全失败：1 秒后重试同一枚
+export const NEUTRAL_POWERUP_MAX_TRIES = 20; // 单枚落点的最大拒绝采样次数
+
+// ── 魂斗罗风格武器系统 ──
+// 玩家默认为 'cannon'（经典炮），拾取武器道具后替换为特殊武器，死亡复活归 'cannon'。
+// star 等级与武器并存：cannon 沿用 star 规则（弹速 / 双弹 / 破钢），
+// 特殊武器有各自的弹速与在场上限，且 star 满级的破钢只作用于 cannon。
+
+// spread（S 散弹）：一次齐射三发，中路沿朝向直飞、两侧各偏 SPREAD_SPLAY_RAD。
+// 在场上限为“一轮齐射”：三发全灭前不能再开火（故上限计数取 1）。
+export const SPREAD_PELLET_COUNT = 3;
+export const SPREAD_SPLAY_RAD = Math.PI / 8; // 22.5°
+export const SPREAD_BULLET_SPEED = 3; // 与 STAR_BULLET_SPEED 一致
+export const SPREAD_MAX_VOLLEYS = 1;
+
+// spiral（F 螺旋弹）：前进分量恒定，实际位置在直线路径两侧做正弦摆动。
+// 摆动用增量式实现（每帧位移 = 前进分量 + (sin((age+1)ω)−sin(age·ω))·R），无需记录出膛原点。
+export const SPIRAL_BULLET_SPEED = 2;
+export const SPIRAL_RADIUS = 6; // 摆动半径（px）
+export const SPIRAL_PERIOD_TICKS = 24; // 摆动周期（帧）
+export const SPIRAL_MAX_BULLETS = 1;
+
+// laser（L 激光）：高速贯穿弹 —— 穿敌人（照常扣血/记分/爆炸）、穿砖块（照常开凿）；
+// 钢块 / 边界 / 鹰巢照常终止，命中队友照常走冻结分支并消亡。
+export const LASER_BULLET_SPEED = 8;
+export const LASER_MAX_BULLETS = 1;
+
+// machine（M 机枪）：按住连发（非边沿），每 MACHINE_FIRE_INTERVAL_TICKS 帧一发。
+export const MACHINE_BULLET_SPEED = 3; // 与 STAR_BULLET_SPEED 一致
+export const MACHINE_FIRE_INTERVAL_TICKS = 10;
+export const MACHINE_MAX_BULLETS = 3;
+
+// 激光精灵为 8×8 逻辑（细长亮条居中于精灵），绘制时相对 4×4 弹体盒左上角的偏移。
+export const LASER_SPRITE_SIZE = 8;
+export const LASER_SPRITE_OFFSET = (LASER_SPRITE_SIZE - BULLET_SIZE) / 2; // 2
+
+// 武器在 HUD 上的字母配色（与道具图标内的字母同色系；cannon 用 COLOR_HUD_ICON 黑）。
+export const COLOR_WEAPON_SPREAD = '#f0c860'; // 黄
+export const COLOR_WEAPON_SPIRAL = '#f85838'; // 橙红
+export const COLOR_WEAPON_LASER = '#78d8f8'; // 亮青
+export const COLOR_WEAPON_MACHINE = '#78e048'; // 亮绿

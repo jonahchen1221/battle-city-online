@@ -2,7 +2,7 @@ import { GameState, nextStage } from './state';
 import { InputState, emptyInput } from '../core/types';
 import { applyInput, TankState, EnemyKind, createPlayer, isPlayerTank } from './tank';
 import {
-  spawnBullet,
+  spawnWeaponBullets,
   liveBulletCount,
   maxBulletsFor,
   advanceBullets,
@@ -13,7 +13,12 @@ import {
 } from './bullet';
 import { updateEnemies } from './enemy';
 import { updatePhase, resolveEagleHit, restartGame } from './phase';
-import { tryPickupPowerup, dropPowerup, restoreEagleRingBrick } from './powerup';
+import {
+  tryPickupPowerup,
+  dropPowerup,
+  restoreEagleRingBrick,
+  updateNeutralPowerups,
+} from './powerup';
 import {
   EXPLOSION_BIG_TICKS,
   EXPLOSION_BIG_SIZE,
@@ -23,6 +28,7 @@ import {
   ENEMY_SCORE,
   STAGE_START_TICKS,
   FRIENDLY_FREEZE_TICKS,
+  MACHINE_FIRE_INTERVAL_TICKS,
 } from '../core/constants';
 
 // 每逻辑帧调用一次。纯函数式推进：只依赖 state 与 inputs，
@@ -91,12 +97,17 @@ export function update(state: GameState, inputs: InputState[]): void {
   state.phaseTicks++;
   const level = state.level;
 
-  // 道具计时递减。timer：敌军冻结逐帧递减。shovel：钢化护墙逐帧递减，归零那帧恢复砖墙。
+  // 道具计时递减。timer：敌军冻结逐帧递减。hourglass：敌军半速逐帧递减。
+  // shovel：钢化护墙逐帧递减，归零那帧恢复砖墙。
   if (state.enemyFreezeTicks > 0) state.enemyFreezeTicks--;
+  if (state.enemySlowTicks > 0) state.enemySlowTicks--;
   if (state.shovelTicks > 0) {
     state.shovelTicks--;
     if (state.shovelTicks === 0) restoreEagleRingBrick(state);
   }
+
+  // 中立道具定时刷新（每关必出 5 种新道具）：仅在 playing 期间推进。
+  updateNeutralPowerups(state);
 
   // 玩家坦克由输入驱动：inputs[i] 对应 playerIndex===i 的坦克（按序号映射，非数组顺序）。
   updatePlayers(state, inputs);
@@ -139,6 +150,11 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     // 出生护盾倒计时（实体化那一刻起算，逐帧递减到 0）。
     if (tank.invulnTicks > 0) tank.invulnTicks--;
 
+    // 限时移动类道具倒计时（boots 加速 / ghost 穿砖）：与护盾同样逐帧递减，
+    // 冻结期间也照常流逝；死亡复活时由 createPlayer 重建而自然清零。
+    if (tank.speedBoostTicks > 0) tank.speedBoostTicks--;
+    if (tank.ghostTicks > 0) tank.ghostTicks--;
+
     // 友军冻结：被队友子弹击中后 freezeTicks>0，期间输入照常采样但一律不生效
     //（不能移动、不能开火），逐帧递减到 0 自动恢复。冻结中履带定格（moving=false）、冰面滑行中断。
     if (tank.freezeTicks > 0) {
@@ -151,30 +167,39 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
 
     applyInput(tank, input, level, state.tanks);
 
-    // 边沿触发开火：本帧按下且上帧未按下；在场子弹数需低于该坦克上限（star 等级 ≥2 可双弹）。
+    // 开火触发方式按武器区分：
+    // - 机枪：按住连发（非边沿），由 fireCooldown 节流为每 MACHINE_FIRE_INTERVAL_TICKS 帧一发；
+    // - 其余武器（含 cannon）：边沿触发 —— 本帧按下且上帧未按下。
+    // 两者都还需满足在场子弹数低于该坦克上限（见 maxBulletsFor：star 双弹 / 各武器自有上限）。
     const firePressed = input.fire && !tank.prevFire;
     tank.prevFire = input.fire;
-    if (firePressed && liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)) {
-      state.bullets.push(spawnBullet(tank));
+    if (tank.fireCooldown > 0) tank.fireCooldown--;
+    const wantFire = tank.weapon === 'machine' ? input.fire && tank.fireCooldown === 0 : firePressed;
+    if (wantFire && liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)) {
+      for (const b of spawnWeaponBullets(tank)) state.bullets.push(b);
+      if (tank.weapon === 'machine') tank.fireCooldown = MACHINE_FIRE_INTERVAL_TICKS;
       state.events.push('playerFire'); // 仅玩家开火发声（敌弹静音，从简）
     }
   }
 }
 
 // 子弹 vs 坦克：按阵营命中，装甲坦克逐发扣血并闪烁，血尽爆炸；玩家被击即时复活。
+// 激光（kind==='laser'）贯穿敌人：命中敌人照常扣血 / 记分 / 爆炸，但子弹不消亡，继续飞并可再命中后续敌人。
 function resolveBulletTanks(state: GameState): void {
   for (const b of state.bullets) {
     if (!b.alive) continue;
+    // 激光贯穿：不因命中敌人而消亡，也不 break —— 同一帧可穿过直线上的多台敌人。
+    const pierces = b.kind === 'laser';
     for (const t of state.tanks) {
       if (!t.alive) continue;
       if (!bulletCanHit(b, t)) continue;
       if (!bulletHitsTank(b, t)) continue;
 
-      b.alive = false;
-
       // 友军火力（多人合作）：玩家弹命中队友 —— 不扣血、不记击杀、不产生大爆炸，
-      // 改为把对方冻结 FRIENDLY_FREEZE_TICKS 帧；已在冻结中则刷新计时。子弹照常消亡并留下小火花。
+      // 改为把对方冻结 FRIENDLY_FREEZE_TICKS 帧；已在冻结中则刷新计时。
+      // 子弹照常消亡并留下小火花（激光亦然：贯穿只对敌人生效）。
       if (!b.fromEnemy && isPlayerTank(t)) {
+        b.alive = false;
         t.freezeTicks = FRIENDLY_FREEZE_TICKS;
         state.explosions.push(
           makeSmallExplosion(b.x + BULLET_SIZE / 2, b.y + BULLET_SIZE / 2),
@@ -182,6 +207,8 @@ function resolveBulletTanks(state: GameState): void {
         state.events.push('explosionSmall');
         break;
       }
+
+      if (!pierces) b.alive = false;
 
       t.hp--;
       if (t.hp <= 0) {
@@ -205,7 +232,7 @@ function resolveBulletTanks(state: GameState): void {
         }
       }
       // 装甲坦克 hp>0 时仅扣血（渲染层据 hp<ARMOR_HP 闪烁），子弹已消亡。
-      break;
+      if (!pierces) break;
     }
   }
 }

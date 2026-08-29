@@ -5,12 +5,16 @@ import {
   STAGE_COUNT,
   STAGE_ENEMY_MIX,
   SPAWN_FLASH_TICKS,
+  NEUTRAL_POWERUP_FIRST_TICKS,
+  PLAYER_SPAWN_POINTS,
+  TANK_SIZE,
 } from '../core/constants';
 import { LevelState, cloneLevel } from './level';
 import { STAGES } from './levels';
 import { TankState, TankKind, EnemyKind, createPlayer, isPlayerTank } from './tank';
 import { BulletState } from './bullet';
-import type { PowerupState } from './powerup';
+import { MVP_POWERUP_KINDS, shuffledNeutralQueue } from './powerup';
+import type { PowerupState, PowerupKind } from './powerup';
 
 // 出生中的敌方坦克：闪光结束后原样加入 tanks，期间不可碰撞、不受控。
 export interface SpawnState {
@@ -80,10 +84,15 @@ export interface GameState {
   prevStart: boolean; // 上一帧 start 键聚合状态（边沿检测：结算重开 / 大厅）
   prevPause: boolean; // 上一帧 pause 键聚合状态（边沿检测：暂停切换）
   // ── 道具系统 ──
-  powerup: PowerupState | null; // 场上当前道具浮标（同时至多一枚）；被拾取 / 被新掉落替换前持续存在
+  powerups: PowerupState[]; // 场上全部道具浮标（最多 MAX_POWERUPS_ON_FIELD 枚，数组序即年龄序：越靠前越旧）
   enemyFreezeTicks: number; // timer 道具：>0 时敌军冻结（不动、不开火），逐帧递减
+  enemySlowTicks: number; // hourglass 道具：>0 时敌军半速（仅偶数 tick 行动），逐帧递减
   shovelTicks: number; // shovel 道具：>0 时鹰巢护墙已钢化，归零时恢复砖墙，逐帧递减
+  neutralQueue: PowerupKind[]; // 本关剩余待刷的中立道具（开关洗牌，保证 5 种新道具每关各出一次）
+  neutralTimer: number; // 距下一枚中立道具刷新的剩余帧（仅 playing 期间递减）
   enemiesDequeued: number; // 已出队敌军计数（用于按第 4/11/18 台标记携带者）
+  // 本关开始时每名玩家的累计分快照：nextStage 据此算出上一关各人得分差，评出 MVP（仅多人局）。
+  stageScoreStart: number[];
   events: GameEvent[]; // 本帧音效事件队列；main.ts 逐帧读取并清空
 }
 
@@ -120,9 +129,11 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   for (let i = 0; i < playerCount; i++) {
     tanks.push(createPlayer(i, i + 1));
   }
+  // rng 先行创建：本关中立道具队列的洗牌即取自它（必须在 state 组装前完成）。
+  const rng = createRng(seed);
   return {
     tick: 0,
-    rng: createRng(seed),
+    rng,
     // 拷贝一份，避免就地破坏砖块时污染 STAGES 常量。
     level: cloneLevel(STAGES[stageIndex]),
     tanks,
@@ -150,10 +161,14 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     pausedBy: -1,
     prevStart: false,
     prevPause: false,
-    powerup: null,
+    powerups: [],
     enemyFreezeTicks: 0,
+    enemySlowTicks: 0,
     shovelTicks: 0,
+    neutralQueue: shuffledNeutralQueue(rng),
+    neutralTimer: NEUTRAL_POWERUP_FIRST_TICKS,
     enemiesDequeued: 0,
+    stageScoreStart: new Array<number>(playerCount).fill(0),
     events: ['stageStart'],
   };
 }
@@ -167,6 +182,23 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
 export function nextStage(state: GameState): void {
   const nextStageNum = (state.stage % STAGE_COUNT) + 1;
   const stageIndex = nextStageNum - 1;
+
+  // ── MVP 开局奖励（仅多人局）──
+  // 规则：以「本关得分差」评 MVP —— delta[i] = 当前累计分 − 本关开始时的累计分快照；
+  // 取 delta 最高者，并列时取 playerIndex 最小者（全员 delta 为 0 也照发，由并列规则兜底）。
+  // 奖励为一枚随机“强力道具”，刷在 MVP 下一关出生点的正前方（朝上一个坦克身位）。
+  // 必须在下方重置 powerups 之前算出 MVP（重置会清空场上道具），实际投放在重置之后。
+  let mvpIndex = -1;
+  if (state.playerCount > 1) {
+    let best = -Infinity;
+    for (let i = 0; i < state.playerCount; i++) {
+      const delta = state.scoreByPlayer[i] - (state.stageScoreStart[i] ?? 0);
+      if (delta > best) {
+        best = delta;
+        mvpIndex = i;
+      }
+    }
+  }
 
   // 先捕获每名玩家当前 star 等级（跨关保留）：来源为在场坦克或复活闪光中的坦克，缺席者按 0。
   const levelByPlayer = new Array<number>(state.playerCount).fill(0);
@@ -194,13 +226,25 @@ export function nextStage(state: GameState): void {
   state.resultTimer = 0;
   // scoreByPlayer 跨关累积、保持不动；killsByPlayer 每关独立、清零重建。
   state.killsByPlayer = emptyKillsByPlayer(state.playerCount);
-  state.powerup = null;
+  state.powerups = [];
   state.enemyFreezeTicks = 0;
+  state.enemySlowTicks = 0;
   state.shovelTicks = 0;
+  // 新关卡重新洗一副中立道具队列，计时归位到首枚延迟。
+  state.neutralQueue = shuffledNeutralQueue(state.rng);
+  state.neutralTimer = NEUTRAL_POWERUP_FIRST_TICKS;
   state.enemiesDequeued = 0;
   state.paused = false;
   state.pausedBy = -1;
   state.prevPause = false;
+
+  // MVP 奖励投放（多人局）：种类由 state.rng 从强力道具池随机取，位置为该玩家出生点正上方
+  // 一个坦克身位（y−16，越界钳到 0），一进关卡就能顺手吃到。单机局 mvpIndex 恒为 -1，不发。
+  if (mvpIndex >= 0) {
+    const kind = MVP_POWERUP_KINDS[state.rng.int(MVP_POWERUP_KINDS.length)];
+    const spawn = PLAYER_SPAWN_POINTS[mvpIndex];
+    state.powerups.push({ kind, x: spawn.x, y: Math.max(0, spawn.y - TANK_SIZE) });
+  }
 
   // 多人合作：团队过关 = 全队一起进下一关 —— 新关卡全员生命恢复到初始值，阵亡者重新入场
   //（star 等级不保留，从 0 开始）。单人保持 NES 原版规则：生命跨关累积。
@@ -215,6 +259,9 @@ export function nextStage(state: GameState): void {
     tank.level = levelByPlayer[i];
     state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
   }
+
+  // 记录新关开始时的累计分快照（下一次 nextStage 据此算本关得分差、评 MVP）。
+  state.stageScoreStart = state.scoreByPlayer.slice();
 
   // 进入开场幕布。
   state.phase = 'stagestart';

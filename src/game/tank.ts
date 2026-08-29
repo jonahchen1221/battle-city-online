@@ -19,8 +19,9 @@ import {
   AI_DECISION_MIN_TICKS,
   PLAYER_INVULN_TICKS,
   ICE_SLIDE_TICKS,
+  BOOTS_SPEED_MULT,
 } from '../core/constants';
-import { Cell, LevelState, getCell, isSolidForTank } from './level';
+import { Cell, CellType, LevelState, getCell, isSolidForTank } from './level';
 
 // 敌方坦克种类（用于计分/计数等以种类为键的表）。
 export type EnemyKind = 'basic' | 'fast' | 'power' | 'armor';
@@ -28,6 +29,11 @@ export type EnemyKind = 'basic' | 'fast' | 'power' | 'armor';
 // 坦克种类：玩家 + 四种敌方。移动/碰撞逻辑敌我复用，靠 kind 区分外观与属性。
 // 玩家不再区分 player1/2/…，统一为 'player'，具体序号见 playerIndex。
 export type TankKind = 'player' | EnemyKind;
+
+// 武器种类（魂斗罗风格）：'cannon' 为经典炮（默认，沿用 star 等级规则），
+// 其余四种由对应武器道具获得，各有自己的弹速 / 在场上限 / 开火方式（见 bullet.ts 与 update.ts）。
+// 死亡复活即用 createPlayer 重建 → 自然归 'cannon'。敌人恒为 'cannon'。
+export type WeaponKind = 'cannon' | 'spread' | 'spiral' | 'laser' | 'machine';
 
 // 坦克实体：纯数据、可序列化（无函数/类实例）。设计为敌我复用，靠 kind 区分。
 // x/y 为 16×16 包围盒左上角的战场相对像素坐标（0..FIELD_WIDTH-16 / 0..FIELD_HEIGHT-16）。
@@ -50,6 +56,11 @@ export interface TankState {
   carriesPowerup: boolean; // 是否为“携带道具”的敌军（第 4/11/18 台出队者）：红色闪烁，死亡掉落道具
   slideTicks: number; // 冰面滑行剩余帧：在冰面上移动时装填为 ICE_SLIDE_TICKS，松开方向键后据此继续滑行
   freezeTicks: number; // 友军冻结剩余帧：被队友子弹击中后 >0，期间不能移动 / 开火（敌人恒为 0）
+  weapon: WeaponKind; // 当前武器：初始 / 死亡复活均为 'cannon'，由武器道具替换（敌人恒为 'cannon'）
+  fireCooldown: number; // 连发冷却剩余帧（仅机枪使用：>0 时不能再射，逐帧递减）
+  speedBoostTicks: number; // boots 快靴剩余帧：>0 时移动速度 ×BOOTS_SPEED_MULT（speed 基值不变）
+  hasBoat: boolean; // boat 船：true 时移动碰撞把水面视为可通行（子弹不受影响），死亡即失
+  ghostTicks: number; // ghost 幽灵剩余帧：>0 时移动碰撞把砖块视为可通行（钢/水/鹰/边界照旧）
 }
 
 // 判断一台坦克是否为玩家坦克。
@@ -80,6 +91,12 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     carriesPowerup: false,
     slideTicks: 0,
     freezeTicks: 0, // 复活即用 createPlayer 重建 → 冻结自然解除
+    weapon: 'cannon', // 复活即用 createPlayer 重建 → 武器自然归经典炮
+    fireCooldown: 0,
+    // 三项移动类道具状态同样随 createPlayer 重建而清空（死亡复活即失效）。
+    speedBoostTicks: 0,
+    hasBoat: false,
+    ghostTicks: 0,
   };
 }
 
@@ -129,6 +146,11 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     carriesPowerup: false, // 由出生器按出队计数标记（见 enemy.ts updateSpawner）
     slideTicks: 0,
     freezeTicks: 0, // 敌人不受友军冻结影响（敌军冻结由道具 state.enemyFreezeTicks 全局控制）
+    weapon: 'cannon', // 敌人不使用武器系统，恒为经典炮
+    fireCooldown: 0,
+    speedBoostTicks: 0, // 敌人不吃道具：三项恒为初始值
+    hasBoat: false,
+    ghostTicks: 0,
   };
 }
 
@@ -154,22 +176,66 @@ function snapAxis(v: number): number {
   return Math.round(v / SUBTILE) * SUBTILE;
 }
 
+// 某坦克的“地形是否阻挡”判定（每帧按其道具状态生成）。
+type SolidTest = (cell: CellType) => boolean;
+
+// 坦克 16×16 车体当前是否与任一砖块子格重叠（幽灵到期的防卡死判定用）。
+function overlapsBrick(tank: TankState, level: LevelState): boolean {
+  const c0 = Math.floor(tank.x / SUBTILE);
+  const c1 = Math.floor((tank.x + TANK_SIZE - EPS) / SUBTILE);
+  const r0 = Math.floor(tank.y / SUBTILE);
+  const r1 = Math.floor((tank.y + TANK_SIZE - EPS) / SUBTILE);
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      if (getCell(level, c, r) === Cell.BRICK) return true;
+    }
+  }
+  return false;
+}
+
+// 在通用规则 isSolidForTank 之上叠加道具豁免（仅作用于坦克移动，子弹不受影响）：
+//   • boat（hasBoat）  → 水面可通行，直到该玩家死亡；
+//   • ghost（ghostTicks>0）→ 砖块可通行（钢 / 水 / 鹰巢 / 边界照旧阻挡）。
+// 幽灵到期防卡死：若车体此刻仍与砖块重叠，砖对其保持可通行，直到完全脱离为止
+//（同样兜住了“扳手 / 铲子在坦克脚下造墙”这类把坦克封在墙里的情形）。
+function tankSolidTest(tank: TankState, level: LevelState): SolidTest {
+  const brickPass = tank.ghostTicks > 0 || overlapsBrick(tank, level);
+  const waterPass = tank.hasBoat;
+  return (cell: CellType): boolean => {
+    if (cell === Cell.BRICK) return !brickPass;
+    if (cell === Cell.WATER) return !waterPass;
+    return isSolidForTank(cell);
+  };
+}
+
 // 检查一段水平区间 [xLeft, xRight) 在某子格行 row 上是否触及不可穿透地形。
-function rowBlocked(level: LevelState, row: number, xLeft: number, xRight: number): boolean {
+function rowBlocked(
+  level: LevelState,
+  row: number,
+  xLeft: number,
+  xRight: number,
+  solid: SolidTest,
+): boolean {
   const c0 = Math.floor(xLeft / SUBTILE);
   const c1 = Math.floor((xRight - EPS) / SUBTILE);
   for (let c = c0; c <= c1; c++) {
-    if (isSolidForTank(getCell(level, c, row))) return true;
+    if (solid(getCell(level, c, row))) return true;
   }
   return false;
 }
 
 // 检查一段竖直区间 [yTop, yBottom) 在某子格列 col 上是否触及不可穿透地形。
-function colBlocked(level: LevelState, col: number, yTop: number, yBottom: number): boolean {
+function colBlocked(
+  level: LevelState,
+  col: number,
+  yTop: number,
+  yBottom: number,
+  solid: SolidTest,
+): boolean {
   const r0 = Math.floor(yTop / SUBTILE);
   const r1 = Math.floor((yBottom - EPS) / SUBTILE);
   for (let r = r0; r <= r1; r++) {
-    if (isSolidForTank(getCell(level, col, r))) return true;
+    if (solid(getCell(level, col, r))) return true;
   }
   return false;
 }
@@ -208,13 +274,15 @@ export function canTankOccupy(
 // 沿当前朝向尽量前进：先按地形紧贴边缘，再对其他坦克做实心夹紧（紧贴其外侧停下）。
 // others 为场上全部坦克（含自身与死者，内部跳过）；单轴移动，垂直轴坐标本帧不变。
 function moveTank(tank: TankState, level: LevelState, others: TankState[]): void {
-  const d = tank.speed;
+  // boots 快靴：本帧步长按倍率放大（不改 tank.speed 基值，到期自然恢复）。
+  const d = tank.speedBoostTicks > 0 ? tank.speed * BOOTS_SPEED_MULT : tank.speed;
+  const solid = tankSolidTest(tank, level);
   const { x, y } = tank;
   switch (tank.dir) {
     case 'up': {
       let ny = Math.max(0, y - d);
       const row = Math.floor(ny / SUBTILE); // 前沿（顶边）所在行
-      if (rowBlocked(level, row, x, x + TANK_SIZE)) {
+      if (rowBlocked(level, row, x, x + TANK_SIZE, solid)) {
         ny = (row + 1) * SUBTILE; // 紧贴该行下边界
       }
       for (const o of others) {
@@ -230,7 +298,7 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
       let ny = Math.min(MAX_Y, y + d);
       const bottom = ny + TANK_SIZE;
       const row = Math.floor((bottom - EPS) / SUBTILE); // 前沿（底边）所在行
-      if (rowBlocked(level, row, x, x + TANK_SIZE)) {
+      if (rowBlocked(level, row, x, x + TANK_SIZE, solid)) {
         ny = row * SUBTILE - TANK_SIZE; // 紧贴该行上边界
       }
       for (const o of others) {
@@ -243,7 +311,7 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
     case 'left': {
       let nx = Math.max(0, x - d);
       const col = Math.floor(nx / SUBTILE); // 前沿（左边）所在列
-      if (colBlocked(level, col, y, y + TANK_SIZE)) {
+      if (colBlocked(level, col, y, y + TANK_SIZE, solid)) {
         nx = (col + 1) * SUBTILE; // 紧贴该列右边界
       }
       for (const o of others) {
@@ -257,7 +325,7 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
       let nx = Math.min(MAX_X, x + d);
       const right = nx + TANK_SIZE;
       const col = Math.floor((right - EPS) / SUBTILE); // 前沿（右边）所在列
-      if (colBlocked(level, col, y, y + TANK_SIZE)) {
+      if (colBlocked(level, col, y, y + TANK_SIZE, solid)) {
         nx = col * SUBTILE - TANK_SIZE; // 紧贴该列左边界
       }
       for (const o of others) {

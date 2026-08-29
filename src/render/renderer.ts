@@ -35,10 +35,16 @@ import {
   CARRIER_FLASH_TICKS,
   POWERUP_BLINK_VISIBLE_TICKS,
   POWERUP_BLINK_CYCLE_TICKS,
+  GHOST_RENDER_ALPHA,
+  LASER_SPRITE_OFFSET,
+  COLOR_WEAPON_SPREAD,
+  COLOR_WEAPON_SPIRAL,
+  COLOR_WEAPON_LASER,
+  COLOR_WEAPON_MACHINE,
 } from '../core/constants';
 import { GameState } from '../game/state';
 import { Cell, LevelState, cellIndex, getCell } from '../game/level';
-import { TankState, EnemyKind } from '../game/tank';
+import { TankState, EnemyKind, WeaponKind } from '../game/tank';
 import {
   SpriteAtlas,
   TankFrames,
@@ -56,6 +62,22 @@ import {
 function snapArt(v: number): number {
   return Math.round(v * ART_SCALE) / ART_SCALE;
 }
+
+// HUD 上标注当前武器用的单字母与配色（32px 栏放不下全名）。cannon 标 'C'（黑，与其余 HUD 图标同色）。
+const WEAPON_LETTER: Record<WeaponKind, string> = {
+  cannon: 'C',
+  spread: 'S',
+  spiral: 'F',
+  laser: 'L',
+  machine: 'M',
+};
+const WEAPON_LETTER_COLOR: Record<WeaponKind, string> = {
+  cannon: COLOR_HUD_ICON,
+  spread: COLOR_WEAPON_SPREAD,
+  spiral: COLOR_WEAPON_SPIRAL,
+  laser: COLOR_WEAPON_LASER,
+  machine: COLOR_WEAPON_MACHINE,
+};
 
 // 渲染层只读 GameState，不做任何逻辑推进。
 export class Renderer {
@@ -226,6 +248,9 @@ export class Renderer {
     for (let i = 0; i < state.playerCount; i++) {
       const rowY = livesTop + i * rowH;
       drawText(ctx, atlas, `${i + 1}P`, hudX + 6, rowY, COLOR_HUD_ICON);
+      // 当前武器字母，紧贴 'nP' 标签右侧（栏宽 32px：标签 6..18、字母 24..30）。
+      const weapon = this.playerWeapon(state, i);
+      drawText(ctx, atlas, WEAPON_LETTER[weapon], hudX + 24, rowY, WEAPON_LETTER_COLOR[weapon]);
       const stock = Math.max(0, state.livesByPlayer[i] - 1);
       drawTile(ctx, atlas.hudLifeTank[i], hudX + 3, rowY + 8);
       // 数字与迷你坦克顶对齐；旧版下沉 4px，会和下一段分隔线相撞。
@@ -238,6 +263,17 @@ export class Renderer {
     ctx.fillRect((hudX + 5) * ART_SCALE, (flagY - 4) * ART_SCALE, 23 * ART_SCALE, ART_SCALE);
     drawTile(ctx, atlas.hudFlag, hudX + 7, flagY);
     drawText(ctx, atlas, String(state.stage), hudX + 12, flagY + 20, COLOR_HUD_ICON);
+  }
+
+  // 某玩家当前的武器：优先取在场坦克，其次取出生闪光中（复活）的坦克；都没有则视为 cannon。
+  private playerWeapon(state: GameState, playerIndex: number): WeaponKind {
+    for (const t of state.tanks) {
+      if (t.alive && t.kind === 'player' && t.playerIndex === playerIndex) return t.weapon;
+    }
+    for (const sp of state.spawning) {
+      if (sp.tank.kind === 'player' && sp.tank.playerIndex === playerIndex) return sp.tank.weapon;
+    }
+    return 'cannon';
   }
 
   // 结果覆盖层。GAME OVER：经典红，phaseTicks 前 GAMEOVER_SLIDE_TICKS 帧由底部滑到中央后停住。
@@ -422,7 +458,11 @@ export class Renderer {
         tank.kind === 'player' &&
         tank.freezeTicks > 0 &&
         Math.floor(tank.freezeTicks / FRIENDLY_FREEZE_BLINK_TICKS) % 2 === 0;
+      // 幽灵态（ghost 道具）：整台坦克半透明绘制 —— 与友军冻结的“明灭闪烁”是两种观感，不会混淆。
+      const ghosting = tank.kind === 'player' && tank.ghostTicks > 0;
+      if (ghosting) ctx.globalAlpha = GHOST_RENDER_ALPHA;
       if (!freezeBlinkOff) drawTile(ctx, sprite, px, py);
+      if (ghosting) ctx.globalAlpha = 1;
 
       // 出生护盾：每 SHIELD_ANIM_TICKS 帧切换两帧流光，覆盖在坦克之上。
       if (tank.invulnTicks > 0) {
@@ -470,20 +510,40 @@ export class Renderer {
     }
   }
 
-  // 道具浮标：按 32 帧周期闪烁（前 24 帧可见、后 8 帧隐藏），画于战场裁剪区内、树林之上。
+  // 道具浮标：场上可同时存在多枚，逐一绘制。按 32 帧周期整体闪烁（前 24 帧可见、后 8 帧隐藏），
+  // 画于战场裁剪区内、树林之上。
   private drawPowerup(state: GameState): void {
-    const p = state.powerup;
-    if (!p) return;
     if (state.tick % POWERUP_BLINK_CYCLE_TICKS >= POWERUP_BLINK_VISIBLE_TICKS) return; // 隐藏相
     const { ctx, atlas } = this;
-    drawTile(ctx, atlas.powerup[p.kind], snapArt(FIELD_X + p.x), snapArt(FIELD_Y + p.y));
+    for (const p of state.powerups) {
+      drawTile(ctx, atlas.powerup[p.kind], snapArt(FIELD_X + p.x), snapArt(FIELD_Y + p.y));
+    }
   }
 
+  // 子弹按 kind 区分观感：normal / pellet 用经典银弹，spiral 用橙红火球，
+  // laser 用沿 dir 的细长亮条（精灵比弹体盒大，按 LASER_SPRITE_OFFSET 居中绘制）。
   private drawBullets(state: GameState): void {
     const { ctx, atlas } = this;
     for (const bullet of state.bullets) {
       if (!bullet.alive) continue;
-      drawTile(ctx, atlas.bullet, snapArt(FIELD_X + bullet.x), snapArt(FIELD_Y + bullet.y));
+      const px = FIELD_X + bullet.x;
+      const py = FIELD_Y + bullet.y;
+      switch (bullet.kind) {
+        case 'laser':
+          drawTile(
+            ctx,
+            atlas.bulletLaser[bullet.dir],
+            snapArt(px - LASER_SPRITE_OFFSET),
+            snapArt(py - LASER_SPRITE_OFFSET),
+          );
+          break;
+        case 'spiral':
+          drawTile(ctx, atlas.bulletSpiral, snapArt(px), snapArt(py));
+          break;
+        default:
+          drawTile(ctx, atlas.bullet, snapArt(px), snapArt(py));
+          break;
+      }
     }
   }
 

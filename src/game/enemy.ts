@@ -128,12 +128,17 @@ function updateOneEnemy(tank: TankState, state: GameState, level: LevelState): v
 }
 
 // 敌方总编排：先推进出生闪光（实体化），再驱动全部在场敌人，最后尝试出生新敌人。
-// timer 道具冻结期间（enemyFreezeTicks>0）跳过全部在场敌人的 AI（不动、不开火、履带冻结），
-// 但出生闪光与出生器照常推进（经典表现）。飞行中的子弹由 update 的 advanceBullets 继续推进。
+// 敌军行动门禁（两级，冻结优先于减速）：
+//   • timer 道具冻结期间（enemyFreezeTicks>0）：跳过全部在场敌人的 AI（不动、不开火、履带冻结）；
+//   • hourglass 道具减速期间（enemySlowTicks>0）：敌人仅在偶数 tick 行动 —— 移动 / AI 决策 / 开火
+//     一并减半，即整体半速；已在场的敌弹不受影响（照常按自身速度飞行）。
+// 两种情形下出生闪光与出生器都照常推进（经典表现）。子弹由 update 的 advanceBullets 继续推进。
 export function updateEnemies(state: GameState, level: LevelState): void {
   updateSpawning(state, level);
 
-  if (state.enemyFreezeTicks <= 0) {
+  const frozen = state.enemyFreezeTicks > 0;
+  const slowedSkip = !frozen && state.enemySlowTicks > 0 && state.tick % 2 !== 0;
+  if (!frozen && !slowedSkip) {
     for (const tank of state.tanks) {
       if (!tank.alive || isPlayerTank(tank)) continue;
       updateOneEnemy(tank, state, level);

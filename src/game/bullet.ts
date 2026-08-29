@@ -13,6 +13,18 @@ import {
   EXPLOSION_SMALL_TICKS,
   STAR_BULLET_SPEED,
   PLAYER_MAX_BULLETS_UPGRADED,
+  SPREAD_PELLET_COUNT,
+  SPREAD_SPLAY_RAD,
+  SPREAD_BULLET_SPEED,
+  SPREAD_MAX_VOLLEYS,
+  SPIRAL_BULLET_SPEED,
+  SPIRAL_RADIUS,
+  SPIRAL_PERIOD_TICKS,
+  SPIRAL_MAX_BULLETS,
+  LASER_BULLET_SPEED,
+  LASER_MAX_BULLETS,
+  MACHINE_BULLET_SPEED,
+  MACHINE_MAX_BULLETS,
 } from '../core/constants';
 import {
   Cell,
@@ -25,17 +37,26 @@ import {
 import { TankState, isPlayerTank } from './tank';
 import type { ExplosionState, GameEvent } from './state';
 
+// 子弹种类（决定观感与特殊结算）：
+// 'normal' = 经典弹（cannon / 机枪 / 敌弹，纯四方向）；'pellet' = 散弹粒（可斜飞）；
+// 'spiral' = 螺旋弹（沿路径正弦摆动）；'laser' = 激光（穿敌人 / 穿砖块）。
+export type BulletKind = 'normal' | 'pellet' | 'spiral' | 'laser';
+
 // 子弹实体：纯数据、可序列化。x/y 为 4×4 包围盒左上角的战场相对像素坐标。
 export interface BulletState {
   x: number;
   y: number;
-  dir: Direction;
-  speed: number; // px/tick
+  dir: Direction; // 主轴朝向：地形开凿 / 前沿扫描一律按它定向（斜飞的散弹粒亦然）
+  speed: number; // px/tick（主轴标称速度；实际位移见 vx/vy）
+  vx: number; // 实际速度向量 X 分量（px/tick）：normal 由 dir×speed 推出，行为与改动前一致
+  vy: number; // 实际速度向量 Y 分量（px/tick）
+  age: number; // 出膛以来的 tick 数（螺旋弹相位用）
+  kind: BulletKind;
   ownerId: number;
   ownerPlayerIndex: number; // 射手的玩家序号（玩家弹为其 playerIndex，敌弹为 -1）：用于击杀记分归属
   fromEnemy: boolean; // 阵营：true=敌弹（只打玩家），false=玩家弹（只打敌人）
   alive: boolean;
-  steelPiercing: boolean; // star 满级（3 级）玩家弹：可击穿钢块（击中钢块时整格清除）
+  steelPiercing: boolean; // star 满级（3 级）玩家弹：可击穿钢块（击中钢块时整格清除）；仅 cannon 生效
 }
 
 const EPS = 1e-6;
@@ -46,29 +67,103 @@ export function makeSmallExplosion(cx: number, cy: number): ExplosionState {
   return { x: cx - 8, y: cy - 8, ticksLeft: EXPLOSION_SMALL_TICKS, big: false };
 }
 
-// 从坦克炮口生成一发子弹（4×4，居中于坦克宽度、紧贴坦克盒外侧）。
-// 速度取自该坦克（威力坦克更快；玩家 star 等级 ≥1 提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
-export function spawnBullet(tank: TankState): BulletState {
+// 朝向的单位向量（屏幕坐标系：y 向下为正）。
+function dirVector(dir: Direction): { x: number; y: number } {
+  switch (dir) {
+    case 'up':
+      return { x: 0, y: -1 };
+    case 'down':
+      return { x: 0, y: 1 };
+    case 'left':
+      return { x: -1, y: 0 };
+    case 'right':
+      return { x: 1, y: 0 };
+  }
+}
+
+// 垂直于朝向的单位向量（把 dirVector 顺时针旋转 90°）：螺旋弹的摆动轴。
+function perpVector(dir: Direction): { x: number; y: number } {
+  const v = dirVector(dir);
+  return { x: -v.y, y: v.x };
+}
+
+// 炮口位置：4×4 弹体居中于坦克宽度、紧贴坦克盒外侧。
+function muzzlePos(tank: TankState): { x: number; y: number } {
+  switch (tank.dir) {
+    case 'up':
+      return { x: tank.x + MUZZLE_OFFSET, y: tank.y - BULLET_SIZE };
+    case 'down':
+      return { x: tank.x + MUZZLE_OFFSET, y: tank.y + TANK_SIZE };
+    case 'left':
+      return { x: tank.x - BULLET_SIZE, y: tank.y + MUZZLE_OFFSET };
+    case 'right':
+      return { x: tank.x + TANK_SIZE, y: tank.y + MUZZLE_OFFSET };
+  }
+}
+
+// 从坦克炮口生成一发子弹（4×4）。angleRad 为相对 tank.dir 的偏角（散弹用；0 = 沿主轴）。
+// dir 一律取 tank.dir —— 地形开凿与前沿扫描按主轴定向，斜飞只体现在 vx/vy 上。
+function makeBullet(
+  tank: TankState,
+  kind: BulletKind,
+  speed: number,
+  steelPiercing: boolean,
+  angleRad = 0,
+): BulletState {
   const isPlayer = isPlayerTank(tank);
-  const speed = isPlayer && tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
-  const base = {
+  const { x, y } = muzzlePos(tank);
+  const v = dirVector(tank.dir);
+  // 绕原点旋转 angleRad（屏幕坐标系，正角度为顺时针）。
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+  return {
+    x,
+    y,
     dir: tank.dir,
     speed,
+    vx: (v.x * cos - v.y * sin) * speed,
+    vy: (v.x * sin + v.y * cos) * speed,
+    age: 0,
+    kind,
     ownerId: tank.id,
     ownerPlayerIndex: isPlayer ? tank.playerIndex : -1,
     fromEnemy: !isPlayer,
     alive: true,
-    steelPiercing: isPlayer && tank.level >= 3,
+    steelPiercing,
   };
-  switch (tank.dir) {
-    case 'up':
-      return { x: tank.x + MUZZLE_OFFSET, y: tank.y - BULLET_SIZE, ...base };
-    case 'down':
-      return { x: tank.x + MUZZLE_OFFSET, y: tank.y + TANK_SIZE, ...base };
-    case 'left':
-      return { x: tank.x - BULLET_SIZE, y: tank.y + MUZZLE_OFFSET, ...base };
-    case 'right':
-      return { x: tank.x + TANK_SIZE, y: tank.y + MUZZLE_OFFSET, ...base };
+}
+
+// 从坦克炮口生成一发经典弹（cannon / 敌弹）。
+// 速度取自该坦克（威力坦克更快；玩家 star 等级 ≥1 提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
+export function spawnBullet(tank: TankState): BulletState {
+  const isPlayer = isPlayerTank(tank);
+  const speed = isPlayer && tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
+  return makeBullet(tank, 'normal', speed, isPlayer && tank.level >= 3);
+}
+
+// 按坦克当前武器生成一次开火的全部子弹（cannon / 机枪各一发，散弹一轮三发）。
+// star 满级的破钢只作用于 cannon（特殊武器一律不穿钢）。
+export function spawnWeaponBullets(tank: TankState): BulletState[] {
+  switch (tank.weapon) {
+    case 'spread': {
+      // 以主轴为中心对称展开：三发时即 −22.5° / 0° / +22.5°（dir 均为 tank.dir）。
+      const mid = (SPREAD_PELLET_COUNT - 1) / 2;
+      const out: BulletState[] = [];
+      for (let i = 0; i < SPREAD_PELLET_COUNT; i++) {
+        out.push(
+          makeBullet(tank, 'pellet', SPREAD_BULLET_SPEED, false, (i - mid) * SPREAD_SPLAY_RAD),
+        );
+      }
+      return out;
+    }
+    case 'spiral':
+      return [makeBullet(tank, 'spiral', SPIRAL_BULLET_SPEED, false)];
+    case 'laser':
+      return [makeBullet(tank, 'laser', LASER_BULLET_SPEED, false)];
+    case 'machine':
+      return [makeBullet(tank, 'normal', MACHINE_BULLET_SPEED, false)];
+    default:
+      return [spawnBullet(tank)];
   }
 }
 
@@ -84,27 +179,39 @@ export function liveBulletCount(bullets: BulletState[], ownerId: number): number
   return n;
 }
 
-// 该坦克同屏可存在的子弹上限：玩家 star 等级 ≥2 为 PLAYER_MAX_BULLETS_UPGRADED，否则 1。
+// 该坦克同屏可存在的子弹上限：
+// cannon 沿用 star 规则（等级 ≥2 为 PLAYER_MAX_BULLETS_UPGRADED，否则 1）；
+// 特殊武器各有自己的上限（散弹的“1”指一轮齐射 —— 三发全灭前不能再射）。敌人恒为 1。
 export function maxBulletsFor(tank: TankState): number {
-  return isPlayerTank(tank) && tank.level >= 2 ? PLAYER_MAX_BULLETS_UPGRADED : 1;
+  if (!isPlayerTank(tank)) return 1;
+  switch (tank.weapon) {
+    case 'spread':
+      return SPREAD_MAX_VOLLEYS;
+    case 'spiral':
+      return SPIRAL_MAX_BULLETS;
+    case 'laser':
+      return LASER_MAX_BULLETS;
+    case 'machine':
+      return MACHINE_MAX_BULLETS;
+    default:
+      return tank.level >= 2 ? PLAYER_MAX_BULLETS_UPGRADED : 1;
+  }
 }
 
-// 沿朝向推进一格步长。
+// 按速度向量推进一帧。normal 弹的 vx/vy 由 dir×speed 推出，结果与纯四方向位移完全一致。
+// 螺旋弹另叠加一个垂直于主轴的正弦增量：位移 = (sin((age+1)ω) − sin(age·ω))·R，
+// 等价于横向偏移恒为 sin(age·ω)·R（幅度 ≤ SPIRAL_RADIUS），无需记录出膛原点。
 function moveBullet(b: BulletState): void {
-  switch (b.dir) {
-    case 'up':
-      b.y -= b.speed;
-      break;
-    case 'down':
-      b.y += b.speed;
-      break;
-    case 'left':
-      b.x -= b.speed;
-      break;
-    case 'right':
-      b.x += b.speed;
-      break;
+  b.x += b.vx;
+  b.y += b.vy;
+  if (b.kind === 'spiral') {
+    const w = (2 * Math.PI) / SPIRAL_PERIOD_TICKS;
+    const d = (Math.sin((b.age + 1) * w) - Math.sin(b.age * w)) * SPIRAL_RADIUS;
+    const n = perpVector(b.dir);
+    b.x += n.x * d;
+    b.y += n.y * d;
   }
+  b.age++;
 }
 
 // 清除落在破坏条矩形 [sx0,sx1)×[sy0,sy1) 内的所有 4×4 象限（跨越子格边界时逐象限判定）。
@@ -199,8 +306,8 @@ function carveSteelStrip(b: BulletState, level: LevelState): void {
 }
 
 // 判定子弹前沿覆盖的子格并结算地形碰撞。
-// - 砖块：击穿（挖破坏条），子弹消失。
-// - 钢块 / 鹰巢 / 边界：子弹消失，不破坏地形（威力弹与打鹰属后续任务）。
+// - 砖块：击穿（挖破坏条），子弹消失；激光例外 —— 开凿后继续飞（穿砖）。
+// - 钢块 / 鹰巢 / 边界：子弹消失，不破坏地形（star 满级 cannon 弹可破战场内钢块）。
 // - 水 / 树林 / 冰 / 空地：飞越。
 function resolveBulletTerrain(b: BulletState, level: LevelState, events: GameEvent[]): void {
   let hitBrick = false;
@@ -256,18 +363,20 @@ function resolveBulletTerrain(b: BulletState, level: LevelState, events: GameEve
 
   if (!hitBrick && !hitSteel && !hitHard) return; // 未命中实心地形，继续飞行
 
-  b.alive = false;
   if (b.steelPiercing && hitSteel && !hitHard) {
     // star 满级弹击穿钢块：整格清除钢块，同一破坏条内的砖块照常挖除。
     carveSteelStrip(b, level);
     if (hitBrick) carveStrip(b, level);
     events.push('brickHit'); // 破坏音
+    b.alive = false;
   } else if (hitBrick && !hitSteel && !hitHard) {
-    // 纯砖块命中：挖破坏条。
+    // 纯砖块命中：挖破坏条。激光贯穿砖块，开凿后继续飞（可一路钻出通道）。
     carveStrip(b, level);
     events.push('brickHit');
+    if (b.kind !== 'laser') b.alive = false;
   } else {
     events.push('steelHit'); // 钢块（未破钢）/ 鹰巢 / 边界：金属脆响
+    b.alive = false;
   }
 }
 
@@ -309,7 +418,10 @@ function bulletsOverlap(a: BulletState, b: BulletState): boolean {
   );
 }
 
-// 子弹 vs 子弹：对向（阵营不同）重叠即相互抵消（经典机制）；同阵营互相穿过。
+// 子弹 vs 子弹（重叠即判定）：
+// - 不同阵营（玩家弹 × 敌弹）：相互抵消（经典机制）。
+// - 同为玩家弹但射手不同（多人合作友军火力）：也相互抵消 —— 队友可打掉你的弹幕。
+// - 同一射手的玩家弹（star 双弹 / 机枪连发 / 散弹同轮）与敌弹 × 敌弹：互相穿过。
 // 抵消处生成一个小爆炸火花。
 export function resolveBulletBullet(
   bullets: BulletState[],
@@ -322,7 +434,10 @@ export function resolveBulletBullet(
     for (let j = i + 1; j < bullets.length; j++) {
       const b = bullets[j];
       if (!b.alive) continue;
-      if (a.fromEnemy === b.fromEnemy) continue; // 同阵营穿过
+      if (a.fromEnemy === b.fromEnemy) {
+        if (a.fromEnemy) continue; // 敌弹 × 敌弹：穿过
+        if (a.ownerId === b.ownerId) continue; // 同一射手自己的弹：穿过
+      }
       if (!bulletsOverlap(a, b)) continue;
       a.alive = false;
       b.alive = false;
