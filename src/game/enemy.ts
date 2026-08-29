@@ -104,7 +104,7 @@ function updateOneEnemy(tank: TankState, state: GameState, level: LevelState): v
     // 定时器到点：仅转向（含吸附），下一帧起沿新方向行进。
     const nd = pickDirection(state.rng);
     tank.aiTicks = resetDecisionTimer(state.rng);
-    turnTank(tank, nd);
+    turnTank(tank, nd, level, state.tanks);
   }
 
   // 随机开火：每帧约 1/AI_FIRE_DENOM，且当前无在场子弹。

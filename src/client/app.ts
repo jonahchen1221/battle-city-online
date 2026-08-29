@@ -154,6 +154,10 @@ export class App {
 
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
     window.addEventListener('paste', (e) => this.onPaste(e));
+    window.addEventListener('blur', () => this.releaseAllInputs());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') this.releaseAllInputs();
+    });
 
     // 地址栏带 ?room=ABCD 时跳过标题菜单，直接连服务器加入。
     this.tryAutoJoinFromUrl();
@@ -237,6 +241,17 @@ export class App {
       this.lastSentInput = input;
       this.lastSendTime = now;
     }
+  }
+
+  // 失焦后 keyup 可能永远不会到达。先清空本地键盘状态；联机中还要立即把中立输入
+  // 发给权威服务器，因为后台页的 rAF 会被暂停，不能等下一次 tick/心跳再停止坦克。
+  private releaseAllInputs(): void {
+    this.keyboard.reset();
+    if (this.screen !== 'netGame' || this.disconnected || !this.net.connected) return;
+    const input = emptyInput();
+    this.net.send({ t: 'input', input });
+    this.lastSentInput = input;
+    this.lastSendTime = performance.now();
   }
 
   // ───────────────────────── 网络事件 ─────────────────────────

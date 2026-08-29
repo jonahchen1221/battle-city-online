@@ -67,4 +67,12 @@ export class Keyboard {
     if (latest !== undefined) snap[latest] = true;
     return snap;
   }
+
+  // 窗口失焦 / 页面隐藏时浏览器不保证继续派发 keyup。统一清空物理键与逻辑键状态，
+  // 避免回到页面后仍沿失焦前的方向移动（开火 / 暂停等按键也一并释放）。
+  reset(): void {
+    this.state = emptyInput();
+    this.dirOrder = [];
+    this.dirCodes.clear();
+  }
 }

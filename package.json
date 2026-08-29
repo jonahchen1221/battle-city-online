@@ -9,6 +9,7 @@
     "server": "tsx src/server/server.ts",
     "start": "tsx src/server/server.ts",
     "lan": "npm run build && tsx src/server/server.ts",
+    "test": "node --import tsx --test test/*.test.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"

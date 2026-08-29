@@ -179,6 +179,31 @@ function tanksOverlap(ax: number, ay: number, bx: number, by: number): boolean {
   return ax < bx + TANK_SIZE && ax + TANK_SIZE > bx && ay < by + TANK_SIZE && ay + TANK_SIZE > by;
 }
 
+// 16×16 坦克盒能否完整占据候选位置。转向吸附会沿当前移动轴瞬移最多 4px，
+// 因而不能复用只检查“前沿一行/一列”的常规移动碰撞；这里检查完整盒与所有实心占位。
+function canOccupy(
+  tank: TankState,
+  x: number,
+  y: number,
+  level: LevelState,
+  others: TankState[],
+): boolean {
+  const c0 = Math.floor(x / SUBTILE);
+  const c1 = Math.floor((x + TANK_SIZE - EPS) / SUBTILE);
+  const r0 = Math.floor(y / SUBTILE);
+  const r1 = Math.floor((y + TANK_SIZE - EPS) / SUBTILE);
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      if (isSolidForTank(getCell(level, c, r))) return false;
+    }
+  }
+  for (const o of others) {
+    if (o === tank || !o.alive) continue;
+    if (tanksOverlap(x, y, o.x, o.y)) return false;
+  }
+  return true;
+}
+
 // 沿当前朝向尽量前进：先按地形紧贴边缘，再对其他坦克做实心夹紧（紧贴其外侧停下）。
 // others 为场上全部坦克（含自身与死者，内部跳过）；单轴移动，垂直轴坐标本帧不变。
 function moveTank(tank: TankState, level: LevelState, others: TankState[]): void {
@@ -243,17 +268,29 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
 }
 
 // 仅转向（含原版轴吸附），不移动。垂直↔水平切换时把上一条移动轴吸附到最近 8px；
-// 反向（up<->down / left<->right）不吸附。允许原地转向（即使被墙挡住）。
-export function turnTank(tank: TankState, desired: Direction): void {
-  if (desired === tank.dir) return;
+// 反向（up<->down / left<->right）不吸附。候选吸附位置被地形或坦克占据时拒绝本次转向，
+// 下一帧若方向键仍按住会自动重试。返回是否已处于 desired 方向。
+export function turnTank(
+  tank: TankState,
+  desired: Direction,
+  level: LevelState,
+  tanks: TankState[],
+): boolean {
+  if (desired === tank.dir) return true;
+  let nx = tank.x;
+  let ny = tank.y;
   if (isVertical(tank.dir) !== isVertical(desired)) {
     if (isVertical(tank.dir)) {
-      tank.y = Math.min(MAX_Y, Math.max(0, snapAxis(tank.y)));
+      ny = Math.min(MAX_Y, Math.max(0, snapAxis(tank.y)));
     } else {
-      tank.x = Math.min(MAX_X, Math.max(0, snapAxis(tank.x)));
+      nx = Math.min(MAX_X, Math.max(0, snapAxis(tank.x)));
     }
+    if (!canOccupy(tank, nx, ny, level, tanks)) return false;
   }
+  tank.x = nx;
+  tank.y = ny;
   tank.dir = desired;
+  return true;
 }
 
 // 坦克中心所在子格是否为冰面（16×16 盒中心 = 左上角 + 8）。
@@ -290,8 +327,13 @@ export function applyInput(
     return;
   }
 
-  turnTank(tank, desired);
   tank.moving = true;
+  if (!turnTank(tank, desired, level, tanks)) {
+    // 有转向输入但吸附位置暂不可用：保持朝向与坐标，障碍离开后会继续重试。
+    // 中断冰面滑行，避免松键后沿旧方向意外滑走。
+    tank.slideTicks = 0;
+    return;
+  }
   moveTank(tank, level, tanks);
   // 移动后：中心若在冰面则装填滑行计时（松键后可继续滑行），离开冰面则清零。
   tank.slideTicks = centerOnIce(tank, level) ? ICE_SLIDE_TICKS : 0;
