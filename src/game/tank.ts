@@ -181,13 +181,14 @@ function tanksOverlap(ax: number, ay: number, bx: number, by: number): boolean {
 
 // 16×16 坦克盒能否完整占据候选位置。转向吸附会沿当前移动轴瞬移最多 4px，
 // 因而不能复用只检查“前沿一行/一列”的常规移动碰撞；这里检查完整盒与所有实心占位。
-function canOccupy(
+export function canTankOccupy(
   tank: TankState,
   x: number,
   y: number,
   level: LevelState,
   others: TankState[],
 ): boolean {
+  if (x < 0 || y < 0 || x > MAX_X || y > MAX_Y) return false;
   const c0 = Math.floor(x / SUBTILE);
   const c1 = Math.floor((x + TANK_SIZE - EPS) / SUBTILE);
   const r0 = Math.floor(y / SUBTILE);
@@ -218,9 +219,11 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
       }
       for (const o of others) {
         if (o === tank || !o.alive) continue;
-        if (tanksOverlap(x, ny, o.x, o.y)) ny = Math.max(ny, o.y + TANK_SIZE); // 紧贴上方坦克
+        // 只允许位于移动方向前方的坦克收紧候选位置。若状态中已经存在重叠，后方坦克
+        // 不得把当前坦克反向推出；朝重叠坦克移动时最多原地阻塞，绝不产生反向位移。
+        if (o.y < y && tanksOverlap(x, ny, o.x, o.y)) ny = Math.max(ny, o.y + TANK_SIZE);
       }
-      tank.y = ny;
+      tank.y = Math.max(0, Math.min(y, ny));
       break;
     }
     case 'down': {
@@ -232,9 +235,9 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
       }
       for (const o of others) {
         if (o === tank || !o.alive) continue;
-        if (tanksOverlap(x, ny, o.x, o.y)) ny = Math.min(ny, o.y - TANK_SIZE); // 紧贴下方坦克
+        if (o.y > y && tanksOverlap(x, ny, o.x, o.y)) ny = Math.min(ny, o.y - TANK_SIZE);
       }
-      tank.y = ny;
+      tank.y = Math.min(MAX_Y, Math.max(y, ny));
       break;
     }
     case 'left': {
@@ -245,9 +248,9 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
       }
       for (const o of others) {
         if (o === tank || !o.alive) continue;
-        if (tanksOverlap(nx, y, o.x, o.y)) nx = Math.max(nx, o.x + TANK_SIZE); // 紧贴左侧坦克
+        if (o.x < x && tanksOverlap(nx, y, o.x, o.y)) nx = Math.max(nx, o.x + TANK_SIZE);
       }
-      tank.x = nx;
+      tank.x = Math.max(0, Math.min(x, nx));
       break;
     }
     case 'right': {
@@ -259,9 +262,9 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
       }
       for (const o of others) {
         if (o === tank || !o.alive) continue;
-        if (tanksOverlap(nx, y, o.x, o.y)) nx = Math.min(nx, o.x - TANK_SIZE); // 紧贴右侧坦克
+        if (o.x > x && tanksOverlap(nx, y, o.x, o.y)) nx = Math.min(nx, o.x - TANK_SIZE);
       }
-      tank.x = nx;
+      tank.x = Math.min(MAX_X, Math.max(x, nx));
       break;
     }
   }
@@ -285,7 +288,7 @@ export function turnTank(
     } else {
       nx = Math.min(MAX_X, Math.max(0, snapAxis(tank.x)));
     }
-    if (!canOccupy(tank, nx, ny, level, tanks)) return false;
+    if (!canTankOccupy(tank, nx, ny, level, tanks)) return false;
   }
   tank.x = nx;
   tank.y = ny;

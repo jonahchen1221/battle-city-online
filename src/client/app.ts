@@ -22,6 +22,7 @@ import {
   FIELD_Y,
   FIELD_WIDTH,
   FIELD_HEIGHT,
+  TICKS_PER_SECOND,
 } from '../core/constants';
 import { drawTextOutlined, textWidth, drawTile } from '../render/sprites';
 import {
@@ -307,6 +308,16 @@ export class App {
 
   private onSnapshot(snap: Snapshot, events: GameEvent[]): void {
     const now = performance.now();
+
+    // 整局重开会把权威 tick 归零。不得把重开前后的同 id 实体放在同一插值窗口里，
+    // 否则会从旧局终点插到新局出生点。
+    const previous = this.snapBuf[this.snapBuf.length - 1];
+    if (previous && snap.tick < previous.snap.tick) {
+      this.snapBuf = [];
+      this.arrivalGaps = [];
+      this.lastArrival = 0;
+      this.interpDelay = INTERP_DELAY_START;
+    }
 
     // 增量地形：带 level 则更新客户端地形，否则沿用上一份。
     // 服务器保证新连接的首份快照必含 level，故此后 clientLevel 恒非空。
@@ -728,7 +739,7 @@ export class App {
   }
 
   // 用抖动缓冲构建插值后的可渲染 GameState 形状对象；无快照时返回 null。
-  // renderTime = now - interpDelay，落在缓冲区两份快照 [from, to] 之间：
+  // 把 now - interpDelay 映射到权威 tick，落在缓冲区两份快照 [from, to] 之间：
   //   • 全部坦克 / 子弹（含本地玩家坦克）的 x/y 在 from→to 间按 alpha 插值（其余字段取 to）；
   //     本地与远程走同一路径——纯服务器权威，无预测、无对账。
   //   • 非位置状态（地形 / HUD / 阶段 / 爆炸）取自 to，避免阶段闪烁；
@@ -738,19 +749,15 @@ export class App {
     if (buf.length === 0) return null;
 
     this.adaptInterpDelay();
-    const renderTime = performance.now() - this.interpDelay;
+    const now = performance.now();
 
-    // 找到 ≤renderTime 的最新一份 from，其后一份为 to（越界则 to=from，冻结）。
-    let idx = 0;
-    for (let k = 0; k < buf.length; k++) {
-      if (buf[k].arrival <= renderTime) idx = k;
-      else break;
-    }
-    const from = buf[idx];
-    const to = buf[Math.min(idx + 1, buf.length - 1)];
-    const span = to.arrival - from.arrival;
-    // span=0（from===to，卡顿冻结）→ alpha 0；早于最旧时 renderTime<from.arrival → clamp 到 0。
-    const alpha = span > 0 ? clamp01((renderTime - from.arrival) / span) : 0;
+    // 用权威逻辑 tick 选插值区间；arrival 只负责把本地当前时刻换算到服务器时间轴。
+    // 服务器补帧时可能在同一次事件循环连续发出多份快照，它们的 arrival 几乎相同，但 tick
+    // 始终严格递增。按 tick 插值可避免把数帧累计移动压缩进接近 0ms 的到达间隔。
+    const window = snapshotInterpolationWindow(buf, now, this.interpDelay);
+    const from = buf[window.fromIndex];
+    const to = buf[window.toIndex];
+    const alpha = window.alpha;
 
     const base = to.snap; // 非位置状态基准（较新那份）
     const level = to.level; // 增量地形：始终用已解析出的完整 level
@@ -860,4 +867,30 @@ function clamp01(v: number): number {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+// 把本地渲染时刻映射到权威 tick 时间轴，并返回包围它的两份快照及插值比例。
+// 导出纯函数便于覆盖服务器补帧（多份快照同时到达）的回归测试。
+export function snapshotInterpolationWindow(
+  snapshots: ReadonlyArray<{ snap: { tick: number }; arrival: number }>,
+  renderTime: number,
+  interpDelayMs: number,
+): { fromIndex: number; toIndex: number; alpha: number } {
+  if (snapshots.length === 0) return { fromIndex: 0, toIndex: 0, alpha: 0 };
+
+  const latest = snapshots[snapshots.length - 1];
+  const ticksPerMs = TICKS_PER_SECOND / 1000;
+  const estimatedNowTick = latest.snap.tick + Math.max(0, renderTime - latest.arrival) * ticksPerMs;
+  const renderTick = estimatedNowTick - interpDelayMs * ticksPerMs;
+
+  let fromIndex = 0;
+  for (let i = 0; i < snapshots.length; i++) {
+    if (snapshots[i].snap.tick <= renderTick) fromIndex = i;
+    else break;
+  }
+  const toIndex = Math.min(fromIndex + 1, snapshots.length - 1);
+  const fromTick = snapshots[fromIndex].snap.tick;
+  const spanTicks = snapshots[toIndex].snap.tick - fromTick;
+  const alpha = spanTicks > 0 ? clamp01((renderTick - fromTick) / spanTicks) : 0;
+  return { fromIndex, toIndex, alpha };
 }

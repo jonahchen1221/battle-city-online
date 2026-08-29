@@ -11,7 +11,14 @@ import {
   CARRIER_QUEUE_POSITIONS,
 } from '../core/constants';
 import { LevelState } from './level';
-import { TankState, createEnemy, applyInput, turnTank, isPlayerTank } from './tank';
+import {
+  TankState,
+  createEnemy,
+  applyInput,
+  turnTank,
+  isPlayerTank,
+  canTankOccupy,
+} from './tank';
 import { hasLiveBullet, spawnBullet } from './bullet';
 import type { GameState } from './state';
 
@@ -72,12 +79,19 @@ function updateSpawner(state: GameState): void {
 }
 
 // 推进出生闪光：计时归零的坦克实体化（加入 tanks，此后可碰撞/受控）。
-function updateSpawning(state: GameState): void {
+function updateSpawning(state: GameState, level: LevelState): void {
   const remaining: typeof state.spawning = [];
   for (const s of state.spawning) {
     s.ticksLeft--;
     if (s.ticksLeft <= 0) {
-      state.tanks.push(s.tank);
+      // 出生点仍被占用时维持闪光末帧并逐帧重试。直接实体化会制造预先重叠，随后旧的
+      // 单轴碰撞夹紧可能把任一坦克推到障碍另一侧，表现为瞬移。
+      if (canTankOccupy(s.tank, s.tank.x, s.tank.y, level, state.tanks)) {
+        state.tanks.push(s.tank);
+      } else {
+        s.ticksLeft = 1;
+        remaining.push(s);
+      }
     } else {
       remaining.push(s);
     }
@@ -117,7 +131,7 @@ function updateOneEnemy(tank: TankState, state: GameState, level: LevelState): v
 // timer 道具冻结期间（enemyFreezeTicks>0）跳过全部在场敌人的 AI（不动、不开火、履带冻结），
 // 但出生闪光与出生器照常推进（经典表现）。飞行中的子弹由 update 的 advanceBullets 继续推进。
 export function updateEnemies(state: GameState, level: LevelState): void {
-  updateSpawning(state);
+  updateSpawning(state, level);
 
   if (state.enemyFreezeTicks <= 0) {
     for (const tank of state.tanks) {
