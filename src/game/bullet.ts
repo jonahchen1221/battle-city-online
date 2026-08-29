@@ -35,6 +35,7 @@ import {
   removeSteel,
 } from './level';
 import { TankState, isPlayerTank } from './tank';
+import { SpatialGrid } from './spatial';
 import type { ExplosionState, GameEvent } from './state';
 
 // 子弹种类（决定观感与特殊结算）：
@@ -62,6 +63,8 @@ export interface BulletState {
 
 const EPS = 1e-6;
 const MUZZLE_OFFSET = (TANK_SIZE - BULLET_SIZE) / 2; // 6：让 4px 子弹在 16px 炮口居中
+// 复用同一个宽相位网格：游戏模拟同步执行，reset 后不保留任何会影响结算的状态。
+const bulletCollisionGrid = new SpatialGrid(TANK_SIZE);
 
 // 生成一个以 (cx, cy) 为中心的小爆炸（16×16，子弹消失时的火花）。
 export function makeSmallExplosion(cx: number, cy: number): ExplosionState {
@@ -438,10 +441,26 @@ export function resolveBulletBullet(
   explosions: ExplosionState[],
   events: GameEvent[],
 ): void {
+  bulletCollisionGrid.reset();
+  for (let i = 0; i < bullets.length; i++) {
+    const bullet = bullets[i];
+    if (bullet.alive) {
+      bulletCollisionGrid.insert(i, bullet.x, bullet.y, BULLET_SIZE, BULLET_SIZE);
+    }
+  }
+
   for (let i = 0; i < bullets.length; i++) {
     const a = bullets[i];
     if (!a.alive) continue;
-    for (let j = i + 1; j < bullets.length; j++) {
+    // 只检查与 a 共享网格格子的子弹；升序候选保证结算顺序与旧版 j=i+1..N 完全一致。
+    const candidates = bulletCollisionGrid.query(
+      a.x,
+      a.y,
+      BULLET_SIZE,
+      BULLET_SIZE,
+      i + 1,
+    );
+    for (const j of candidates) {
       const b = bullets[j];
       if (!b.alive) continue;
       if (a.fromEnemy === b.fromEnemy) {

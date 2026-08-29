@@ -12,6 +12,7 @@ import {
   makeSmallExplosion,
 } from './bullet';
 import { updateEnemies } from './enemy';
+import { SpatialGrid } from './spatial';
 import { updatePhase, resolveEagleHit, restartGame } from './phase';
 import {
   tryPickupPowerup,
@@ -30,6 +31,9 @@ import {
   FRIENDLY_FREEZE_TICKS,
   MACHINE_FIRE_INTERVAL_TICKS,
 } from '../core/constants';
+
+// 子弹命中坦克的宽相位网格。每 tick 重建一次，内部存储复用，避免 B×T 全表扫描与 GC 抖动。
+const tankHitGrid = new SpatialGrid(TANK_SIZE);
 
 // 每逻辑帧调用一次。纯函数式推进：只依赖 state 与 inputs，
 // 不得访问 DOM、canvas、performance.now 或 Math.random。
@@ -188,11 +192,20 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
 // 子弹 vs 坦克：按阵营命中，装甲坦克逐发扣血并闪烁，血尽爆炸；玩家被击即时复活。
 // 激光（kind==='laser'）贯穿敌人：命中敌人照常扣血 / 记分 / 爆炸，但子弹不消亡，继续飞并可再命中后续敌人。
 function resolveBulletTanks(state: GameState): void {
+  tankHitGrid.reset();
+  for (let i = 0; i < state.tanks.length; i++) {
+    const tank = state.tanks[i];
+    if (tank.alive) tankHitGrid.insert(i, tank.x, tank.y, TANK_SIZE, TANK_SIZE);
+  }
+
   for (const b of state.bullets) {
     if (!b.alive) continue;
     // 激光贯穿：不因命中敌人而消亡，也不 break —— 同一帧可穿过直线上的多台敌人。
     const pierces = b.kind === 'laser';
-    for (const t of state.tanks) {
+    // 候选按 tanks 原数组下标升序，保持旧版命中/计分顺序；窄相位仍用精确 AABB。
+    const candidates = tankHitGrid.query(b.x, b.y, BULLET_SIZE, BULLET_SIZE);
+    for (const tankIndex of candidates) {
+      const t = state.tanks[tankIndex];
       if (!t.alive) continue;
       if (!bulletCanHit(b, t)) continue;
       if (!bulletHitsTank(b, t)) continue;

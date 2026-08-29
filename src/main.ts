@@ -53,15 +53,17 @@ if (import.meta.env.DEV) {
   w.__newGame = (playerCount = 1, seed = 20260708) => {
     state.playerCount = playerCount;
     resetGameState(state, seed);
+    renderer.resetPositionInterpolation();
   };
   // __step(n)：不依赖 rAF 地推进 n 个逻辑帧并重绘本地局一次。
   w.__step = (n = 1) => {
     for (let i = 0; i < n; i++) {
+      renderer.capturePreviousPositions(state);
       update(state, [keyboard.snapshot()]);
       for (const e of state.events) sfx.play(e);
       state.events.length = 0;
     }
-    renderer.draw(state, 0);
+    renderer.draw(state, 1, true);
   };
   w.__screen = () => app.currentScreen;
   w.__net = app.netClient;

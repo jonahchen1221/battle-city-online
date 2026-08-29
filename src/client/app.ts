@@ -249,9 +249,13 @@ export class App {
 
     if (this.screen === 'localGame') {
       const tickBeforeUpdate = this.localState.tick;
+      this.renderer.capturePreviousPositions(this.localState);
       update(this.localState, [this.playerInput()]);
       // GAME OVER 后原地重开会让 tick 归零；旧局尚未播完的提示不得带进新局。
-      if (this.localState.tick < tickBeforeUpdate) this.clearPowerupTicker();
+      if (this.localState.tick < tickBeforeUpdate) {
+        this.clearPowerupTicker();
+        this.renderer.resetPositionInterpolation();
+      }
       this.consumeGameEvents(this.localState.events);
       this.localState.events.length = 0;
     } else if (this.screen === 'netGame') {
@@ -309,7 +313,7 @@ export class App {
         this.drawLobby();
         break;
       case 'localGame':
-        this.renderer.draw(this.localState, alpha);
+        this.renderer.draw(this.localState, alpha, true);
         this.updatePowerupTicker();
         break;
       case 'netGame':
@@ -550,6 +554,7 @@ export class App {
       resetGameState(this.localState, (Date.now() >>> 0) || 20260708);
       this.localState.prevStart = true;
       this.clearPowerupTicker();
+      this.renderer.resetPositionInterpolation();
       this.screen = 'localGame';
     } else if (this.titleSel === 2) {
       // CREATE ROOM：连接并建房。

@@ -79,10 +79,30 @@ const WEAPON_LETTER_COLOR: Record<WeaponKind, string> = {
   machine: COLOR_WEAPON_MACHINE,
 };
 
+interface PreviousPosition {
+  x: number;
+  y: number;
+  stamp: number;
+}
+
 // 渲染层只读 GameState，不做任何逻辑推进。
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private atlas: SpriteAtlas;
+  private readonly staticLayer: HTMLCanvasElement;
+  private readonly groundLayer: HTMLCanvasElement;
+  private readonly treesLayer: HTMLCanvasElement;
+  private readonly hudLayer: HTMLCanvasElement;
+  private groundLevel: LevelState | null = null;
+  private groundRev = -1;
+  private groundWaterFrame = -1;
+  private groundEagleDestroyed = false;
+  private treesLevel: LevelState | null = null;
+  private treesRev = -1;
+  private hudKey = '';
+  private readonly previousTankPositions = new Map<number, PreviousPosition>();
+  private readonly previousBulletPositions = new Map<number, PreviousPosition>();
+  private positionStamp = 0;
 
   // 只读暴露图集，供 src/client 的标题/大厅 UI 复用精灵（如菜单光标用的迷你坦克）。
   // 客户端 UI 层绝不修改图集，仅取样绘制。
@@ -101,13 +121,63 @@ export class Renderer {
     this.ctx = ctx;
     this.ctx.imageSmoothingEnabled = false;
     this.atlas = createSpriteAtlas();
+    this.staticLayer = this.createLayerCanvas();
+    this.groundLayer = this.createLayerCanvas();
+    this.treesLayer = this.createLayerCanvas();
+    this.hudLayer = this.createLayerCanvas();
+
+    // 机台外框与战场底纹永不变化，只在 Renderer 建立时栅格化一次。
+    this.paintLayer(this.staticLayer, () => {
+      this.drawCabinetFrame();
+      this.drawFieldBackdrop();
+    });
   }
 
-  draw(state: GameState, _alpha: number): void {
-    const { ctx } = this;
+  // 固定 60Hz 逻辑帧开始前由本地 App 调用：保存“上一逻辑帧”坐标，供 120Hz 等高刷屏
+  // 在两次逻辑更新之间绘制真正的中间位置。联机已有独立快照插值，不调用此方法。
+  capturePreviousPositions(state: GameState): void {
+    const stamp = ++this.positionStamp;
+    for (const tank of state.tanks) {
+      let previous = this.previousTankPositions.get(tank.id);
+      if (!previous) {
+        previous = { x: tank.x, y: tank.y, stamp };
+        this.previousTankPositions.set(tank.id, previous);
+      } else {
+        previous.x = tank.x;
+        previous.y = tank.y;
+        previous.stamp = stamp;
+      }
+    }
+    for (const [id, previous] of this.previousTankPositions) {
+      if (previous.stamp !== stamp) this.previousTankPositions.delete(id);
+    }
 
-    this.drawCabinetFrame();
-    this.drawFieldBackdrop();
+    for (const bullet of state.bullets) {
+      let previous = this.previousBulletPositions.get(bullet.id);
+      if (!previous) {
+        previous = { x: bullet.x, y: bullet.y, stamp };
+        this.previousBulletPositions.set(bullet.id, previous);
+      } else {
+        previous.x = bullet.x;
+        previous.y = bullet.y;
+        previous.stamp = stamp;
+      }
+    }
+    for (const [id, previous] of this.previousBulletPositions) {
+      if (previous.stamp !== stamp) this.previousBulletPositions.delete(id);
+    }
+  }
+
+  resetPositionInterpolation(): void {
+    this.previousTankPositions.clear();
+    this.previousBulletPositions.clear();
+  }
+
+  draw(state: GameState, alpha: number, interpolatePositions = false): void {
+    const { ctx } = this;
+    const positionAlpha = interpolatePositions ? Math.max(0, Math.min(1, alpha)) : 1;
+
+    ctx.drawImage(this.staticLayer, 0, 0);
 
     // 第一遍：地形中除树林外的一切（在实体之下）
     this.drawGround(state.level, state.tick, state.eagleDestroyed);
@@ -120,8 +190,8 @@ export class Renderer {
     ctx.rect(FIELD_X * ART_SCALE, FIELD_Y * ART_SCALE, FIELD_WIDTH * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
     ctx.clip();
     this.drawSpawnStars(state);
-    this.drawTanks(state);
-    this.drawBullets(state);
+    this.drawTanks(state, positionAlpha);
+    this.drawBullets(state, positionAlpha);
     this.drawExplosions(state);
 
     // 第二遍：树林（覆盖在实体之上，坦克可藏于其下）
@@ -141,6 +211,31 @@ export class Renderer {
 
     // 关卡开场幕布（STAGE N）：铺满战场的灰色幕布 + 黑字，凌驾于战场内一切之上。
     this.drawStageStart(state);
+  }
+
+  private createLayerCanvas(): HTMLCanvasElement {
+    const layer = document.createElement('canvas');
+    layer.width = NATIVE_WIDTH * ART_SCALE;
+    layer.height = NATIVE_HEIGHT * ART_SCALE;
+    const layerCtx = layer.getContext('2d');
+    if (!layerCtx) throw new Error('Canvas 2D layer context unavailable');
+    layerCtx.imageSmoothingEnabled = false;
+    return layer;
+  }
+
+  // 现有绘制方法统一从 this.ctx 取上下文。重建缓存层时短暂切换目标上下文，完成后立即恢复；
+  // paint 同步执行，不会跨越 rAF 或改变 GameState。
+  private paintLayer(layer: HTMLCanvasElement, paint: () => void): void {
+    const layerCtx = layer.getContext('2d');
+    if (!layerCtx) throw new Error('Canvas 2D layer context unavailable');
+    layerCtx.clearRect(0, 0, layer.width, layer.height);
+    const targetCtx = this.ctx;
+    this.ctx = layerCtx;
+    try {
+      paint();
+    } finally {
+      this.ctx = targetCtx;
+    }
   }
 
   // 战场外框改成硬边阶梯明暗，比一整块中灰更容易分辨战场 / HUD，
@@ -219,6 +314,23 @@ export class Renderer {
 
   // 右侧 32px 灰栏 HUD：黑色图标/文字，经典 NES 布局。
   private drawHud(state: GameState): void {
+    const weapons: WeaponKind[] = [];
+    for (let i = 0; i < state.playerCount; i++) weapons.push(this.playerWeapon(state, i));
+    const nextKey = [
+      state.enemyQueue.length,
+      state.playerCount,
+      state.stage,
+      ...state.livesByPlayer,
+      ...weapons,
+    ].join(':');
+    if (nextKey !== this.hudKey) {
+      this.hudKey = nextKey;
+      this.paintLayer(this.hudLayer, () => this.paintHud(state));
+    }
+    this.ctx.drawImage(this.hudLayer, 0, 0);
+  }
+
+  private paintHud(state: GameState): void {
     const { ctx, atlas } = this;
     const hudX = FIELD_X + FIELD_WIDTH;
 
@@ -438,13 +550,16 @@ export class Renderer {
 
   // 坦克。按 kind 选用精灵；装甲坦克受损时每 ARMOR_FLASH_TICKS 帧在银/白间闪烁。
   // 履带动画：移动时每 TRACK_ANIM_TICKS 帧切换两帧，静止时冻结在第 0 帧。
-  private drawTanks(state: GameState): void {
+  private drawTanks(state: GameState, alpha: number): void {
     const { ctx, atlas } = this;
     const enemiesFrozen = state.enemyFreezeTicks > 0;
     for (const tank of state.tanks) {
       if (!tank.alive) continue;
-      const px = snapArt(FIELD_X + tank.x);
-      const py = snapArt(FIELD_Y + tank.y);
+      const previous = this.previousTankPositions.get(tank.id);
+      const renderX = previous ? previous.x + (tank.x - previous.x) * alpha : tank.x;
+      const renderY = previous ? previous.y + (tank.y - previous.y) * alpha : tank.y;
+      const px = snapArt(FIELD_X + renderX);
+      const py = snapArt(FIELD_Y + renderY);
       // 冻结中履带定格第 0 帧：敌军由 timer 道具冻结，玩家由友军弹冻结（freezeTicks）；
       // 其余按移动状态播放两帧。
       const frozen =
@@ -522,12 +637,15 @@ export class Renderer {
 
   // 子弹按 kind 区分观感：normal / pellet 用经典银弹，spiral 用橙红火球，
   // laser 用沿 dir 的细长亮条（精灵比弹体盒大，按 LASER_SPRITE_OFFSET 居中绘制）。
-  private drawBullets(state: GameState): void {
+  private drawBullets(state: GameState, alpha: number): void {
     const { ctx, atlas } = this;
     for (const bullet of state.bullets) {
       if (!bullet.alive) continue;
-      const px = FIELD_X + bullet.x;
-      const py = FIELD_Y + bullet.y;
+      const previous = this.previousBulletPositions.get(bullet.id);
+      const renderX = previous ? previous.x + (bullet.x - previous.x) * alpha : bullet.x;
+      const renderY = previous ? previous.y + (bullet.y - previous.y) * alpha : bullet.y;
+      const px = FIELD_X + renderX;
+      const py = FIELD_Y + renderY;
       switch (bullet.kind) {
         case 'laser':
           drawTile(
@@ -574,8 +692,24 @@ export class Renderer {
   // 除 TREES 外的所有地形。砖块按存活象限渲染，水面按 tick 播放两帧。
   // eagleDestroyed 为真时鹰巢画成废墟精灵。
   private drawGround(level: LevelState, tick: number, eagleDestroyed: boolean): void {
-    const { ctx, atlas } = this;
     const waterFrame = Math.floor(tick / WATER_ANIM_TICKS) % 2;
+    if (
+      level !== this.groundLevel ||
+      level.rev !== this.groundRev ||
+      waterFrame !== this.groundWaterFrame ||
+      eagleDestroyed !== this.groundEagleDestroyed
+    ) {
+      this.groundLevel = level;
+      this.groundRev = level.rev;
+      this.groundWaterFrame = waterFrame;
+      this.groundEagleDestroyed = eagleDestroyed;
+      this.paintLayer(this.groundLayer, () => this.paintGround(level, waterFrame, eagleDestroyed));
+    }
+    this.ctx.drawImage(this.groundLayer, 0, 0);
+  }
+
+  private paintGround(level: LevelState, waterFrame: number, eagleDestroyed: boolean): void {
+    const { ctx, atlas } = this;
 
     for (let row = 0; row < level.rows; row++) {
       for (let col = 0; col < level.cols; col++) {
@@ -614,6 +748,15 @@ export class Renderer {
 
   // 树林单独一遍，绘制在实体之上。
   private drawTrees(level: LevelState): void {
+    if (level !== this.treesLevel || level.rev !== this.treesRev) {
+      this.treesLevel = level;
+      this.treesRev = level.rev;
+      this.paintLayer(this.treesLayer, () => this.paintTrees(level));
+    }
+    this.ctx.drawImage(this.treesLayer, 0, 0);
+  }
+
+  private paintTrees(level: LevelState): void {
     const { ctx, atlas } = this;
     for (let row = 0; row < level.rows; row++) {
       for (let col = 0; col < level.cols; col++) {
