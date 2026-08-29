@@ -8,39 +8,39 @@ import type { PowerupPickupEvent } from '../game/state';
 import type { LobbyPlayer } from '../net/protocol';
 import { SpriteAtlas, FONT_ADVANCE, drawText, drawTextOutlined, textWidth } from '../render/sprites';
 
-// 跑马灯文案刻意保持短促、全大写：既适配 5×7 NES 像素字，也让玩家在战斗中一眼读懂效果。
+// 跑马灯文案保持短促、口语化，让玩家在战斗中一眼读懂道具效果。
 const POWERUP_TICKER_COPY: Record<PowerupKind, { name: string; effect: string }> = {
-  star: { name: 'STAR', effect: 'CANNON LEVEL UP' },
-  grenade: { name: 'GRENADE', effect: 'ALL ENEMIES DESTROYED' },
-  tank: { name: '1UP TANK', effect: 'EXTRA LIFE' },
-  timer: { name: 'CLOCK', effect: 'ENEMIES FROZEN 10 SEC' },
-  shovel: { name: 'SHOVEL', effect: 'STEEL BASE WALLS 20 SEC' },
-  helmet: { name: 'HELMET', effect: 'INVINCIBLE 10 SEC' },
-  wpnSpread: { name: 'SPREAD', effect: 'THREE WAY SHOT' },
-  wpnSpiral: { name: 'SPIRAL', effect: 'WAVING SHOT' },
-  wpnLaser: { name: 'LASER', effect: 'PIERCING SHOT' },
-  wpnMachine: { name: 'MACHINE GUN', effect: 'HOLD FIRE TO RAPID FIRE' },
-  boots: { name: 'BOOTS', effect: 'SPEED BOOST 20 SEC' },
-  boat: { name: 'BOAT', effect: 'CROSS WATER UNTIL DEATH' },
-  ghost: { name: 'GHOST', effect: 'PASS THROUGH BRICKS 10 SEC' },
-  hourglass: { name: 'HOURGLASS', effect: 'ENEMIES SLOWED 12 SEC' },
-  wrench: { name: 'WRENCH', effect: 'BASE WALLS REPAIRED' },
+  star: { name: '星星', effect: '火炮升级' },
+  grenade: { name: '手榴弹', effect: '摧毁所有敌军' },
+  tank: { name: '奖励坦克', effect: '增加一条生命' },
+  timer: { name: '时钟', effect: '冻结敌军 10 秒' },
+  shovel: { name: '铁铲', effect: '基地围墙强化 20 秒' },
+  helmet: { name: '头盔', effect: '无敌 10 秒' },
+  wpnSpread: { name: '散射炮', effect: '三向射击' },
+  wpnSpiral: { name: '螺旋炮', effect: '波浪弹道' },
+  wpnLaser: { name: '激光炮', effect: '穿透射击' },
+  wpnMachine: { name: '机关枪', effect: '按住开火键连续射击' },
+  boots: { name: '战靴', effect: '加速 20 秒' },
+  boat: { name: '船', effect: '阵亡前可以渡水' },
+  ghost: { name: '幽灵', effect: '穿越砖墙 10 秒' },
+  hourglass: { name: '沙漏', effect: '敌军减速 12 秒' },
+  wrench: { name: '扳手', effect: '修复基地围墙' },
 };
 
 // 敌方拾取全局型道具时效果会反转阵营；个人强化类沿用同一说明。
 const ENEMY_POWERUP_EFFECT: Partial<Record<PowerupKind, string>> = {
-  grenade: 'ALL PLAYERS DESTROYED',
-  tank: 'EXTRA REINFORCEMENT',
-  timer: 'PLAYERS FROZEN 10 SEC',
-  shovel: 'BASE WALLS REMOVED',
-  hourglass: 'PLAYERS SLOWED 12 SEC',
-  wrench: 'TANK ARMOR REPAIRED',
+  grenade: '摧毁所有玩家',
+  tank: '增加一辆援军',
+  timer: '冻结玩家 10 秒',
+  shovel: '移除基地围墙',
+  hourglass: '玩家减速 12 秒',
+  wrench: '修复坦克装甲',
 };
 
 export function powerupTickerText(event: PowerupPickupEvent, playerName: string): string {
   const copy = POWERUP_TICKER_COPY[event.kind];
   const effect = event.playerIndex < 0 ? ENEMY_POWERUP_EFFECT[event.kind] ?? copy.effect : copy.effect;
-  return `${playerName} GOT ${copy.name}: ${effect}`;
+  return `${playerName} 获得【${copy.name}】：${effect}`;
 }
 
 // 大厅座位可能有空洞，开局后会按旧座位号压紧成连续的对局 playerIndex。

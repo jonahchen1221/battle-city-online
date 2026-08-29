@@ -1141,7 +1141,7 @@ export class App {
     if (!track || !textElement) return;
     const enemyPickup = event.playerIndex < 0;
     const name = enemyPickup
-      ? 'ENEMY'
+      ? '敌军'
       : this.screen === 'localGame'
         ? this.playerName
         : this.gamePlayerNames[event.playerIndex] ?? `P${event.playerIndex + 1}`;

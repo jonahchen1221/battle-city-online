@@ -26,7 +26,7 @@ test('marquee copy identifies the player, item, and effect', () => {
     kind: 'ghost',
   };
 
-  assert.equal(powerupTickerText(event, 'AX'), 'AX GOT GHOST: PASS THROUGH BRICKS 10 SEC');
+  assert.equal(powerupTickerText(event, '阿星'), '阿星 获得【幽灵】：穿越砖墙 10 秒');
 });
 
 test('marquee copy describes the enemy-side effect', () => {
@@ -36,5 +36,5 @@ test('marquee copy describes the enemy-side effect', () => {
     kind: 'grenade',
   };
 
-  assert.equal(powerupTickerText(event, 'ENEMY'), 'ENEMY GOT GRENADE: ALL PLAYERS DESTROYED');
+  assert.equal(powerupTickerText(event, '敌军'), '敌军 获得【手榴弹】：摧毁所有玩家');
 });

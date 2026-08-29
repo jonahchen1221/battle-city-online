@@ -109,7 +109,11 @@
       align-items: center;
       width: max-content;
       white-space: nowrap;
-      letter-spacing: .12em;
+      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: .08em;
       will-change: transform;
       text-shadow: 1px 1px 0 #211407;
     }
@@ -148,6 +152,7 @@
     @media (max-height: 620px), (max-width: 780px) {
       .arcade-shell { gap: 4px; padding: 6px; }
       .cabinet-bar { min-height: 12px; font-size: 7px; }
+      .cabinet-ticker-text { font-size: 10px; }
       .screen-bezel { padding: 4px; }
       .cabinet-help { display: none; }
     }
@@ -157,7 +162,7 @@
       .screen-bezel { padding: 2px; border-width: 1px; }
       .cabinet-bar { gap: 8px; padding: 0 3px; font-size: 6px; }
       .cabinet-title::before { width: 4px; height: 4px; margin-right: 5px; }
-      .cabinet-ticker-text { letter-spacing: .08em; }
+      .cabinet-ticker-text { font-size: 9px; letter-spacing: .04em; }
     }
 
     @media (prefers-reduced-motion: reduce) {
