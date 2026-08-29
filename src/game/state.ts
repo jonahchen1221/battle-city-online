@@ -11,7 +11,7 @@ import {
 } from '../core/constants';
 import { LevelState, cloneLevel } from './level';
 import { STAGES } from './levels';
-import { TankState, TankKind, EnemyKind, createPlayer, isPlayerTank } from './tank';
+import { TankState, TankKind, EnemyKind, WeaponKind, createPlayer, isPlayerTank } from './tank';
 import { BulletState } from './bullet';
 import { MVP_POWERUP_KINDS, shuffledNeutralQueue } from './powerup';
 import type { PowerupState, PowerupKind } from './powerup';
@@ -223,14 +223,20 @@ export function nextStage(state: GameState): void {
     }
   }
 
-  // 先捕获每名玩家当前 star 等级（跨关保留）：来源为在场坦克或复活闪光中的坦克，缺席者按 0。
+  // 先捕获每名玩家当前 star 等级 / 武器 / 钻头（三者跨关保留）：来源为在场坦克或复活闪光中的
+  // 坦克，缺席者按 0 / 'cannon' / false。注意这只影响“过关”这一条路径 —— 关内被击毁后复活仍
+  // 走 createPlayer，等级、武器、钻头照旧清零。
   const levelByPlayer = new Array<number>(state.playerCount).fill(0);
-  for (const t of state.tanks) {
-    if (isPlayerTank(t)) levelByPlayer[t.playerIndex] = t.level;
-  }
-  for (const s of state.spawning) {
-    if (isPlayerTank(s.tank)) levelByPlayer[s.tank.playerIndex] = s.tank.level;
-  }
+  const weaponByPlayer = new Array<WeaponKind>(state.playerCount).fill('cannon');
+  const drillByPlayer = new Array<boolean>(state.playerCount).fill(false);
+  const capture = (t: TankState): void => {
+    if (!isPlayerTank(t)) return;
+    levelByPlayer[t.playerIndex] = t.level;
+    weaponByPlayer[t.playerIndex] = t.weapon;
+    drillByPlayer[t.playerIndex] = t.drill;
+  };
+  for (const t of state.tanks) capture(t);
+  for (const s of state.spawning) capture(s.tank);
 
   state.stage = nextStageNum;
   state.levelEpoch++;
@@ -277,11 +283,13 @@ export function nextStage(state: GameState): void {
     state.livesByPlayer.fill(PLAYER_LIVES_START_MP);
   }
 
-  // 尚有生命的玩家在各自出生点复活（经出生闪光入场），并沿用其 star 等级。
+  // 尚有生命的玩家在各自出生点复活（经出生闪光入场），并沿用其 star 等级 / 武器 / 钻头。
   for (let i = 0; i < state.playerCount; i++) {
     if (state.livesByPlayer[i] <= 0) continue;
     const tank = createPlayer(i, i + 1);
     tank.level = levelByPlayer[i];
+    tank.weapon = weaponByPlayer[i];
+    tank.drill = drillByPlayer[i];
     state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
   }
 

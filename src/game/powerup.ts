@@ -46,7 +46,8 @@ export type PowerupKind =
   | 'boat' // 船：拾取者可驶入水面（直到死亡）
   | 'ghost' // 幽灵：拾取者限时穿砖
   | 'hourglass' // 沙漏：敌军限时半速
-  | 'wrench'; // 扳手：即时修复鹰巢护墙环
+  | 'wrench' // 扳手：即时修复鹰巢护墙环
+  | 'drill'; // 钻头：拾取者所有武器的子弹可击穿钢块（直到死亡）
 export const POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
   'star',
   'grenade',
@@ -63,6 +64,7 @@ export const POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
   'ghost',
   'hourglass',
   'wrench',
+  'drill',
 ];
 
 // 每关必出的“中立”道具（由定时器刷新到战场随机空位，与携带者掉落无关）。
@@ -84,6 +86,7 @@ export const MVP_POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
   'wpnSpiral',
   'wpnLaser',
   'wpnMachine',
+  'drill',
 ];
 
 // 武器道具 → 武器种类的映射（拾取即替换旧武器）。
@@ -305,6 +308,11 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
     case 'ghost':
       // 幽灵：限时穿砖；重复拾取重置计时。
       collector.ghostTicks = GHOST_TICKS;
+      break;
+    case 'drill':
+      // 钻头：拾取者所有武器的子弹一律可击穿钢块，直到该坦克被击毁（复活即用
+      // createPlayer 重建 → 自然失效；跨关继承见 state.ts nextStage）。鹰巢与战场边界永不可穿。
+      collector.drill = true;
       break;
     case 'hourglass':
       if (player) state.enemySlowTicks = ENEMY_SLOW_TICKS;

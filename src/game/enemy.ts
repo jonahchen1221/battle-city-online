@@ -6,7 +6,7 @@ import {
   AI_DECISION_RANGE_TICKS,
   AI_FIRE_DENOM,
   maxEnemiesOnField,
-  ENEMY_SPAWN_INTERVAL_TICKS,
+  enemySpawnIntervalForStage,
   CARRIER_QUEUE_POSITIONS,
   FIELD_WIDTH,
   FIELD_HEIGHT,
@@ -342,7 +342,8 @@ function updateSpawner(state: GameState): void {
     tank.carriesPowerup = true;
   }
   state.spawning.push({ tank, ticksLeft: SPAWN_FLASH_TICKS });
-  state.enemySpawnTimer = ENEMY_SPAWN_INTERVAL_TICKS;
+  // 出生节奏随关号加快（190 → 90 帧，见 constants enemySpawnIntervalForStage）。
+  state.enemySpawnTimer = enemySpawnIntervalForStage(state.stage);
 }
 
 // 推进出生闪光：计时归零的坦克实体化（加入 tanks，此后可碰撞/受控）。

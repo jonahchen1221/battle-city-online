@@ -59,7 +59,9 @@ export interface BulletState {
   fromEnemy: boolean; // 阵营：true=敌弹（只打玩家），false=玩家弹（只打敌人）
   attacksEagle: boolean; // 智能坦克弹为 false：仍被鹰巢挡住，但绝不会触发基地摧毁
   alive: boolean;
-  steelPiercing: boolean; // star 满级（3 级）玩家弹：可击穿钢块（击中钢块时整格清除）；仅 cannon 生效
+  // 可击穿钢块（击中钢块时整格清除）。两条来源：star 满级（3 级）的 cannon 弹，或射手持有
+  // drill 钻头（此时任何武器、任何等级都带破钢）。鹰巢与战场边界永不可穿。
+  steelPiercing: boolean;
 }
 
 const EPS = 1e-6;
@@ -143,12 +145,14 @@ function makeBullet(
 // 速度取自该坦克（威力坦克更快；敌我 star 等级 ≥1 均提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
 export function spawnBullet(tank: TankState, bulletId: number): BulletState {
   const speed = tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
-  return makeBullet(tank, bulletId, 'normal', speed, tank.level >= 3);
+  // 破钢条件取“或”：star 满级（仅 cannon）或持有钻头（任何武器、任何等级）。
+  return makeBullet(tank, bulletId, 'normal', speed, tank.level >= 3 || tank.drill);
 }
 
 // 按坦克当前武器生成一次开火的全部子弹（cannon / 机枪各一发，散弹一轮三发）。
-// star 满级的破钢只作用于 cannon（特殊武器一律不穿钢）。
+// star 满级的破钢只作用于 cannon；drill 钻头则让**所有**武器的子弹都能击穿钢块。
 export function spawnWeaponBullets(tank: TankState, firstBulletId: number): BulletState[] {
+  const drill = tank.drill; // 钻头：本次开火的每一发都带破钢
   switch (tank.weapon) {
     case 'spread': {
       // 以主轴为中心对称展开：三发时即 −22.5° / 0° / +22.5°（dir 均为 tank.dir）。
@@ -161,7 +165,7 @@ export function spawnWeaponBullets(tank: TankState, firstBulletId: number): Bull
             firstBulletId + i,
             'pellet',
             SPREAD_BULLET_SPEED,
-            false,
+            drill,
             (i - mid) * SPREAD_SPLAY_RAD,
           ),
         );
@@ -169,11 +173,11 @@ export function spawnWeaponBullets(tank: TankState, firstBulletId: number): Bull
       return out;
     }
     case 'spiral':
-      return [makeBullet(tank, firstBulletId, 'spiral', SPIRAL_BULLET_SPEED, false)];
+      return [makeBullet(tank, firstBulletId, 'spiral', SPIRAL_BULLET_SPEED, drill)];
     case 'laser':
-      return [makeBullet(tank, firstBulletId, 'laser', LASER_BULLET_SPEED, false)];
+      return [makeBullet(tank, firstBulletId, 'laser', LASER_BULLET_SPEED, drill)];
     case 'machine':
-      return [makeBullet(tank, firstBulletId, 'normal', MACHINE_BULLET_SPEED, false)];
+      return [makeBullet(tank, firstBulletId, 'normal', MACHINE_BULLET_SPEED, drill)];
     default:
       return [spawnBullet(tank, firstBulletId)];
   }
@@ -377,11 +381,12 @@ function resolveBulletTerrain(b: BulletState, level: LevelState, events: GameEve
   if (!hitBrick && !hitSteel && !hitHard) return; // 未命中实心地形，继续飞行
 
   if (b.steelPiercing && hitSteel && !hitHard) {
-    // star 满级弹击穿钢块：整格清除钢块，同一破坏条内的砖块照常挖除。
+    // 破钢弹（star 满级 cannon / 钻头）击穿钢块：整格清除钢块，同一破坏条内的砖块照常挖除。
+    // 激光带破钢时与其穿砖行为一致 —— 开凿后继续飞；其余破钢弹照旧一击即止。
     carveSteelStrip(b, level);
     if (hitBrick) carveStrip(b, level);
     events.push('brickHit'); // 破坏音
-    b.alive = false;
+    if (b.kind !== 'laser') b.alive = false;
   } else if (hitBrick && !hitSteel && !hitHard) {
     // 纯砖块命中：挖破坏条。激光贯穿砖块，开凿后继续飞（可一路钻出通道）。
     carveStrip(b, level);

@@ -121,8 +121,8 @@ export const SMART_AI_REPLAN_TICKS = 12;
 export const SMART_AI_BRICK_COST = 6;
 // 关卡敌军总数（单一可调常量；暂不随人数变化）。各关 STAGE_ENEMY_MIX 之和均等于此值。
 export const STAGE_ENEMY_TOTAL = 20;
-// 关卡总数（levels.ts STAGES 的长度）；通关第 5 关后回卷到第 1 关。
-export const STAGE_COUNT = 5;
+// 关卡总数（levels.ts STAGES 的长度）；通关第 10 关后回卷到第 1 关。
+export const STAGE_COUNT = 10;
 // 每关敌军编成（每关总数均为 STAGE_ENEMY_TOTAL，逐关升级）。
 // 出生队列按各种类剩余数轮转交错（round-robin）构建，确定性、无需 rng（见 state.ts）。
 export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; count: number }>> = [
@@ -162,6 +162,42 @@ export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; cou
     { kind: 'armor', count: 4 },
     { kind: 'smart', count: 8 },
   ],
+  // ── 后半程（第 6–10 关）──
+  // 硬骨头（威力 + 装甲）合计逐关单调不减：8 → 8 → 9 → 10 → 11 → 12；
+  // 智能坦克稳定在 45%，快速坦克逐关退场，最终由装甲与威力压满战场。
+  // 第 6 关：快速 3 + 威力 4 + 装甲 4 + 智能 9（智能占 45%）
+  [
+    { kind: 'fast', count: 3 },
+    { kind: 'power', count: 4 },
+    { kind: 'armor', count: 4 },
+    { kind: 'smart', count: 9 },
+  ],
+  // 第 7 关：快速 2 + 威力 4 + 装甲 5 + 智能 9
+  [
+    { kind: 'fast', count: 2 },
+    { kind: 'power', count: 4 },
+    { kind: 'armor', count: 5 },
+    { kind: 'smart', count: 9 },
+  ],
+  // 第 8 关：快速 1 + 威力 5 + 装甲 5 + 智能 9
+  [
+    { kind: 'fast', count: 1 },
+    { kind: 'power', count: 5 },
+    { kind: 'armor', count: 5 },
+    { kind: 'smart', count: 9 },
+  ],
+  // 第 9 关：威力 5 + 装甲 6 + 智能 9（快速坦克退场）
+  [
+    { kind: 'power', count: 5 },
+    { kind: 'armor', count: 6 },
+    { kind: 'smart', count: 9 },
+  ],
+  // 第 10 关：威力 4 + 装甲 8 + 智能 8（装甲占四成，全场最难）
+  [
+    { kind: 'power', count: 4 },
+    { kind: 'armor', count: 8 },
+    { kind: 'smart', count: 8 },
+  ],
 ];
 // 同屏敌军上限的基数与每多一名玩家的增量。
 export const MAX_ENEMIES_BASE = 4;
@@ -170,8 +206,19 @@ export const MAX_ENEMIES_PER_EXTRA_PLAYER = 2;
 export function maxEnemiesOnField(playerCount: number): number {
   return MAX_ENEMIES_BASE + MAX_ENEMIES_PER_EXTRA_PLAYER * (playerCount - 1);
 }
-// 出生间隔（帧）：计时归零且场上有空位时出生新坦克。
+// 出生间隔（帧）：计时归零且场上有空位时出生新坦克。第 1 关的基准值。
 export const ENEMY_SPAWN_INTERVAL_TICKS = 190;
+// 每关递减的出生间隔步长与下限：关号越大，援军来得越密。
+export const ENEMY_SPAWN_INTERVAL_STEP = 12;
+export const ENEMY_SPAWN_INTERVAL_MIN = 90;
+// 某关（1-based 关号）的敌军出生间隔（帧）：190 起、每关减 12，最低 90（第 9 关起触底）。
+// 单调不增，且恒 ≥ ENEMY_SPAWN_INTERVAL_MIN；stage 越界（回卷关）由 max 自然兜住。
+export function enemySpawnIntervalForStage(stage: number): number {
+  return Math.max(
+    ENEMY_SPAWN_INTERVAL_MIN,
+    ENEMY_SPAWN_INTERVAL_TICKS - (stage - 1) * ENEMY_SPAWN_INTERVAL_STEP,
+  );
+}
 // 装甲坦克受损后闪烁：每约 4 帧切换一次银/白配色。
 export const ARMOR_FLASH_TICKS = 4;
 // 爆炸持续帧数与帧数（tick 驱动）。

@@ -25,6 +25,7 @@ const POWERUP_TICKER_COPY: Record<PowerupKind, { name: string; effect: string }>
   ghost: { name: '幽灵', effect: '穿越砖墙 10 秒' },
   hourglass: { name: '沙漏', effect: '敌军减速 12 秒' },
   wrench: { name: '扳手', effect: '修复基地围墙' },
+  drill: { name: '钻头', effect: '炮弹击穿钢墙' },
 };
 
 // 敌方拾取全局型道具时效果会反转阵营；个人强化类沿用同一说明。

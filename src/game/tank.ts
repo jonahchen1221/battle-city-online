@@ -69,6 +69,7 @@ export interface TankState {
   speedBoostTicks: number; // boots 快靴剩余帧：>0 时移动速度 ×BOOTS_SPEED_MULT（speed 基值不变）
   hasBoat: boolean; // boat 船：true 时移动碰撞把水面视为可通行（子弹不受影响），死亡即失
   ghostTicks: number; // ghost 幽灵剩余帧：>0 时移动碰撞把砖块视为可通行（钢/水/鹰/边界照旧）
+  drill: boolean; // drill 钻头：true 时该坦克**所有武器**的子弹可击穿钢块（鹰巢 / 边界仍不可穿），死亡即失
 }
 
 // 判断一台坦克是否为玩家坦克。
@@ -101,10 +102,11 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     freezeTicks: 0, // 复活即用 createPlayer 重建 → 冻结自然解除
     weapon: 'cannon', // 复活即用 createPlayer 重建 → 武器自然归经典炮
     fireCooldown: 0,
-    // 三项移动类道具状态同样随 createPlayer 重建而清空（死亡复活即失效）。
+    // 四项道具状态同样随 createPlayer 重建而清空（死亡复活即失效；跨关继承见 state.ts nextStage）。
     speedBoostTicks: 0,
     hasBoat: false,
     ghostTicks: 0,
+    drill: false,
   };
 }
 
@@ -162,6 +164,7 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     speedBoostTicks: 0,
     hasBoat: false,
     ghostTicks: 0,
+    drill: false,
   };
 }
 

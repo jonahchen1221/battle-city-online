@@ -57,6 +57,7 @@ import {
   drawTextOutlined,
   drawTextScaledOutlined,
   textWidth,
+  FONT_ADVANCE,
 } from './sprites';
 
 // 把逻辑坐标吸附到最近的“美术像素”（1/ART_SCALE 逻辑像素）。
@@ -266,7 +267,10 @@ export class Renderer {
     ctx.fillStyle = '#676d69';
     ctx.fillRect((hudX + 5) * ART_SCALE, (flagY - 4) * ART_SCALE, 23 * ART_SCALE, ART_SCALE);
     drawTile(ctx, atlas.hudFlag, hudX + 7, flagY);
-    drawText(ctx, atlas, String(state.stage), hudX + 12, flagY + 20, COLOR_HUD_ICON);
+    // 关号在旗子（16px 宽，中心 hudX+15）正下方居中：第 10 关起是两位数，需再左移半个字宽。
+    const stageText = String(state.stage);
+    const stageX = hudX + 15 - Math.round((stageText.length * FONT_ADVANCE) / 2);
+    drawText(ctx, atlas, stageText, stageX, flagY + 20, COLOR_HUD_ICON);
   }
 
   // 正常本地/联机路径都会传入真实的 2 位名字。备用值仅供旧调试钩子或不完整快照渲染，

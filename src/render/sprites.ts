@@ -1065,6 +1065,8 @@ const POWERUP_SYMBOLS: Record<PowerupKind, CharGrid> = {
   ghost: ghostSym(),
   hourglass: hourglassSym(),
   wrench: wrenchSym(),
+  // 钻头：沿用武器道具的“盒底板 + 放大字母”画法，取钢色银灰 —— 一眼联想到“能钻穿钢块”。
+  drill: letterSym('D', WEAPON_LETTER_SCALE, 'c'), // 银灰
 };
 const POWERUP_ICON_ROWS: Record<PowerupKind, string[]> = POWERUP_KINDS.reduce(
   (acc, kind) => {
