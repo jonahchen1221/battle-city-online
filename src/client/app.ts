@@ -30,6 +30,7 @@ import {
   ServerErrorCode,
   LobbyPlayer,
   MAX_PLAYERS,
+  ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
 } from '../net/protocol';
 import { NetClient } from './net';
@@ -42,6 +43,14 @@ const TITLE_ITEMS = ['1 PLAYER', 'CREATE ROOM', 'JOIN ROOM'] as const;
 
 // 联机输入心跳：即便输入未变化，也每 500ms 重发一次最近输入（对抗丢包 / 保活）。
 const INPUT_HEARTBEAT_MS = 500;
+
+// ── 房间分享 URL ──
+// 地址栏查询参数名：`?room=ABCD`。进房后写入地址栏，同伴打开即自动加入。
+const URL_ROOM_PARAM = 'room';
+// 从任意粘贴文本里捞房间码用的 URL 形态匹配（大小写不敏感）。
+const ROOM_PARAM_RE = new RegExp(`[?&]${URL_ROOM_PARAM}=([A-Za-z]+)`, 'i');
+// “LINK COPIED”提示的存续时长（ms）。菜单每帧重绘，靠时间戳比较自然消失。
+const LINK_COPIED_MS = 2000;
 
 // ── 抖动缓冲（jitter buffer）参数 ──
 // 客户端不做权威模拟：保留最近若干份快照 + 到达时刻，按 renderTime = now - interpDelay
@@ -105,6 +114,7 @@ export class App {
   private statusMsg = ''; // 普通状态行（如 CONNECTING）
   private statusError = ''; // 红色错误行
   private pendingAction: { t: 'create' } | { t: 'join'; code: string } | null = null;
+  private linkCopiedUntil = 0; // 复制成功提示的截止时刻（performance.now() 口径，0 = 无提示）
 
   // 联机游戏快照 / 插值（抖动缓冲）。客户端不做预测：本地与远程坦克全部走同一条插值路径。
   private snapBuf: BufferedSnap[] = []; // 最近 SNAP_BUFFER_SIZE 份快照（按到达时间升序）
@@ -137,6 +147,29 @@ export class App {
     };
 
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
+    window.addEventListener('paste', (e) => this.onPaste(e));
+
+    // 地址栏带 ?room=ABCD 时跳过标题菜单，直接连服务器加入。
+    this.tryAutoJoinFromUrl();
+  }
+
+  // 解析 location.search 里的房间码（参数名与值均大小写不敏感）。
+  // 值必须恰为 ROOM_CODE_LENGTH 个字母表内字符才算有效；否则维持标题画面。
+  private tryAutoJoinFromUrl(): void {
+    let raw: string | null = null;
+    new URLSearchParams(location.search).forEach((v, k) => {
+      if (raw === null && k.toLowerCase() === URL_ROOM_PARAM) raw = v;
+    });
+    if (raw === null) return;
+    const code = (raw as string).toUpperCase();
+    if (code.length !== ROOM_CODE_LENGTH) return;
+    for (const ch of code) if (!ROOM_CODE_ALPHABET.includes(ch)) return;
+
+    this.codeBuffer = code;
+    this.screen = 'joinCode';
+    this.pendingAction = { t: 'join', code };
+    this.statusMsg = 'CONNECTING';
+    this.net.connect();
   }
 
   get currentScreen(): ScreenName {
@@ -222,7 +255,10 @@ export class App {
         this.statusMsg = '';
         this.statusError = '';
         this.pendingAction = null;
+        this.linkCopiedUntil = 0;
         this.screen = 'lobby';
+        // 地址栏始终带上房间码：建房者直接复制地址栏即可分享。
+        history.replaceState(null, '', `${location.pathname}?${URL_ROOM_PARAM}=${msg.code}`);
         break;
       case 'lobby':
         this.players = msg.players;
@@ -294,8 +330,11 @@ export class App {
     this.players = [];
     this.roomCode = '';
     this.disconnected = false;
+    this.linkCopiedUntil = 0;
     this.resetNetPlayState();
     this.screen = 'title';
+    // 清掉地址栏的房间码，避免刷新后又自动加入已退出的房间。
+    history.replaceState(null, '', location.pathname);
   }
 
   // 清空一切联机对局态（快照缓冲 / 自适应统计 / 地形）。开局与返回标题共用。
@@ -422,6 +461,16 @@ export class App {
     }
   }
 
+  // 粘贴：仅房间码输入画面响应。整段 URL 或裸房间码都能识别。
+  private onPaste(e: ClipboardEvent): void {
+    if (this.screen !== 'joinCode') return;
+    e.preventDefault();
+    const code = extractRoomCode(e.clipboardData?.getData('text') ?? '');
+    if (!code) return; // 捞不出任何合法字符则保持原输入
+    this.codeBuffer = code;
+    this.statusError = '';
+  }
+
   private onLobbyKey(e: KeyboardEvent): void {
     if (e.code === 'Escape') {
       e.preventDefault();
@@ -444,6 +493,35 @@ export class App {
       }
       return;
     }
+    if (e.code === 'KeyC') {
+      e.preventDefault();
+      this.copyRoomLink();
+      return;
+    }
+  }
+
+  // 把完整分享链接（含协议）写进剪贴板。局域网 http 非安全上下文没有 navigator.clipboard，
+  // 故失败/缺失时回退到临时 textarea + execCommand。
+  private copyRoomLink(): void {
+    if (!this.roomCode) return;
+    const url = `${location.origin}${location.pathname}?${URL_ROOM_PARAM}=${this.roomCode}`;
+    const done = () => {
+      this.linkCopiedUntil = performance.now() + LINK_COPIED_MS;
+    };
+    const clipboard = navigator.clipboard;
+    if (clipboard?.writeText) {
+      clipboard.writeText(url).then(done, () => {
+        if (copyViaTextarea(url)) done();
+      });
+    } else if (copyViaTextarea(url)) {
+      done();
+    }
+  }
+
+  // 大厅里展示的分享地址：去掉协议前缀、全大写以匹配像素字体（只有大写字母/数字/少量标点）。
+  private shareUrlText(): string {
+    const path = location.pathname === '/' ? '' : location.pathname;
+    return `${location.host}${path}?${URL_ROOM_PARAM}=${this.roomCode}`.toUpperCase();
   }
 
   private isHost(): boolean {
@@ -514,7 +592,7 @@ export class App {
       sx += slotAdvance;
     }
 
-    drawTextCentered(ctx, atlas, 'TYPE A-Z   ENTER TO JOIN', cx, 170, COLOR_MENU_DIM);
+    drawTextCentered(ctx, atlas, 'TYPE A-Z OR PASTE   ENTER TO JOIN', cx, 170, COLOR_MENU_DIM);
     drawTextCentered(ctx, atlas, 'ESC TO CANCEL', cx, 184, COLOR_MENU_DIM);
     this.drawStatusLines(200);
   }
@@ -530,6 +608,13 @@ export class App {
     drawTextCentered(ctx, atlas, 'ROOM CODE', cx, 20, COLOR_MENU);
     // 房间码大字（房主可念给同伴）。
     drawBigTextCentered(ctx, atlas, this.roomCode || '----', cx, 34, 4, COLOR_HIGHLIGHT);
+
+    // 分享地址：同伴直接打开即自动加入。可能超出画面宽度，故左边界钳到 0（宁可贴边不换行）。
+    if (this.roomCode) {
+      const link = this.shareUrlText();
+      const linkX = Math.max(0, cx - Math.round(textWidth(link) / 2));
+      drawText(ctx, atlas, link, linkX, 76, COLOR_MENU_DIM);
+    }
 
     // 玩家列表：4 行 1P..4P。
     const listTop = 96;
@@ -558,8 +643,9 @@ export class App {
       if (mine) drawText(ctx, atlas, '<', x - 12, y, COLOR_HIGHLIGHT);
     }
 
-    // 操作提示。
-    const hintY = listTop + MAX_PLAYERS * rowH + 12;
+    // 操作提示（4 行等距；比原先多一行 COPY LINK，故整体上提 6px 给底部状态行留位）。
+    const hintRowH = 14;
+    const hintY = listTop + MAX_PLAYERS * rowH + 6;
     drawTextCentered(ctx, atlas, 'ENTER = READY', cx, hintY, COLOR_MENU);
     if (this.isHost()) {
       const allReady = this.allReady();
@@ -568,15 +654,25 @@ export class App {
         atlas,
         allReady ? 'S = START' : 'WAIT ALL READY',
         cx,
-        hintY + 14,
+        hintY + hintRowH,
         allReady ? COLOR_OK : COLOR_MENU_DIM,
       );
     } else {
-      drawTextCentered(ctx, atlas, 'WAIT FOR HOST', cx, hintY + 14, COLOR_MENU_DIM);
+      drawTextCentered(ctx, atlas, 'WAIT FOR HOST', cx, hintY + hintRowH, COLOR_MENU_DIM);
     }
-    drawTextCentered(ctx, atlas, 'ESC = LEAVE', cx, hintY + 28, COLOR_MENU_DIM);
+    drawTextCentered(ctx, atlas, 'ESC = LEAVE', cx, hintY + hintRowH * 2, COLOR_MENU_DIM);
+    // 复制提示态：菜单每帧重绘，时间戳过期即自然复原为默认行。
+    const copied = performance.now() < this.linkCopiedUntil;
+    drawTextCentered(
+      ctx,
+      atlas,
+      copied ? 'LINK COPIED' : 'C = COPY LINK',
+      cx,
+      hintY + hintRowH * 3,
+      copied ? COLOR_OK : COLOR_MENU_DIM,
+    );
 
-    this.drawStatusLines(hintY + 46);
+    this.drawStatusLines(hintY + hintRowH * 4 + 2);
   }
 
   // ───────────────────────── 绘制：联机游戏 ─────────────────────────
@@ -666,6 +762,43 @@ export class App {
 }
 
 // ───────────────────────── 纯函数工具 ─────────────────────────
+
+// 从粘贴文本里提取房间码：先试 URL 形态（?room=XXXX），失败则把整段当作裸码，
+// 统一大写后只保留字母表内字符，截取前 ROOM_CODE_LENGTH 位。捞不到返回空串。
+function extractRoomCode(text: string): string {
+  const m = ROOM_PARAM_RE.exec(text);
+  const raw = (m ? m[1] : text).toUpperCase();
+  let out = '';
+  for (const ch of raw) {
+    if (!ROOM_CODE_ALPHABET.includes(ch)) continue;
+    out += ch;
+    if (out.length === ROOM_CODE_LENGTH) break;
+  }
+  return out;
+}
+
+// 剪贴板回退：非安全上下文（局域网 http）没有 navigator.clipboard，
+// 用离屏 textarea + execCommand('copy')。返回是否复制成功。
+function copyViaTextarea(text: string): boolean {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  // 固定定位 + 全透明：不触发滚动、不可见。
+  ta.style.position = 'fixed';
+  ta.style.top = '0';
+  ta.style.left = '0';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  document.body.removeChild(ta);
+  return ok;
+}
 
 function sameInput(a: InputState, b: InputState): boolean {
   return (
