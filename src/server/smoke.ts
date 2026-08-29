@@ -29,16 +29,19 @@ function client(name: string): Promise<{
   waitFor: (t: ServerMessage['t'], timeoutMs?: number) => Promise<ServerMessage>;
   send: (msg: unknown) => void;
   snapshots: () => Extract<ServerMessage, { t: 'snapshot' }>[];
+  playerStates: () => Extract<ServerMessage, { t: 'playerState' }>[];
 }> {
   const ws = new WebSocket(URL);
   const inbox: ServerMessage[] = [];
   const waiters: { t: ServerMessage['t']; resolve: (m: ServerMessage) => void }[] = [];
   const snaps: Extract<ServerMessage, { t: 'snapshot' }>[] = [];
+  const playerStates: Extract<ServerMessage, { t: 'playerState' }>[] = [];
 
   ws.on('message', (data: Buffer) => {
     const msg = JSON.parse(data.toString()) as ServerMessage;
     inbox.push(msg);
     if (msg.t === 'snapshot') snaps.push(msg);
+    if (msg.t === 'playerState') playerStates.push(msg);
     const i = waiters.findIndex((w) => w.t === msg.t);
     if (i >= 0) waiters.splice(i, 1)[0].resolve(msg);
   });
@@ -61,7 +64,13 @@ function client(name: string): Promise<{
   const send = (msg: unknown): void => ws.send(JSON.stringify(msg));
 
   return new Promise((resolve) => {
-    ws.on('open', () => resolve({ ws, waitFor, send, snapshots: () => snaps }));
+    ws.on('open', () => resolve({
+      ws,
+      waitFor,
+      send,
+      snapshots: () => snaps,
+      playerStates: () => playerStates,
+    }));
   });
 }
 
@@ -128,6 +137,9 @@ async function main(): Promise<void> {
   const lastTick = snaps[snaps.length - 1].snap.tick;
   console.log('[smoke] tick 递进', { firstTick, lastTick });
   assert(lastTick > firstTick, 'tick 随时间递增');
+  const playerStates = c1.playerStates();
+  assert(playerStates.length >= snaps.length * 2, '本地玩家状态频率显著高于完整世界快照');
+  assert(playerStates.at(-1)?.tank?.playerIndex === 0, '低延迟通道只回传当前连接自己的坦克');
 
   // 8) 断开 P2，校验房间存活（P1 仍持续收到快照，且座位保留 → 仍 2 台玩家坦克）
   const beforeCount = c1.snapshots().length;

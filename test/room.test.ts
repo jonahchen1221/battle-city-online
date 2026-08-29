@@ -76,6 +76,10 @@ test('lobby seat holes are compacted instead of creating phantom players', () =>
   internal.tick();
   internal.tick();
   internal.tick();
+  assert.equal(host.messages.filter((message) => message.t === 'playerState').length, 3);
+  assert.equal(third.messages.filter((message) => message.t === 'playerState').length, 3);
+  assert.equal(host.latest('playerState')?.tank?.playerIndex, 0);
+  assert.equal(third.latest('playerState')?.tank?.playerIndex, 1);
   const snapshot = host.latest('snapshot');
   assert.deepEqual(
     snapshot?.snap.tanks.filter((tank) => tank.kind === 'player').map((tank) => tank.playerIndex),

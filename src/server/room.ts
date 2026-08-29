@@ -306,6 +306,24 @@ export class Room {
 
     update(game, inputs);
 
+    // 自己控制的坦克以 60Hz 单播，绕开完整世界快照的 20Hz + 抖动缓冲延迟。
+    // 仍是服务器权威数据；连接积压时直接跳过旧状态，避免低延迟通道排队反增延迟。
+    for (let i = 0; i < this.gameSlots.length; i++) {
+      const slot = this.gameSlots[i];
+      if (!slot.connected || !slot.ws || slot.ws.readyState !== 1) continue;
+      if (slot.ws.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) continue;
+      const tank = game.tanks.find((candidate) =>
+        candidate.kind === 'player' && candidate.playerIndex === i && candidate.alive
+      ) ?? null;
+      Room.send(slot.ws, {
+        t: 'playerState',
+        tick: game.tick,
+        phase: game.phase,
+        paused: game.paused,
+        tank,
+      });
+    }
+
     // 抽干本帧事件到累加器（服务器代替 main.ts 消费 state.events，避免其无限增长）。
     if (game.events.length > 0) {
       for (const e of game.events) this.eventAccumulator.push(e);

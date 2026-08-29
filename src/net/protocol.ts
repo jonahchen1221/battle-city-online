@@ -1,11 +1,13 @@
 // 客户端 ↔ 服务器消息契约（JSON over WebSocket）。
 // 本文件是纯类型 + 常量：可同时被浏览器客户端与 Node 服务器导入，不得引用 DOM / Node API。
 //
-// 架构：服务器权威。服务器以 60Hz 跑共享模拟（src/game/），客户端只发输入、收快照渲染。
-// 快照按 SNAPSHOT_INTERVAL_TICKS 广播；两次快照间客户端做位置插值。
+// 架构：服务器权威。服务器以 60Hz 跑共享模拟（src/game/）；完整世界快照按
+// SNAPSHOT_INTERVAL_TICKS 广播，另把每位玩家自己的状态以 60Hz 单播回去，
+// 让本地坦克无需落入世界快照的 70–90ms 抖动缓冲。
 
 import { InputState } from '../core/types';
 import { GameEvent } from '../game/state';
+import type { TankState } from '../game/tank';
 
 // 每隔多少逻辑帧广播一次快照（60Hz / 3 = 20Hz）。
 // 客户端在两快照间做位置插值。面向良好线路（低 RTT / 零丢包）调优：带宽非瓶颈，
@@ -54,6 +56,8 @@ export type ServerMessage =
   | { t: 'lobby'; players: LobbyPlayer[] } // 大厅状态变更广播
   // playerIndex 是紧凑后的对局内序号；大厅座位有空洞时可能与 joined 中的序号不同。
   | { t: 'started'; playerCount: number; playerIndex: number } // 开局；随后开始收 snapshot
+  // 每逻辑帧只向对应连接单播其自己的权威坦克；完整世界仍由 snapshot 提供。
+  | { t: 'playerState'; tick: number; phase: GameState['phase']; paused: boolean; tank: TankState | null }
   | { t: 'snapshot'; snap: Snapshot; events: GameEvent[] } // 权威快照 + 自上次快照以来累积的音效 / UI 事件
   | { t: 'error'; code: ServerErrorCode; msg: string };
 

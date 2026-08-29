@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { interpolateBulletPositions, snapshotInterpolationWindow } from '../src/client/app';
+import {
+  interpolateBulletPositions,
+  predictLocalPlayerTank,
+  snapshotInterpolationWindow,
+} from '../src/client/app';
 import { spawnWeaponBullets } from '../src/game/bullet';
 import { createPlayer } from '../src/game/tank';
+import { createGameState } from '../src/game/state';
+import { emptyInput } from '../src/core/types';
 
 test('catch-up snapshots with the same arrival time are spaced by authoritative tick', () => {
   const snapshots = [
@@ -48,4 +54,26 @@ test('multiple bullets from one owner interpolate independently by bullet id', (
       { x: 210, y: 45 },
     ],
   );
+});
+
+test('local player prediction fills 120Hz render frames without mutating authority', () => {
+  const state = createGameState(7);
+  state.level.cells.fill(0);
+  state.level.brickMask.fill(0);
+  const tank = createPlayer(0, 1);
+  Object.assign(tank, { x: 100, y: 100, dir: 'right' as const });
+  const input = emptyInput();
+  input.right = true;
+
+  const halfway = predictLocalPlayerTank(tank, input, state.level, [tank], 1000 / 120);
+  assert.ok(Math.abs(halfway.x - 100.375) < 1e-9);
+  assert.equal(halfway.y, 100);
+  assert.equal(tank.x, 100);
+  assert.equal(tank.speed, 0.75);
+
+  const capped = predictLocalPlayerTank(tank, input, state.level, [tank], 100);
+  assert.ok(Math.abs(capped.x - 100.75) < 1e-9);
+
+  const released = predictLocalPlayerTank(tank, emptyInput(), state.level, [tank], 1000 / 60);
+  assert.equal(released.x, 100);
 });

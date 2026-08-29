@@ -2,8 +2,8 @@
 // 固定 60Hz 逻辑循环由 main.ts 驱动，每帧调用 tick()（逻辑）与 render(alpha)（绘制），
 // 本类按当前 screen 分发。菜单类画面用一个轻量 keydown 监听（仅在菜单画面响应，避免与游戏 Keyboard 打架）。
 //
-// 联机渲染：客户端不做权威模拟，只持有最近两份快照并在渲染帧间做位置插值；
-// 其余一切（地形 / HUD / 爆炸 / 阶段）直接取最新快照。
+// 联机渲染：远程实体使用世界快照插值；自己控制的坦克使用 60Hz 权威单播并做
+// 最多一逻辑帧的纯显示预测。伤害、碰撞、计分与其余状态仍完全由服务器决定。
 
 import {
   createGameState,
@@ -13,6 +13,7 @@ import {
   PowerupPickupEvent,
 } from '../game/state';
 import { update } from '../game/update';
+import { applyInput, type TankState } from '../game/tank';
 import type { LevelState } from '../game/level';
 import type { BulletState } from '../game/bullet';
 import { Renderer } from '../render/renderer';
@@ -76,8 +77,7 @@ const LINK_COPIED_MS = 2000;
 
 // ── 抖动缓冲（jitter buffer）参数 ──
 // 客户端不做权威模拟：保留最近若干份快照 + 到达时刻，按 renderTime = now - interpDelay
-// 在其间插值所有实体（含本地玩家坦克）。面向良好线路（低 RTT / 零丢包）调优——把延迟压到
-// 刚好盖住一个快照间隔 + 抖动，手感紧、又不至于卡顿外推。
+// 插值远程实体。本地玩家由独立低延迟通道覆盖，不承担这段缓冲延迟。
 const SNAP_BUFFER_SIZE = 16; // 快照环缓冲容量
 const GAP_SAMPLE_COUNT = 20; // 参与自适应的最近到达间隔样本数
 // 一个快照间隔在 20Hz 下约 50ms（base）；插值延迟至少要盖住它 + 抖动，故下限取略高的 70ms。
@@ -114,6 +114,18 @@ interface BufferedSnap {
   level: LevelState;
   arrival: number; // performance.now() 到达时刻（ms）
 }
+
+interface BufferedLocalPlayerState {
+  tick: number;
+  phase: GameState['phase'];
+  paused: boolean;
+  tank: TankState | null;
+  arrival: number;
+}
+
+// 60Hz 本地权威状态短暂丢失时最多沿用多久；超时即回退世界快照，绝不无限外推。
+const LOCAL_PLAYER_STATE_STALE_MS = 250;
+const LOGIC_STEP_MS = 1000 / TICKS_PER_SECOND;
 
 interface ActivePowerupTicker {
   startedAt: number;
@@ -152,12 +164,13 @@ export class App {
   private pendingAction: { t: 'create' } | { t: 'join'; code: string } | null = null;
   private linkCopiedUntil = 0; // 复制成功提示的截止时刻（performance.now() 口径，0 = 无提示）
 
-  // 联机游戏快照 / 插值（抖动缓冲）。客户端不做预测：本地与远程坦克全部走同一条插值路径。
+  // 联机世界快照走抖动缓冲；自己控制的坦克另收 60Hz 权威状态并只做最多一 tick 的显示预测。
   private snapBuf: BufferedSnap[] = []; // 最近 SNAP_BUFFER_SIZE 份快照（按到达时间升序）
   private arrivalGaps: number[] = []; // 最近 GAP_SAMPLE_COUNT 个到达间隔（ms），用于自适应
   private lastArrival = 0; // 上一份快照到达时刻
   private interpDelay = INTERP_DELAY_START; // 当前插值延迟（ms），逐帧向目标缓动
   private clientLevel: LevelState | null = null; // 客户端持有的地形（增量下发：无 level 的快照沿用它）
+  private localPlayerState: BufferedLocalPlayerState | null = null;
   private readonly dummyRng: Rng = createRng(1); // 仅为凑齐 GameState 形状，永不用于权威
   private lastSentInput: InputState = emptyInput();
   private lastSendTime = 0;
@@ -394,6 +407,9 @@ export class App {
         this.statusError = '';
         this.screen = 'netGame';
         break;
+      case 'playerState':
+        this.localPlayerState = { ...msg, arrival: performance.now() };
+        break;
       case 'snapshot':
         this.onSnapshot(msg.snap, msg.events);
         break;
@@ -476,6 +492,7 @@ export class App {
     this.lastArrival = 0;
     this.interpDelay = INTERP_DELAY_START;
     this.clientLevel = null;
+    this.localPlayerState = null;
     this.clearPowerupTicker();
   }
 
@@ -959,8 +976,7 @@ export class App {
 
   // 用抖动缓冲构建插值后的可渲染 GameState 形状对象；无快照时返回 null。
   // 把 now - interpDelay 映射到权威 tick，落在缓冲区两份快照 [from, to] 之间：
-  //   • 全部坦克 / 子弹（含本地玩家坦克）的 x/y 在 from→to 间按 alpha 插值（其余字段取 to）；
-  //     本地与远程走同一路径——纯服务器权威，无预测、无对账。
+  //   • 远程坦克 / 子弹的 x/y 在 from→to 间按 alpha 插值；本地坦克由独立 60Hz 权威状态覆盖；
   //   • 非位置状态（地形 / HUD / 阶段 / 爆炸）取自 to，避免阶段闪烁；
   //   • renderTime 超出最新快照（卡顿）→ 冻结在最新，不外推；早于最旧 → 用最旧。
   private buildNetRenderState(): GameState | null {
@@ -981,14 +997,37 @@ export class App {
     const base = to.snap; // 非位置状态基准（较新那份）
     const level = to.level; // 增量地形：始终用已解析出的完整 level
 
-    // 全部坦克（含本地玩家）：以 to 为准，按 id 匹配 from 旧位置插值。本地与远程走同一路径。
+    // 先按世界快照插值全部坦克，再用低延迟通道覆盖自己控制的那一台。
     const fromTankById = new Map<number, { x: number; y: number }>();
     for (const t of from.snap.tanks) fromTankById.set(t.id, { x: t.x, y: t.y });
-    const tanks = base.tanks.map((t) => {
+    let tanks = base.tanks.map((t) => {
       const p = fromTankById.get(t.id);
       if (!p) return t; // 新出生：直接取 to 位置
       return { ...t, x: lerp(p.x, t.x, alpha), y: lerp(p.y, t.y, alpha) };
     });
+
+    // 自己的坦克不用 70–90ms 世界缓冲：以最近一份 60Hz 权威状态为基准，最多向当前
+    // rAF 时刻预测一个逻辑 tick。预测只影响绘制，伤害/碰撞/计分仍完全由服务器决定。
+    const local = this.localPlayerState;
+    if (local && now - local.arrival <= LOCAL_PLAYER_STATE_STALE_MS) {
+      const localIndex = tanks.findIndex((tank) =>
+        tank.kind === 'player' && tank.playerIndex === this.myPlayerIndex
+      );
+      if (!local.tank) {
+        if (localIndex >= 0) tanks = tanks.filter((_, index) => index !== localIndex);
+      } else {
+        const latest = buf[buf.length - 1];
+        const predicted = predictLocalPlayerTank(
+          local.tank,
+          this.playerInput(),
+          latest.level,
+          latest.snap.tanks,
+          local.phase === 'playing' && !local.paused ? now - local.arrival : 0,
+        );
+        if (localIndex >= 0) tanks[localIndex] = predicted;
+        else tanks.push(predicted);
+      }
+    }
 
     // 每发子弹都有稳定 id；星级双弹、散弹与机枪弹即使 ownerId 相同也能各自正确插值。
     const bullets = interpolateBulletPositions(from.snap.bullets, base.bullets, alpha);
@@ -1182,6 +1221,33 @@ export function interpolateBulletPositions(
     if (!p) return b;
     return { ...b, x: lerp(p.x, b.x, alpha), y: lerp(p.y, b.y, alpha) };
   });
+}
+
+// 从最新 60Hz 权威坦克向当前显示时刻预测最多一个逻辑 tick。复用游戏层的转向、
+// 地形与坦克碰撞规则，但只修改克隆体；服务器状态和快照缓冲不会被污染。
+export function predictLocalPlayerTank(
+  tank: TankState,
+  input: InputState,
+  level: LevelState,
+  authorityTanks: TankState[],
+  elapsedMs: number,
+): TankState {
+  const predicted: TankState = {
+    ...tank,
+    enemyStarAbilities: { ...tank.enemyStarAbilities },
+  };
+  if (!tank.alive || tank.freezeTicks > 0) return predicted;
+
+  const fraction = clamp(elapsedMs / LOGIC_STEP_MS, 0, 1);
+  if (fraction <= 0) return predicted;
+  predicted.speed = tank.speed * fraction;
+  const collisionTanks = authorityTanks.map((candidate) =>
+    candidate.id === tank.id ? predicted : candidate
+  );
+  if (!collisionTanks.includes(predicted)) collisionTanks.push(predicted);
+  applyInput(predicted, input, level, collisionTanks);
+  predicted.speed = tank.speed;
+  return predicted;
 }
 
 // 把本地渲染时刻映射到权威 tick 时间轴，并返回包围它的两份快照及插值比例。
