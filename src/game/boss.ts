@@ -286,6 +286,7 @@ function makeBreachBullet(
     fromEnemy: true,
     attacksEagle: false,
     alive: true,
+    viewportBounds: null,
     steelPiercing: true,
   };
 }
@@ -354,6 +355,7 @@ function fireBossBullet(state: GameState, boss: BossState, angleRad: number, spe
     fromEnemy: true,
     attacksEagle: false, // Boss 关无鹰巢，保持 false 以免任何回退路径误伤基地
     alive: true,
+    viewportBounds: null, // Boss 只出现在单屏竞技场，沿用经典地图边界
     steelPiercing: false,
   };
   state.bullets.push(bullet);

@@ -13,16 +13,33 @@ export const FIELD_ROWS = 30; // 子格行数
 export const FIELD_WIDTH = FIELD_COLS * SUBTILE; // 320
 export const FIELD_HEIGHT = FIELD_ROWS * SUBTILE; // 240
 
+// ── 护送关 ──
+// 奇数关为移动护送、偶数关为普通关：移动 → 普通 → 移动。
+// 护送关世界是普通战场的 2×3，渲染仍只展示 320×240 视口。
+export const ESCORT_FIELD_COLS = FIELD_COLS * 2; // 80 子格 = 640px
+export const ESCORT_FIELD_ROWS = FIELD_ROWS * 3; // 90 子格 = 720px
+export const ESCORT_SIZE = 32;
+export const ESCORT_MAX_HP = 12;
+export const ESCORT_SPEED = 0.25;
+export const ESCORT_HIT_INVULN_TICKS = 12;
+export const ESCORT_REPAIR_AMOUNT = 3;
+// 护送关普通敌军维持在车辆周围的战区，避免随机游走后长期占用敌军名额。
+export const ESCORT_ENEMY_COMBAT_HALF_WIDTH = 192;
+export const ESCORT_ENEMY_COMBAT_AHEAD = 220;
+export const ESCORT_ENEMY_COMBAT_BEHIND = 96;
+export const ESCORT_ENEMY_RECYCLE_BEHIND = 160;
+
 // 战场在屏幕上的偏移（左侧 16px 灰边，顶部 8px，右侧留 32px HUD 栏）
 export const FIELD_X = 16;
 export const FIELD_Y = 8;
 
 // 固定逻辑帧率（与 NES 一致）；所有速度单位为 px/tick
 export const TICKS_PER_SECOND = 60;
+export const ESCORT_ENEMY_RECYCLE_TICKS = 2 * TICKS_PER_SECOND;
 
 // 美术分辨率倍数（仅限渲染层！）：把所有精灵按 2× 重新绘制、画布内部分辨率放大到
 // NATIVE_*×ART_SCALE（736×512），从而获得 4× 像素细节。
-// 逻辑坐标 / 游戏代码（src/game/）一律保持在 368×256 空间，不受此常量影响。
+// 逻辑坐标 / 游戏代码（src/game/）一律使用未缩放的世界像素，不受此常量影响。
 // 屏幕显示缩放不再是固定倍数，而由 main.ts 依视口大小取 736×512 画布的最大半整数（0.5 步长）CSS 倍率。
 export const ART_SCALE = 2;
 
@@ -129,8 +146,9 @@ export const STAGE_ENEMY_TOTAL = 20;
 // 关卡总数（levels.ts STAGES 的长度）；通关第 12 关后回卷到第 1 关。
 // 序列：普通关 1–5 → Boss 关 A（6）→ 普通关 7–11 → Boss 关 B / 最终战（12）。
 export const STAGE_COUNT = 12;
-// Boss 关的关号（1-based）。第 1 / 6 关为 Boss A 竞技场，第 12 关为 Boss B（最终战）。
-export const BOSS_STAGES: ReadonlyArray<number> = [1, 6, 12];
+// Boss 关的关号（1-based）。第 6 关为 Boss A 竞技场，第 12 关为 Boss B（最终战）。
+// 第 1 关保留为移动护送教学关，方便测试移动玩法。
+export const BOSS_STAGES: ReadonlyArray<number> = [6, 12];
 // 某关号是否为 Boss 关。stage 可为任意正整数（回卷关号先归一到 1..STAGE_COUNT）。
 export function isBossStage(stage: number): boolean {
   return BOSS_STAGES.includes(((stage - 1) % STAGE_COUNT) + 1);
@@ -140,8 +158,12 @@ export function isBossStage(stage: number): boolean {
 // Boss 关（第 6 / 12 关，索引 5 / 11）为空数组：不走有限队列，小兵由 Boss 关专属逻辑无限补充
 //（见 enemy.ts updateBossMinions）。
 export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; count: number }>> = [
-  // 第 1 关：Boss 关（空编成，小兵无限补充）
-  [],
+  // 第 1 关：基础 14 + 快速 2 + 智能 4（移动护送教学关）
+  [
+    { kind: 'basic', count: 14 },
+    { kind: 'fast', count: 2 },
+    { kind: 'smart', count: 4 },
+  ],
   // 第 2 关：基础 8 + 快速 5 + 威力 2 + 智能 5（智能占 25%）
   [
     { kind: 'basic', count: 8 },
@@ -296,8 +318,9 @@ export const CARRIER_QUEUE_POSITIONS: ReadonlyArray<number> = [4, 11, 18];
 export const CARRIER_FLASH_TICKS = 8;
 // 拾取任一道具的全局加分。
 export const POWERUP_SCORE = 500;
-// timer 道具：对方阵营冻结帧数（期间不能移动或开火，履带动画亦冻结）。
-export const ENEMY_FREEZE_TICKS = 600;
+// timer 道具：玩家拾取时冻结敌军 10 秒；敌军拾取时只冻结玩家 3 秒，避免多人全队长时间失控。
+export const ENEMY_FREEZE_TICKS = 10 * TICKS_PER_SECOND;
+export const PLAYER_FREEZE_TICKS = 3 * TICKS_PER_SECOND;
 // shovel 道具：鹰巢护墙钢化持续帧数；到期恢复为完整砖墙。
 export const SHOVEL_TICKS = 1200;
 // helmet 道具：无敌帧数（复用出生护盾机制 / 渲染）。

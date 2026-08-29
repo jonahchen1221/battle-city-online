@@ -7,7 +7,6 @@ import {
   isBossStage,
   SPAWN_FLASH_TICKS,
   NEUTRAL_POWERUP_FIRST_TICKS,
-  PLAYER_SPAWN_POINTS,
   TANK_SIZE,
 } from '../core/constants';
 import { LevelState, cloneLevel } from './level';
@@ -18,6 +17,13 @@ import { MVP_POWERUP_KINDS, shuffledNeutralQueue } from './powerup';
 import type { PowerupState, PowerupKind } from './powerup';
 import { createBoss } from './boss';
 import type { BossState } from './boss';
+import {
+  createEscortLevel,
+  createEscortState,
+  escortPlayerSpawn,
+  isEscortStage,
+  type EscortState,
+} from './escort';
 
 // 出生中的敌方坦克：闪光结束后原样加入 tanks，期间不可碰撞、不受控。
 export interface SpawnState {
@@ -89,6 +95,7 @@ export interface GameState {
   phase: Phase; // 当前阶段
   phaseTicks: number; // 进入当前阶段以来的帧数（stagestart 幕布计时 / gameover 滑入动画等据此推算）
   eagleDestroyed: boolean; // 鹰巢（基地）是否已被摧毁
+  escort: EscortState | null; // 护送关的移动鹰巢；普通关为 null
   playerCount: number; // 本局玩家数（1–4）
   livesByPlayer: number[]; // 每名玩家的剩余生命（含当前在场坦克），按 playerIndex 索引
   // 待定结果：某触发（鹰毁 / 玩家阵亡 / 全歼）已武装但仍在延迟模拟中；
@@ -150,19 +157,32 @@ function createStageQueue(stageIndex: number): TankKind[] {
 // 开局即进入 'stagestart' 幕布（模拟冻结，STAGE_START_TICKS 帧后自动转 playing），并发一次 stageStart 事件。
 export function createGameState(seed: number, playerCount = 1, stage = 1): GameState {
   const stageIndex = (stage - 1) % STAGE_COUNT;
+  const escortStage = isEscortStage(stage);
+  const level = escortStage ? createEscortLevel(stage) : cloneLevel(STAGES[stageIndex]);
+  const escort = escortStage ? createEscortState(level, stage) : null;
   // 玩家坦克：id 为 1..N，playerIndex 为 0..N-1。
   const tanks: TankState[] = [];
   for (let i = 0; i < playerCount; i++) {
-    tanks.push(createPlayer(i, i + 1));
+    const tank = createPlayer(i, i + 1);
+    const spawn = escortPlayerSpawn(escort, i, level);
+    tank.x = spawn.x;
+    tank.y = spawn.y;
+    tanks.push(tank);
   }
   // rng 先行创建：本关中立道具队列的洗牌即取自它（必须在 state 组装前完成）。
   const rng = createRng(seed);
+  const neutralQueue = shuffledNeutralQueue(rng);
+  // 护送关首枚中立道具固定为扳手，让玩家在 10 秒后稳定获得一次修车机会。
+  if (escort) {
+    const wrench = neutralQueue.indexOf('wrench');
+    if (wrench > 0) [neutralQueue[0], neutralQueue[wrench]] = [neutralQueue[wrench], neutralQueue[0]];
+  }
   return {
     tick: 0,
     rng,
     levelEpoch: 0,
     // 拷贝一份，避免就地破坏砖块时污染 STAGES 常量。
-    level: cloneLevel(STAGES[stageIndex]),
+    level,
     tanks,
     bullets: [],
     spawning: [],
@@ -173,10 +193,11 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     nextBulletId: 1,
     stage,
     // Boss 关：幕布结束后 Boss 即已在位（不走出生闪光）。普通关为 null。
-    boss: isBossStage(stage) ? createBoss(playerCount) : null,
+    boss: !escortStage && isBossStage(stage) ? createBoss(playerCount) : null,
     phase: 'stagestart',
     phaseTicks: 0,
     eagleDestroyed: false,
+    escort,
     playerCount,
     // 单机 3 条（NES 原版）；多人合作 5 条（且可向队友借命，见 update.ts onPlayerKilled）。
     livesByPlayer: new Array<number>(playerCount).fill(
@@ -196,7 +217,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     enemyFreezeTicks: 0,
     enemySlowTicks: 0,
     shovelTicks: 0,
-    neutralQueue: shuffledNeutralQueue(rng),
+    neutralQueue,
     neutralTimer: NEUTRAL_POWERUP_FIRST_TICKS,
     enemiesDequeued: 0,
     stageScoreStart: new Array<number>(playerCount).fill(0),
@@ -248,10 +269,15 @@ export function nextStage(state: GameState): void {
 
   state.stage = nextStageNum;
   state.levelEpoch++;
-  state.level = cloneLevel(STAGES[stageIndex]);
+  state.level = isEscortStage(nextStageNum)
+    ? createEscortLevel(nextStageNum)
+    : cloneLevel(STAGES[stageIndex]);
+  state.escort = isEscortStage(nextStageNum)
+    ? createEscortState(state.level, nextStageNum)
+    : null;
   state.enemyQueue = createStageQueue(stageIndex);
   // Boss 关重建一台满血 Boss；普通关清空。
-  state.boss = isBossStage(nextStageNum) ? createBoss(state.playerCount) : null;
+  state.boss = !state.escort && isBossStage(nextStageNum) ? createBoss(state.playerCount) : null;
 
   // 每关独立的战斗态一律清空。
   state.tanks = [];
@@ -273,6 +299,13 @@ export function nextStage(state: GameState): void {
   state.shovelTicks = 0;
   // 新关卡重新洗一副中立道具队列，计时归位到首枚延迟。
   state.neutralQueue = shuffledNeutralQueue(state.rng);
+  if (state.escort) {
+    const wrench = state.neutralQueue.indexOf('wrench');
+    if (wrench > 0) {
+      [state.neutralQueue[0], state.neutralQueue[wrench]] =
+        [state.neutralQueue[wrench], state.neutralQueue[0]];
+    }
+  }
   state.neutralTimer = NEUTRAL_POWERUP_FIRST_TICKS;
   state.enemiesDequeued = 0;
   state.paused = false;
@@ -283,7 +316,7 @@ export function nextStage(state: GameState): void {
   // 一个坦克身位（y−16，越界钳到 0），一进关卡就能顺手吃到。单机局 mvpIndex 恒为 -1，不发。
   if (mvpIndex >= 0) {
     const kind = MVP_POWERUP_KINDS[state.rng.int(MVP_POWERUP_KINDS.length)];
-    const spawn = PLAYER_SPAWN_POINTS[mvpIndex];
+    const spawn = escortPlayerSpawn(state.escort, mvpIndex, state.level);
     state.powerups.push({ kind, x: spawn.x, y: Math.max(0, spawn.y - TANK_SIZE) });
   }
 
@@ -297,6 +330,9 @@ export function nextStage(state: GameState): void {
   for (let i = 0; i < state.playerCount; i++) {
     if (state.livesByPlayer[i] <= 0) continue;
     const tank = createPlayer(i, i + 1);
+    const spawn = escortPlayerSpawn(state.escort, i, state.level);
+    tank.x = spawn.x;
+    tank.y = spawn.y;
     tank.level = levelByPlayer[i];
     tank.weapon = weaponByPlayer[i];
     tank.drill = drillByPlayer[i];

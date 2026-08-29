@@ -25,6 +25,8 @@ import {
   LASER_MAX_BULLETS,
   MACHINE_BULLET_SPEED,
   MACHINE_MAX_BULLETS,
+  FIELD_WIDTH,
+  FIELD_HEIGHT,
 } from '../core/constants';
 import {
   Cell,
@@ -43,6 +45,13 @@ import type { ExplosionState, GameEvent } from './state';
 // 'spiral' = 螺旋弹（沿路径正弦摆动）；'laser' = 激光（穿敌人 / 穿砖块）。
 export type BulletKind = 'normal' | 'pellet' | 'spiral' | 'laser';
 
+export interface BulletViewportBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 // 子弹实体：纯数据、可序列化。x/y 为 4×4 包围盒左上角的战场相对像素坐标。
 export interface BulletState {
   id: number; // 每发子弹唯一；同一射手多弹时供网络快照稳定匹配
@@ -57,8 +66,11 @@ export interface BulletState {
   ownerId: number;
   ownerPlayerIndex: number; // 射手的玩家序号（玩家弹为其 playerIndex，敌弹为 -1）：用于击杀记分归属
   fromEnemy: boolean; // 阵营：true=敌弹（只打玩家），false=玩家弹（只打敌人）
-  attacksEagle: boolean; // 智能坦克弹为 false：仍被鹰巢挡住，但绝不会触发基地摧毁
+  attacksEagle: boolean; // 智能坦克弹为 false：不伤害普通鹰巢或护送车，只攻击玩家
   alive: boolean;
+  // 大地图中记录开火瞬间的逻辑视口；子弹越过该固定边界即静默销毁。
+  // 普通单屏关为 null，继续由地图实体边界按经典规则处理。
+  viewportBounds: BulletViewportBounds | null;
   // 可击穿钢块（击中钢块时整格清除）。两条来源：star 满级（3 级）的 cannon 弹，或射手持有
   // drill 钻头（此时任何武器、任何等级都带破钢）。鹰巢与战场边界永不可穿。
   steelPiercing: boolean;
@@ -114,6 +126,7 @@ function makeBullet(
   kind: BulletKind,
   speed: number,
   steelPiercing: boolean,
+  level?: LevelState,
   angleRad = 0,
 ): BulletState {
   const isPlayer = isPlayerTank(tank);
@@ -137,21 +150,42 @@ function makeBullet(
     fromEnemy: !isPlayer,
     attacksEagle: tank.kind !== 'smart',
     alive: true,
+    viewportBounds: level ? firingViewportBounds(tank, level) : null,
     steelPiercing,
   };
 }
 
+// 权威模拟不依赖某个客户端的平滑镜头，因此以射手为中心并钳在地图内，得到所有玩家一致的
+// “开火瞬间屏幕”。这个矩形一经写进子弹便不再移动。
+function firingViewportBounds(tank: TankState, level: LevelState): BulletViewportBounds | null {
+  const worldWidth = level.cols * SUBTILE;
+  const worldHeight = level.rows * SUBTILE;
+  if (worldWidth <= FIELD_WIDTH && worldHeight <= FIELD_HEIGHT) return null;
+
+  const maxLeft = Math.max(0, worldWidth - FIELD_WIDTH);
+  const maxTop = Math.max(0, worldHeight - FIELD_HEIGHT);
+  const centerX = tank.x + TANK_SIZE / 2;
+  const centerY = tank.y + TANK_SIZE / 2;
+  const left = Math.max(0, Math.min(maxLeft, centerX - FIELD_WIDTH / 2));
+  const top = Math.max(0, Math.min(maxTop, centerY - FIELD_HEIGHT / 2));
+  return { left, top, right: left + FIELD_WIDTH, bottom: top + FIELD_HEIGHT };
+}
+
 // 从坦克炮口生成一发经典弹（cannon / 敌弹）。
 // 速度取自该坦克（威力坦克更快；敌我 star 等级 ≥1 均提速到 STAR_BULLET_SPEED）；阵营由是否玩家坦克决定。
-export function spawnBullet(tank: TankState, bulletId: number): BulletState {
+export function spawnBullet(tank: TankState, bulletId: number, level?: LevelState): BulletState {
   const speed = tank.level >= 1 ? STAR_BULLET_SPEED : tank.bulletSpeed;
   // 破钢条件取“或”：star 满级（仅 cannon）或持有钻头（任何武器、任何等级）。
-  return makeBullet(tank, bulletId, 'normal', speed, tank.level >= 3 || tank.drill);
+  return makeBullet(tank, bulletId, 'normal', speed, tank.level >= 3 || tank.drill, level);
 }
 
 // 按坦克当前武器生成一次开火的全部子弹（cannon / 机枪各一发，散弹一轮三发）。
 // star 满级的破钢只作用于 cannon；drill 钻头则让**所有**武器的子弹都能击穿钢块。
-export function spawnWeaponBullets(tank: TankState, firstBulletId: number): BulletState[] {
+export function spawnWeaponBullets(
+  tank: TankState,
+  firstBulletId: number,
+  level?: LevelState,
+): BulletState[] {
   const drill = tank.drill; // 钻头：本次开火的每一发都带破钢
   switch (tank.weapon) {
     case 'spread': {
@@ -166,6 +200,7 @@ export function spawnWeaponBullets(tank: TankState, firstBulletId: number): Bull
             'pellet',
             SPREAD_BULLET_SPEED,
             drill,
+            level,
             (i - mid) * SPREAD_SPLAY_RAD,
           ),
         );
@@ -173,13 +208,13 @@ export function spawnWeaponBullets(tank: TankState, firstBulletId: number): Bull
       return out;
     }
     case 'spiral':
-      return [makeBullet(tank, firstBulletId, 'spiral', SPIRAL_BULLET_SPEED, drill)];
+      return [makeBullet(tank, firstBulletId, 'spiral', SPIRAL_BULLET_SPEED, drill, level)];
     case 'laser':
-      return [makeBullet(tank, firstBulletId, 'laser', LASER_BULLET_SPEED, drill)];
+      return [makeBullet(tank, firstBulletId, 'laser', LASER_BULLET_SPEED, drill, level)];
     case 'machine':
-      return [makeBullet(tank, firstBulletId, 'normal', MACHINE_BULLET_SPEED, drill)];
+      return [makeBullet(tank, firstBulletId, 'normal', MACHINE_BULLET_SPEED, drill, level)];
     default:
-      return [spawnBullet(tank, firstBulletId)];
+      return [spawnBullet(tank, firstBulletId, level)];
   }
 }
 
@@ -399,7 +434,8 @@ function resolveBulletTerrain(b: BulletState, level: LevelState, events: GameEve
 }
 
 // 推进所有在场子弹并结算地形碰撞（就地修改；死亡子弹由 update 清理）。
-// 子弹撞地形消失时向 explosions 追加一个小爆炸火花。
+// 子弹撞地形消失时追加小爆炸；大地图中越过其开火瞬间的视口则静默回收，
+// 避免镜头移动改变既有子弹的射程，或让它在远端长时间占用射手弹槽。
 export function advanceBullets(
   level: LevelState,
   bullets: BulletState[],
@@ -409,6 +445,17 @@ export function advanceBullets(
   for (const b of bullets) {
     if (!b.alive) continue;
     moveBullet(b);
+    const bounds = b.viewportBounds;
+    if (
+      bounds &&
+      (b.x < bounds.left ||
+        b.y < bounds.top ||
+        b.x + BULLET_SIZE > bounds.right ||
+        b.y + BULLET_SIZE > bounds.bottom)
+    ) {
+      b.alive = false;
+      continue;
+    }
     resolveBulletTerrain(b, level, events);
     if (!b.alive) {
       explosions.push(makeSmallExplosion(b.x + BULLET_SIZE / 2, b.y + BULLET_SIZE / 2));

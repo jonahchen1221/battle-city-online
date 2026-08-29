@@ -8,6 +8,7 @@ import {
   EAGLE_ROW,
   POWERUP_SCORE,
   ENEMY_FREEZE_TICKS,
+  PLAYER_FREEZE_TICKS,
   SHOVEL_TICKS,
   HELMET_INVULN_TICKS,
   PLAYER_MAX_LEVEL,
@@ -26,6 +27,7 @@ import {
   NEUTRAL_POWERUP_INTERVAL_TICKS,
   NEUTRAL_POWERUP_RETRY_TICKS,
   NEUTRAL_POWERUP_MAX_TRIES,
+  ESCORT_REPAIR_AMOUNT,
 } from '../core/constants';
 import type { Rng } from '../core/rng';
 import { Cell, setCell, getCell } from './level';
@@ -128,7 +130,8 @@ export function eagleRingCells(): Array<{ col: number; row: number }> {
 
 // 某 16×16 浮标（左上角子格 colX/rowY）是否与“鹰巢禁区”重叠：
 // 禁区 = 鹰巢 2×2 + 护盾环，恰好是矩形 cols [EAGLE_COL-1, EAGLE_COL+2] × rows [EAGLE_ROW-1, EAGLE_ROW+1]。
-function boxOverlapsEagleArea(colX: number, rowY: number): boolean {
+function boxOverlapsEagleArea(state: GameState, colX: number, rowY: number): boolean {
+  if (state.escort) return false;
   const pc0 = EAGLE_COL - 1;
   const pc1 = EAGLE_COL + 2;
   const pr0 = EAGLE_ROW - 1;
@@ -150,15 +153,21 @@ export function pushPowerup(state: GameState, p: PowerupState): void {
 //（最多 MAX_TRIES 次，超限用兜底格）。
 export function dropPowerup(state: GameState): void {
   const kind = POWERUP_KINDS[state.rng.int(POWERUP_KINDS.length)];
-  const NUM_COL_POS = FIELD_COLS - 1; // 39：colX 0..38（16px 盒右缘 ≤ FIELD_WIDTH）
-  const NUM_ROW_POS = FIELD_ROWS - 1; // 29：rowY 0..28（16px 盒下缘 ≤ FIELD_HEIGHT）
+  const maxCol = state.level.cols - 2;
+  const maxRow = state.level.rows - 2;
+  const centerCol = state.escort ? Math.floor(state.escort.x / SUBTILE) : 0;
+  const centerRow = state.escort ? Math.floor(state.escort.y / SUBTILE) : 0;
+  const minCol = state.escort ? Math.max(0, centerCol - 18) : 0;
+  const maxSampleCol = state.escort ? Math.min(maxCol, centerCol + 18) : maxCol;
+  const minRow = state.escort ? Math.max(0, centerRow - 15) : 0;
+  const maxSampleRow = state.escort ? Math.min(maxRow, centerRow + 15) : maxRow;
   const MAX_TRIES = 100;
   let colX = 0;
   let rowY = 0;
   for (let tries = 0; tries < MAX_TRIES; tries++) {
-    colX = state.rng.int(NUM_COL_POS);
-    rowY = state.rng.int(NUM_ROW_POS);
-    if (!boxOverlapsEagleArea(colX, rowY)) break;
+    colX = minCol + state.rng.int(maxSampleCol - minCol + 1);
+    rowY = minRow + state.rng.int(maxSampleRow - minRow + 1);
+    if (!boxOverlapsEagleArea(state, colX, rowY)) break;
     // 超限（几乎不会发生）：退到左上角空区兜底。
     if (tries === MAX_TRIES - 1) {
       colX = 0;
@@ -186,12 +195,18 @@ export function shuffledNeutralQueue(rng: Rng): PowerupKind[] {
 //   (1) 不与鹰巢禁区重叠；(2) 覆盖的 4 个子格中至少一格既非水面也非钢块（否则玩家够不着）。
 // 最多 MAX_TRIES 次拒绝采样；全失败返回 null（由调用方顺延本枚）。
 function sampleNeutralSpot(state: GameState): { x: number; y: number } | null {
-  const NUM_COL_POS = FIELD_COLS - 1; // colX 0..38
-  const NUM_ROW_POS = FIELD_ROWS - 1; // rowY 0..28
+  const maxCol = state.level.cols - 2;
+  const maxRow = state.level.rows - 2;
+  const centerCol = state.escort ? Math.floor(state.escort.x / SUBTILE) : 0;
+  const centerRow = state.escort ? Math.floor(state.escort.y / SUBTILE) : 0;
+  const minCol = state.escort ? Math.max(0, centerCol - 18) : 0;
+  const maxSampleCol = state.escort ? Math.min(maxCol, centerCol + 18) : maxCol;
+  const minRow = state.escort ? Math.max(0, centerRow - 15) : 0;
+  const maxSampleRow = state.escort ? Math.min(maxRow, centerRow + 15) : maxRow;
   for (let tries = 0; tries < NEUTRAL_POWERUP_MAX_TRIES; tries++) {
-    const colX = state.rng.int(NUM_COL_POS);
-    const rowY = state.rng.int(NUM_ROW_POS);
-    if (boxOverlapsEagleArea(colX, rowY)) continue;
+    const colX = minCol + state.rng.int(maxSampleCol - minCol + 1);
+    const rowY = minRow + state.rng.int(maxSampleRow - minRow + 1);
+    if (boxOverlapsEagleArea(state, colX, rowY)) continue;
     let reachable = false;
     for (let r = rowY; r <= rowY + 1 && !reachable; r++) {
       for (let c = colX; c <= colX + 1 && !reachable; c++) {
@@ -314,13 +329,14 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       break;
     case 'timer':
       if (player) state.enemyFreezeTicks = ENEMY_FREEZE_TICKS;
-      else state.playerFreezeTicks = ENEMY_FREEZE_TICKS;
+      else state.playerFreezeTicks = PLAYER_FREEZE_TICKS;
       break;
     case 'shovel':
       if (player) {
-        // 玩家钢化鹰巢护墙；重复拾取仅重置计时。
+        // 护送关中改为移动鹰巢的限时护盾；普通关仍钢化护墙。
         state.shovelTicks = SHOVEL_TICKS;
-        fortifyEagleRing(state);
+        if (state.escort) state.escort.shieldTicks = SHOVEL_TICKS;
+        else fortifyEagleRing(state);
       } else {
         // 敌方用铲子挖掉护墙，为进攻基地打开通道；同时取消现有钢化计时。
         state.shovelTicks = 0;
@@ -354,8 +370,12 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       break;
     case 'wrench':
       if (player) {
-        // 玩家即时修复鹰巢护墙；鹰巢本身不修复。
-        if (state.shovelTicks > 0) fortifyEagleRing(state);
+        if (state.escort) {
+          state.escort.hp = Math.min(
+            state.escort.maxHp,
+            state.escort.hp + ESCORT_REPAIR_AMOUNT,
+          );
+        } else if (state.shovelTicks > 0) fortifyEagleRing(state);
         else restoreEagleRingBrick(state);
       } else {
         // 智能坦克最多修到 2 血，其他敌军沿用原有的 +1 耐久效果。
@@ -408,7 +428,7 @@ function grenadeKillOpponents(state: GameState, collector: TankState): void {
 // 敌方 shovel：清空鹰巢外围护墙环；鹰巢本体不受影响。
 // Boss 关无鹰巢，护墙相关的三个操作一律跳过（否则会在竞技场底部凭空造出一圈墙）。
 export function clearEagleRing(state: GameState): void {
-  if (state.boss) return;
+  if (state.boss || state.escort) return;
   for (const { col, row } of eagleRingCells()) {
     setCell(state.level, col, row, Cell.EMPTY);
   }
@@ -416,7 +436,7 @@ export function clearEagleRing(state: GameState): void {
 
 // 把鹰巢护盾环各格设为完整钢块（shovel 生效）。
 export function fortifyEagleRing(state: GameState): void {
-  if (state.boss) return;
+  if (state.boss || state.escort) return;
   for (const { col, row } of eagleRingCells()) {
     setCell(state.level, col, row, Cell.STEEL);
   }
@@ -424,7 +444,7 @@ export function fortifyEagleRing(state: GameState): void {
 
 // 把鹰巢护盾环各格恢复为完整砖块（shovel 到期；即使原先受损 / 被毁也重建 —— 经典表现）。
 export function restoreEagleRingBrick(state: GameState): void {
-  if (state.boss) return;
+  if (state.boss || state.escort) return;
   for (const { col, row } of eagleRingCells()) {
     setCell(state.level, col, row, Cell.BRICK);
   }

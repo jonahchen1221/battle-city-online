@@ -496,7 +496,7 @@ const STAGE_BOSS_B_ROWS = [
 // 全部关卡（1-based 关号对应 STAGES[关号-1]）。启动时一次性解析，越界/长度错误会立即抛出。
 // 顺序：普通关 1–5 → Boss A（6）→ 普通关 7–11（原 6–10 的五张图）→ Boss B（12，最终战）。
 export const STAGES: ReadonlyArray<LevelState> = [
-  STAGE_BOSS_A_ROWS, // 第 1 关 = Boss 关（经典第 1 关图 STAGE_1_ROWS 暂时移出轮换，保留导出备用）
+  STAGE_1_ROWS,
   STAGE_2_ROWS,
   STAGE_3_ROWS,
   STAGE_4_ROWS,

@@ -22,7 +22,7 @@ const EAGLE_SIZE = 2 * SUBTILE; // 16
 // 鹰巢一旦被毁只结算一次；产生一个居中的大爆炸；命中子弹消亡。
 // Boss 关地图没有鹰巢（无 E 字符），此处整体跳过 —— 否则飞过底部正中的子弹会误触发基地摧毁。
 export function resolveEagleHit(state: GameState): void {
-  if (state.boss) return;
+  if (state.boss || state.escort) return;
   if (state.eagleDestroyed) return;
   for (const b of state.bullets) {
     if (
@@ -72,6 +72,7 @@ function anyEnemySpawning(state: GameState): boolean {
 // Boss 关分流：小兵无限补充，永远不满足清场条件 —— 过关条件改为 Boss 死亡。
 function stageCleared(state: GameState): boolean {
   if (state.boss) return state.boss.dead;
+  if (state.escort) return state.escort.arrived;
   return state.enemyQueue.length === 0 && !anyEnemyAlive(state) && !anyEnemySpawning(state);
 }
 
@@ -92,7 +93,7 @@ function arm(state: GameState, result: Exclude<Phase, 'playing'>, delay: number)
 export function updatePhase(state: GameState): void {
   // 失败优先级始终高于通关：全歼后仍有 3 秒延迟模拟，期间残留敌弹可能摧毁鹰巢
   // 或击杀最后一名玩家。此时必须用 gameover 覆盖已武装的 stageclear。
-  const defeated = state.eagleDestroyed || playerDefeated(state);
+  const defeated = state.eagleDestroyed || state.escort?.destroyed === true || playerDefeated(state);
   if (defeated && state.pendingResult !== 'gameover') {
     arm(state, 'gameover', GAMEOVER_DELAY_TICKS);
   } else if (state.pendingResult === null && stageCleared(state)) {

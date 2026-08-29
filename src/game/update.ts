@@ -21,6 +21,7 @@ import {
   updateNeutralPowerups,
 } from './powerup';
 import { destroyPlayerTank, pushBigExplosion } from './death';
+import { resolveEscortHits, updateEscort } from './escort';
 import {
   BULLET_SIZE,
   ENEMY_SCORE,
@@ -104,7 +105,7 @@ export function update(state: GameState, inputs: InputState[]): void {
   if (state.enemySlowTicks > 0) state.enemySlowTicks--;
   if (state.shovelTicks > 0) {
     state.shovelTicks--;
-    if (state.shovelTicks === 0) restoreEagleRingBrick(state);
+    if (state.shovelTicks === 0 && !state.escort) restoreEagleRingBrick(state);
   }
   advanceTankPowerupTimers(state);
 
@@ -131,6 +132,7 @@ export function update(state: GameState, inputs: InputState[]): void {
   resolveBulletBullet(state.bullets, state.explosions, state.events);
   resolveEagleHit(state);
   resolveBulletBoss(state);
+  resolveEscortHits(state);
   resolveBulletTanks(state);
 
   // 清理死亡子弹（其主人即可再次开火）与死亡坦克。
@@ -139,6 +141,9 @@ export function update(state: GameState, inputs: InputState[]): void {
 
   // 推进爆炸计时，移除播放完毕的特效。
   advanceExplosions(state);
+
+  // 移动鹰巢在战斗结算后前进：本帧刚清掉的路障/敌军会立即让它恢复行驶。
+  updateEscort(state);
 
   // 阶段编排：检测鹰毁 / 玩家阵亡 / 全歼，武装并推进延迟结果。
   updatePhase(state);
@@ -180,7 +185,7 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
       continue;
     }
 
-    applyInput(tank, input, level, obstacles);
+    applyInput(tank, input, level, obstacles, state.escort ?? undefined);
 
     // 开火触发方式按武器区分：
     // - 机枪：按住连发（非边沿），由 fireCooldown 节流为每 MACHINE_FIRE_INTERVAL_TICKS 帧一发；
@@ -194,7 +199,7 @@ function updatePlayers(state: GameState, inputs: InputState[]): void {
     const wantFire =
       tank.weapon === 'machine' ? input.fire && tank.fireCooldown === 0 : tank.fireBufferTicks > 0;
     if (wantFire && liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank)) {
-      const spawned = spawnWeaponBullets(tank, state.nextBulletId);
+      const spawned = spawnWeaponBullets(tank, state.nextBulletId, state.level);
       state.nextBulletId += spawned.length;
       for (const b of spawned) state.bullets.push(b);
       if (tank.weapon === 'machine') tank.fireCooldown = MACHINE_FIRE_INTERVAL_TICKS;

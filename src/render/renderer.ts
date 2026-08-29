@@ -52,10 +52,16 @@ import {
   COLOR_BOSS_AIM,
   COLOR_BOSS_LASER_CORE,
   COLOR_BOSS_LASER_EDGE,
+  ESCORT_SIZE,
 } from '../core/constants';
 import { GameState } from '../game/state';
 import { Cell, LevelState, cellIndex, getCell } from '../game/level';
 import { TankState, EnemyKind, WeaponKind } from '../game/tank';
+import {
+  escortGuardOccupancy,
+  escortGuardSlots,
+  escortHasGuard,
+} from '../game/escort';
 import {
   SpriteAtlas,
   TankFrames,
@@ -95,6 +101,9 @@ const WEAPON_LETTER_COLOR: Record<WeaponKind, string> = {
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private atlas: SpriteAtlas;
+  private cameraX = 0;
+  private cameraY = 0;
+  private cameraLevelEpoch = -1;
 
   // 只读暴露图集，供 src/client 的标题/大厅 UI 复用精灵（如菜单光标用的迷你坦克）。
   // 客户端 UI 层绝不修改图集，仅取样绘制。
@@ -103,7 +112,7 @@ export class Renderer {
   }
 
   constructor(canvas: HTMLCanvasElement) {
-    // 画布内部分辨率 = 原生尺寸 × 美术倍数（512×448）。所有布局数学仍以逻辑像素书写，
+    // 画布内部分辨率 = 原生尺寸 × 美术倍数（736×512）。所有布局数学仍以逻辑像素书写，
     // 仅在 ctx 调用处（fillRect/clip）与 drawTile/drawText/drawQuarter 内部乘以 ART_SCALE，
     // 不使用 ctx.scale（否则 2× 精灵会被二次缩放）。
     canvas.width = NATIVE_WIDTH * ART_SCALE;
@@ -115,26 +124,36 @@ export class Renderer {
     this.atlas = createSpriteAtlas();
   }
 
-  draw(state: GameState, _alpha: number, playerNames: readonly string[] = []): void {
+  draw(
+    state: GameState,
+    _alpha: number,
+    playerNames: readonly string[] = [],
+    localPlayerIndex = 0,
+  ): void {
     const { ctx } = this;
+    const camera = this.updateCamera(state, localPlayerIndex);
 
     this.drawCabinetFrame();
     this.drawFieldBackdrop();
 
-    // 第一遍：地形中除树林外的一切（在实体之下）
-    this.drawGround(state.level, state.tick, state.eagleDestroyed);
-
-    // ── 实体绘制在两遍地形之间（地面之上、树林之下）──
-    // 顺序：出生星 → 坦克 → 子弹 → 爆炸。
-    // 硬裁剪到战场矩形（NES 同款）：边缘的大爆炸等特效不得溢出到灰边/HUD。
+    // 大地图的世界层在固定视口内裁剪，再整体平移镜头偏移。
     ctx.save();
     ctx.beginPath();
     ctx.rect(FIELD_X * ART_SCALE, FIELD_Y * ART_SCALE, FIELD_WIDTH * ART_SCALE, FIELD_HEIGHT * ART_SCALE);
     ctx.clip();
+    ctx.translate(-camera.x * ART_SCALE, -camera.y * ART_SCALE);
+    // 路线是地表标记，先画它再画地形：砖墙/水路会自然覆盖路线，表明正在堵路。
+    this.drawEscortRoute(state);
+    // 第一遍：地形中除树林外的一切（在实体之下）。
+    this.drawGround(state.level, state.tick, state.eagleDestroyed);
+    this.drawEscortGoal(state);
+    this.drawEscort(state);
     this.drawSpawnStars(state);
     // Boss 车体绘于坦克之下：玩家贴到车体边缘时仍能看清自己的坦克。
     this.drawBoss(state);
     this.drawTanks(state, playerNames);
+    // 护卫位压在坦克轮廓上：玩家就位后仍能看到绿色角标确认已激活。
+    this.drawEscortGuardSlots(state);
     this.drawBullets(state);
     // 瞄准线 / 激光绘于坦克之上：前摇与激活相都必须一眼可辨（这是全部躲避判断的依据）。
     this.drawBossBeams(state);
@@ -150,6 +169,8 @@ export class Renderer {
     this.drawBossHealth(state);
     ctx.restore();
 
+    this.drawEscortHud(state, camera.x, camera.y);
+
     // 右侧 HUD 栏（剩余敌军 / 生命 / 关卡旗）
     this.drawHud(state, playerNames);
 
@@ -161,6 +182,46 @@ export class Renderer {
 
     // 关卡开场幕布（STAGE N）：铺满战场的灰色幕布 + 黑字，凌驾于战场内一切之上。
     this.drawStageStart(state);
+  }
+
+  // 镜头直接跟随本地玩家；世界尺寸不超过视口时始终回到 (0,0)。
+  // 首帧/跨关直接对齐，其余帧缓动，避免坦克每个逻辑帧都拉扯画面。
+  private updateCamera(
+    state: GameState,
+    localPlayerIndex: number,
+  ): { x: number; y: number } {
+    const maxX = Math.max(0, state.level.cols * SUBTILE - FIELD_WIDTH);
+    const maxY = Math.max(0, state.level.rows * SUBTILE - FIELD_HEIGHT);
+    if (maxX === 0 && maxY === 0) {
+      this.cameraX = 0;
+      this.cameraY = 0;
+      this.cameraLevelEpoch = state.levelEpoch;
+      return { x: 0, y: 0 };
+    }
+
+    let target = state.tanks.find(
+      (tank) => tank.alive && tank.kind === 'player' && tank.playerIndex === localPlayerIndex,
+    );
+    if (!target) {
+      target = state.spawning.find(
+        (spawn) => spawn.tank.kind === 'player' && spawn.tank.playerIndex === localPlayerIndex,
+      )?.tank;
+    }
+    const targetX = target ? target.x + TANK_SIZE / 2 : (state.escort?.x ?? 0) + ESCORT_SIZE / 2;
+    const targetY = target ? target.y + TANK_SIZE / 2 : (state.escort?.y ?? 0) + ESCORT_SIZE / 2;
+    const desiredX = Math.max(0, Math.min(maxX, targetX - FIELD_WIDTH / 2));
+    const desiredY = Math.max(0, Math.min(maxY, targetY - FIELD_HEIGHT / 2));
+    if (this.cameraLevelEpoch !== state.levelEpoch) {
+      this.cameraX = desiredX;
+      this.cameraY = desiredY;
+      this.cameraLevelEpoch = state.levelEpoch;
+    } else {
+      this.cameraX += (desiredX - this.cameraX) * 0.14;
+      this.cameraY += (desiredY - this.cameraY) * 0.14;
+    }
+    this.cameraX = snapArt(this.cameraX);
+    this.cameraY = snapArt(this.cameraY);
+    return { x: this.cameraX, y: this.cameraY };
   }
 
   // 战场外框改成硬边阶梯明暗，比一整块中灰更容易分辨战场 / HUD，
@@ -202,6 +263,231 @@ export class Renderer {
     }
   }
 
+  // 绘制本关完整折线路线：每段都有深色车道、边界和两条履带印。
+  private drawEscortRoute(state: GameState): void {
+    const escort = state.escort;
+    if (!escort) return;
+    const { ctx } = this;
+    const laneWidth = ESCORT_SIZE + 16;
+    for (let i = 1; i < escort.route.length; i++) {
+      const a = escort.route[i - 1];
+      const b = escort.route[i];
+      if (a.x === b.x) {
+        const left = FIELD_X + a.x - 8;
+        const top = FIELD_Y + Math.min(a.y, b.y);
+        const height = Math.abs(a.y - b.y) + ESCORT_SIZE;
+        ctx.fillStyle = '#111813';
+        ctx.fillRect(left * ART_SCALE, top * ART_SCALE, laneWidth * ART_SCALE, height * ART_SCALE);
+        ctx.fillStyle = '#343d34';
+        ctx.fillRect(left * ART_SCALE, top * ART_SCALE, 2 * ART_SCALE, height * ART_SCALE);
+        ctx.fillRect(
+          (left + laneWidth - 2) * ART_SCALE,
+          top * ART_SCALE,
+          2 * ART_SCALE,
+          height * ART_SCALE,
+        );
+        for (let y = top + 10; y < top + height; y += 16) {
+          ctx.fillStyle = '#465044';
+          ctx.fillRect((left + 7) * ART_SCALE, y * ART_SCALE, 7 * ART_SCALE, 3 * ART_SCALE);
+          ctx.fillRect((left + laneWidth - 14) * ART_SCALE, y * ART_SCALE, 7 * ART_SCALE, 3 * ART_SCALE);
+        }
+      } else {
+        const left = FIELD_X + Math.min(a.x, b.x);
+        const top = FIELD_Y + a.y - 8;
+        const width = Math.abs(a.x - b.x) + ESCORT_SIZE;
+        ctx.fillStyle = '#111813';
+        ctx.fillRect(left * ART_SCALE, top * ART_SCALE, width * ART_SCALE, laneWidth * ART_SCALE);
+        ctx.fillStyle = '#343d34';
+        ctx.fillRect(left * ART_SCALE, top * ART_SCALE, width * ART_SCALE, 2 * ART_SCALE);
+        ctx.fillRect(
+          left * ART_SCALE,
+          (top + laneWidth - 2) * ART_SCALE,
+          width * ART_SCALE,
+          2 * ART_SCALE,
+        );
+        for (let x = left + 10; x < left + width; x += 16) {
+          ctx.fillStyle = '#465044';
+          ctx.fillRect(x * ART_SCALE, (top + 7) * ART_SCALE, 3 * ART_SCALE, 7 * ART_SCALE);
+          ctx.fillRect(x * ART_SCALE, (top + laneWidth - 14) * ART_SCALE, 3 * ART_SCALE, 7 * ART_SCALE);
+        }
+      }
+    }
+  }
+
+  // 护送终点：黄黑棋盘线垂直于最后一段路线。
+  private drawEscortGoal(state: GameState): void {
+    const escort = state.escort;
+    if (!escort) return;
+    const { ctx } = this;
+    const goal = escort.route.at(-1)!;
+    const before = escort.route.at(-2)!;
+    const horizontal = goal.y === before.y;
+    if (horizontal) {
+      const x = FIELD_X + goal.x + (goal.x > before.x ? ESCORT_SIZE - 2 : -2);
+      const y = FIELD_Y + goal.y - 16;
+      for (let i = 0; i < 8; i++) {
+        ctx.fillStyle = i % 2 === 0 ? '#f0c840' : '#242826';
+        ctx.fillRect(x * ART_SCALE, (y + i * 8) * ART_SCALE, 4 * ART_SCALE, 8 * ART_SCALE);
+      }
+    } else {
+      const x = FIELD_X + goal.x - 16;
+      const y = FIELD_Y + goal.y + (goal.y > before.y ? ESCORT_SIZE - 2 : -2);
+      for (let i = 0; i < 8; i++) {
+        ctx.fillStyle = i % 2 === 0 ? '#f0c840' : '#242826';
+        ctx.fillRect((x + i * 8) * ART_SCALE, y * ART_SCALE, 8 * ART_SCALE, 4 * ART_SCALE);
+      }
+    }
+  }
+
+  // 32×32 移动鹰巢：宽履带 + 装甲车体 + 原作鹰巢标志。
+  private drawEscort(state: GameState): void {
+    const escort = state.escort;
+    if (!escort) return;
+    const { ctx, atlas } = this;
+    const x = snapArt(FIELD_X + escort.x);
+    const y = snapArt(FIELD_Y + escort.y);
+    const treadShift = escort.moving && Math.floor(state.tick / TRACK_ANIM_TICKS) % 2 === 1 ? 2 : 0;
+
+    if (escort.destroyed) ctx.globalAlpha = 0.5;
+    const horizontal = escort.dir === 'left' || escort.dir === 'right';
+    ctx.fillStyle = '#171c19';
+    if (horizontal) {
+      ctx.fillRect(x * ART_SCALE, y * ART_SCALE, ESCORT_SIZE * ART_SCALE, 7 * ART_SCALE);
+      ctx.fillRect(x * ART_SCALE, (y + 25) * ART_SCALE, ESCORT_SIZE * ART_SCALE, 7 * ART_SCALE);
+      ctx.fillStyle = '#786838';
+      for (let col = -treadShift; col < ESCORT_SIZE; col += 6) {
+        ctx.fillRect((x + col) * ART_SCALE, (y + 1) * ART_SCALE, 3 * ART_SCALE, 5 * ART_SCALE);
+        ctx.fillRect((x + col) * ART_SCALE, (y + 26) * ART_SCALE, 3 * ART_SCALE, 5 * ART_SCALE);
+      }
+      ctx.fillStyle = escort.destroyed ? '#4a4f4b' : '#6f8c4b';
+      ctx.fillRect((x + 2) * ART_SCALE, (y + 6) * ART_SCALE, 28 * ART_SCALE, 20 * ART_SCALE);
+      ctx.fillStyle = escort.destroyed ? '#2c302d' : '#a3b65f';
+      ctx.fillRect((x + 5) * ART_SCALE, (y + 9) * ART_SCALE, 4 * ART_SCALE, 14 * ART_SCALE);
+      drawTile(ctx, escort.destroyed ? atlas.eagleDestroyed : atlas.eagle, x + 8, y + 8);
+    } else {
+      ctx.fillRect(x * ART_SCALE, y * ART_SCALE, 7 * ART_SCALE, ESCORT_SIZE * ART_SCALE);
+      ctx.fillRect((x + 25) * ART_SCALE, y * ART_SCALE, 7 * ART_SCALE, ESCORT_SIZE * ART_SCALE);
+      ctx.fillStyle = '#786838';
+      for (let row = -treadShift; row < ESCORT_SIZE; row += 6) {
+        ctx.fillRect((x + 1) * ART_SCALE, (y + row) * ART_SCALE, 5 * ART_SCALE, 3 * ART_SCALE);
+        ctx.fillRect((x + 26) * ART_SCALE, (y + row) * ART_SCALE, 5 * ART_SCALE, 3 * ART_SCALE);
+      }
+      ctx.fillStyle = escort.destroyed ? '#4a4f4b' : '#6f8c4b';
+      ctx.fillRect((x + 6) * ART_SCALE, (y + 2) * ART_SCALE, 20 * ART_SCALE, 28 * ART_SCALE);
+      ctx.fillStyle = escort.destroyed ? '#2c302d' : '#a3b65f';
+      ctx.fillRect((x + 9) * ART_SCALE, (y + 5) * ART_SCALE, 14 * ART_SCALE, 4 * ART_SCALE);
+      drawTile(ctx, escort.destroyed ? atlas.eagleDestroyed : atlas.eagle, x + 8, y + 10);
+    }
+    ctx.globalAlpha = 1;
+
+    if (escort.shieldTicks > 0 && Math.floor(state.tick / SHIELD_ANIM_TICKS) % 2 === 0) {
+      ctx.strokeStyle = '#78d8f8';
+      ctx.lineWidth = ART_SCALE;
+      ctx.strokeRect(
+        (x - 2) * ART_SCALE,
+        (y - 2) * ART_SCALE,
+        (ESCORT_SIZE + 4) * ART_SCALE,
+        (ESCORT_SIZE + 4) * ART_SCALE,
+      );
+    }
+  }
+
+  // 车辆左右护卫位：四角框 + 指向车身的箭头，不使用容易误读为路线的“+”标志。
+  private drawEscortGuardSlots(state: GameState): void {
+    const escort = state.escort;
+    if (!escort || escort.destroyed || escort.arrived) return;
+    const { ctx } = this;
+    const slots = escortGuardSlots(escort);
+    const occupied = escortGuardOccupancy(state);
+
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      const x = snapArt(FIELD_X + slot.x);
+      const y = snapArt(FIELD_Y + slot.y);
+      const active = occupied[i];
+      const color = active
+        ? '#78e048'
+        : Math.floor(state.tick / 12) % 2 === 0
+          ? '#f0c840'
+          : '#a89848';
+
+      ctx.fillStyle = active ? 'rgba(24,72,30,0.45)' : 'rgba(58,48,18,0.38)';
+      ctx.fillRect(x * ART_SCALE, y * ART_SCALE, slot.size * ART_SCALE, slot.size * ART_SCALE);
+      ctx.fillStyle = color;
+      const arm = 5;
+      const thick = 2;
+      ctx.fillRect(x * ART_SCALE, y * ART_SCALE, arm * ART_SCALE, thick * ART_SCALE);
+      ctx.fillRect(x * ART_SCALE, y * ART_SCALE, thick * ART_SCALE, arm * ART_SCALE);
+      ctx.fillRect((x + slot.size - arm) * ART_SCALE, y * ART_SCALE, arm * ART_SCALE, thick * ART_SCALE);
+      ctx.fillRect((x + slot.size - thick) * ART_SCALE, y * ART_SCALE, thick * ART_SCALE, arm * ART_SCALE);
+      ctx.fillRect(x * ART_SCALE, (y + slot.size - thick) * ART_SCALE, arm * ART_SCALE, thick * ART_SCALE);
+      ctx.fillRect(x * ART_SCALE, (y + slot.size - arm) * ART_SCALE, thick * ART_SCALE, arm * ART_SCALE);
+      ctx.fillRect(
+        (x + slot.size - arm) * ART_SCALE,
+        (y + slot.size - thick) * ART_SCALE,
+        arm * ART_SCALE,
+        thick * ART_SCALE,
+      );
+      ctx.fillRect(
+        (x + slot.size - thick) * ART_SCALE,
+        (y + slot.size - arm) * ART_SCALE,
+        thick * ART_SCALE,
+        arm * ART_SCALE,
+      );
+      // 五个 2×2 像素块组成朝向车身的尖括号，不依赖字体字符。
+      const arrowDots: Record<'up' | 'down' | 'left' | 'right', Array<[number, number]>> = {
+        right: [[4, 3], [6, 5], [8, 7], [6, 9], [4, 11]],
+        left: [[10, 3], [8, 5], [6, 7], [8, 9], [10, 11]],
+        down: [[3, 4], [5, 6], [7, 8], [9, 6], [11, 4]],
+        up: [[3, 10], [5, 8], [7, 6], [9, 8], [11, 10]],
+      };
+      for (const [ox, oy] of arrowDots[slot.inward]) {
+        ctx.fillRect((x + ox) * ART_SCALE, (y + oy) * ART_SCALE, 2 * ART_SCALE, 2 * ART_SCALE);
+      }
+    }
+  }
+
+  // 固定在视口左上的护送状态条，并在车队离开本地玩家画面时给出方向标记。
+  private drawEscortHud(state: GameState, cameraX: number, cameraY: number): void {
+    const escort = state.escort;
+    if (!escort || state.phase === 'stagestart') return;
+    const { ctx, atlas } = this;
+    const x = FIELD_X + 4;
+    const y = FIELD_Y + 4;
+    ctx.fillStyle = 'rgba(0,0,0,0.82)';
+    ctx.fillRect(x * ART_SCALE, y * ART_SCALE, 112 * ART_SCALE, 21 * ART_SCALE);
+    drawTextOutlined(ctx, atlas, 'ESCORT', x + 4, y + 3, '#ffffff');
+    const guarded = escortHasGuard(state);
+    const status = escort.destroyed
+      ? 'DOWN'
+      : escort.arrived
+        ? 'SAFE'
+        : escort.moving
+          ? 'GO'
+          : !guarded
+            ? 'WAIT'
+            : 'STOP';
+    const statusColor = escort.destroyed ? '#f85838' : escort.moving ? '#78e048' : '#f0c840';
+    drawTextOutlined(ctx, atlas, status, x + 72, y + 3, statusColor);
+    const barX = x + 4;
+    const barY = y + 14;
+    const barW = 104;
+    ctx.fillStyle = '#303632';
+    ctx.fillRect(barX * ART_SCALE, barY * ART_SCALE, barW * ART_SCALE, 4 * ART_SCALE);
+    const ratio = escort.maxHp > 0 ? escort.hp / escort.maxHp : 0;
+    ctx.fillStyle = ratio > 0.5 ? '#70dc58' : ratio > 0.25 ? '#f0c840' : '#f85838';
+    ctx.fillRect(barX * ART_SCALE, barY * ART_SCALE, Math.round(barW * ratio) * ART_SCALE, 4 * ART_SCALE);
+
+    const screenX = escort.x + ESCORT_SIZE / 2 - cameraX;
+    const screenY = escort.y + ESCORT_SIZE / 2 - cameraY;
+    if (screenX >= 0 && screenX <= FIELD_WIDTH && screenY >= 0 && screenY <= FIELD_HEIGHT) return;
+    const markerX = FIELD_X + Math.max(8, Math.min(FIELD_WIDTH - 14, screenX));
+    const markerY = FIELD_Y + Math.max(28, Math.min(FIELD_HEIGHT - 14, screenY));
+    ctx.fillStyle = '#050706';
+    ctx.fillRect((markerX - 3) * ART_SCALE, (markerY - 3) * ART_SCALE, 13 * ART_SCALE, 13 * ART_SCALE);
+    drawTextOutlined(ctx, atlas, 'E', markerX, markerY, statusColor);
+  }
+
   // 复杂地形上的文字统一放进不透明硬边信息牌，避免砖墙/树林穿过字形造成误读。
   private drawOverlayPlate(x: number, y: number, w: number, h: number, accent = '#6f2720'): void {
     const { ctx } = this;
@@ -232,6 +518,17 @@ export class Renderer {
     const cx = FIELD_X + Math.round(FIELD_WIDTH / 2);
     const cy = FIELD_Y + FIELD_HEIGHT / 2 - 4;
     drawText(ctx, atlas, text, cx - Math.round(textWidth(text) / 2), cy, COLOR_HUD_ICON);
+    if (state.escort) {
+      const mission = 'ESCORT';
+      drawText(
+        ctx,
+        atlas,
+        mission,
+        cx - Math.round(textWidth(mission) / 2),
+        cy + 20,
+        '#31472c',
+      );
+    }
     // 不显眼的操作提示：教会玩家 P 可暂停（每关开场都会看到，不占游戏画面）。
     const hint = 'P = PAUSE';
     drawText(ctx, atlas, hint, cx - Math.round(textWidth(hint) / 2), cy + 40, COLOR_HUD_ICON);
@@ -514,7 +811,7 @@ export class Renderer {
         const color = PLAYER_LABEL_COLORS[tank.playerIndex] ?? COLOR_HUD_ICON;
         let lx = Math.round(px + TANK_SIZE / 2 - w / 2);
         let ly = py - 9;
-        lx = Math.max(FIELD_X, Math.min(lx, FIELD_X + FIELD_WIDTH - w));
+        lx = Math.max(FIELD_X, Math.min(lx, FIELD_X + state.level.cols * SUBTILE - w));
         ly = Math.max(FIELD_Y, ly);
         drawTextOutlined(ctx, atlas, label, lx, ly, color);
       }

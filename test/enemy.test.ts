@@ -11,9 +11,72 @@ import {
   BRICK_TR,
   EAGLE_COL,
   EAGLE_ROW,
+  ESCORT_ENEMY_RECYCLE_TICKS,
   STAGE_ENEMY_TOTAL,
   SUBTILE,
 } from '../src/core/constants';
+
+test('escort-stage traditional enemies steer back toward the convoy combat zone', () => {
+  const state = createGameState(100, 1, 1);
+  const player = state.tanks[0];
+  const basic = createEnemy('basic', 2, 0);
+  const escort = state.escort!;
+  Object.assign(basic, { x: 16, y: escort.y - 96, dir: 'left', aiTicks: 30 });
+  state.phase = 'playing';
+  state.tanks = [player, basic];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  updateEnemies(state, state.level);
+
+  assert.equal(basic.dir, 'right');
+  assert.ok(basic.x > 16);
+});
+
+test('a hidden traditional enemy far behind the escort is recycled ahead with a spawn flash', () => {
+  const state = createGameState(101, 1, 1);
+  const player = state.tanks[0];
+  const basic = createEnemy('basic', 2, 0);
+  const escort = state.escort!;
+  escort.y = 300;
+  Object.assign(player, { x: escort.x, y: escort.y });
+  Object.assign(basic, {
+    x: 40,
+    y: escort.y + 200,
+    escortFarTicks: ESCORT_ENEMY_RECYCLE_TICKS - 1,
+  });
+  const bullet = spawnBullet(basic, state.nextBulletId++, state.level);
+  state.phase = 'playing';
+  state.tanks = [player, basic];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.bullets = [bullet];
+
+  updateEnemies(state, state.level);
+
+  assert.equal(state.tanks.some((tank) => tank.id === basic.id), false);
+  assert.equal(state.spawning[0]?.tank.id, basic.id);
+  assert.ok(state.spawning[0]!.tank.y < escort.y);
+  assert.equal(bullet.alive, false);
+});
+
+test('traditional enemy movement remains un-leashed on normal stages', () => {
+  const state = createGameState(102, 1, 2);
+  const player = state.tanks[0];
+  const basic = createEnemy('basic', 2, 0);
+  Object.assign(basic, { x: 40, y: 40, dir: 'left', aiTicks: 30 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, basic];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  updateEnemies(state, state.level);
+
+  assert.equal(basic.dir, 'left');
+  assert.ok(basic.x < 40);
+  assert.equal(basic.escortFarTicks, 0);
+});
 
 test('enemy waits in spawn flash while its spawn point is occupied', () => {
   const state = createGameState(42, 1);
@@ -182,7 +245,7 @@ test('smart enemy turns in place at a half-brick snap point and fires immediatel
 });
 
 test('smart enemy neither fires down the eagle lane nor damages the eagle with its bullets', () => {
-  const state = createGameState(42, 1, 2);
+  const state = createGameState(42, 1, 2); // 普通鹰巢关；第 1 关暂作护送测试关
   const player = state.tanks[0];
   const smart = createEnemy('smart', 2, 0);
   const eagleX = EAGLE_COL * SUBTILE;
@@ -214,14 +277,13 @@ test('smart enemy neither fires down the eagle lane nor damages the eagle with i
 });
 
 test('stage enemy queues include smart tanks without changing the configured total', () => {
-  // 第 1 关已改为 Boss 关（空编成），普通关从第 2 关起。
-  const expectedSmartCounts = [5, 6, 7, 8];
-  for (let stage = 2; stage <= 5; stage++) {
+  const expectedSmartCounts = [4, 5, 6, 7, 8];
+  for (let stage = 1; stage <= 5; stage++) {
     const state = createGameState(42, 1, stage);
     assert.equal(state.enemyQueue.length, STAGE_ENEMY_TOTAL);
     assert.equal(
       state.enemyQueue.filter((kind) => kind === 'smart').length,
-      expectedSmartCounts[stage - 2],
+      expectedSmartCounts[stage - 1],
     );
   }
 });

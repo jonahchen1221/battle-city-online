@@ -8,6 +8,7 @@ import {
   SMART_BOOTS_TICKS,
   SMART_GHOST_TICKS,
   SMART_HELMET_TICKS,
+  PLAYER_FREEZE_TICKS,
   STAR_BULLET_SPEED,
 } from '../src/core/constants';
 import { update } from '../src/game/update';
@@ -49,7 +50,7 @@ test('enemy clock freezes the player faction', () => {
 
   tryPickupPowerup(state, 'enemy');
 
-  assert.ok(state.playerFreezeTicks > 0);
+  assert.equal(state.playerFreezeTicks, PLAYER_FREEZE_TICKS);
   assert.equal(state.enemyFreezeTicks, 0);
 
   state.phase = 'playing';

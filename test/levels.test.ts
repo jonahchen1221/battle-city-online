@@ -68,9 +68,9 @@ function reachableFromSpawns(level: LevelState): Set<number> {
 
 test('STAGES 覆盖 STAGE_COUNT 关，且每关都被 parseLevel 成功解析成 40×30', () => {
   assert.equal(STAGES.length, STAGE_COUNT);
-  // 12 关循环：Boss A（1）→ 普通关 2–5 → Boss A（6）→ 普通关 7–11 → Boss B（12，最终战）。
+  // 12 关循环：移动关从 1 开始与普通关交替；第 6 / 12 关为 Boss。
   assert.equal(STAGE_COUNT, 12);
-  assert.deepEqual([...BOSS_STAGES], [1, 6, 12]);
+  assert.deepEqual([...BOSS_STAGES], [6, 12]);
   for (let i = 0; i < STAGES.length; i++) {
     const level = STAGES[i];
     assert.equal(level.cols, FIELD_COLS, `第 ${i + 1} 关列数`);

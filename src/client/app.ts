@@ -1053,7 +1053,7 @@ export class App {
   private drawNet(): void {
     const rs = this.buildNetRenderState();
     if (rs) {
-      this.renderer.draw(rs, 0, this.gamePlayerNames);
+      this.renderer.draw(rs, 0, this.gamePlayerNames, this.myPlayerIndex);
       this.updatePowerupTicker();
     } else {
       // 尚未收到首份快照：黑屏 + 提示。
@@ -1101,7 +1101,14 @@ export class App {
     const boss = interpolateBossPosition(from.snap.boss, base.boss, alpha);
 
     // 拼成 GameState 形状：塞入解析后的 level、dummy rng 与空 events（渲染层均不读取后二者）。
-    return { ...base, level, rng: this.dummyRng, events: [], tanks, bullets, boss };
+    const escort = base.escort && from.snap.escort
+      ? {
+          ...base.escort,
+          x: lerp(from.snap.escort.x, base.escort.x, alpha),
+          y: lerp(from.snap.escort.y, base.escort.y, alpha),
+        }
+      : base.escort;
+    return { ...base, level, rng: this.dummyRng, events: [], tanks, bullets, boss, escort };
   }
 
   private drawDisconnectOverlay(): void {

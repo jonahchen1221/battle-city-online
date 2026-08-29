@@ -25,6 +25,7 @@ test('a bullet passes through destroyed brick quarters without erasing surviving
     fromEnemy: false,
     attacksEagle: true,
     alive: true,
+    viewportBounds: null,
     steelPiercing: false,
   };
   const explosions: Parameters<typeof advanceBullets>[2] = [];

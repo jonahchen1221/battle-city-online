@@ -2,8 +2,6 @@ import { Direction, InputState } from '../core/types';
 import {
   SUBTILE,
   TANK_SIZE,
-  FIELD_WIDTH,
-  FIELD_HEIGHT,
   PLAYER_SPEED,
   PLAYER_SPAWN_POINTS,
   BULLET_SPEED,
@@ -21,6 +19,7 @@ import {
   PLAYER_INVULN_TICKS,
   ICE_SLIDE_TICKS,
   BOOTS_SPEED_MULT,
+  ESCORT_SIZE,
 } from '../core/constants';
 import {
   Cell,
@@ -44,7 +43,7 @@ export type TankKind = 'player' | EnemyKind;
 export type WeaponKind = 'cannon' | 'spread' | 'spiral' | 'laser' | 'machine';
 
 // 坦克实体：纯数据、可序列化（无函数/类实例）。设计为敌我复用，靠 kind 区分。
-// x/y 为 16×16 包围盒左上角的战场相对像素坐标（0..FIELD_WIDTH-16 / 0..FIELD_HEIGHT-16）。
+// x/y 为 16×16 包围盒左上角的关卡世界相对像素坐标。
 export interface TankState {
   id: number;
   kind: TankKind;
@@ -59,6 +58,7 @@ export interface TankState {
   alive: boolean;
   hp: number; // 剩余血量：常规 1，装甲 4；≤0 即毁
   aiTicks: number; // 敌方 AI 决策倒计时（玩家不使用，恒为 0）
+  escortFarTicks: number; // 护送关普通敌军落在车后且不在玩家视野内的连续帧数；其他情况恒为 0
   invulnTicks: number; // 护盾剩余帧：>0 时对方子弹穿过、不受伤
   level: number; // star 等级 0..3：影响弹速 / 双弹 / 破钢；死亡 / 复活归 0
   carriesPowerup: boolean; // 是否为“携带道具”的敌军（第 4/11/18 台出队者）：红色闪烁，死亡掉落道具
@@ -95,6 +95,7 @@ export function createPlayer(playerIndex: number, id: number): TankState {
     alive: true,
     hp: 1,
     aiTicks: 0,
+    escortFarTicks: 0,
     // 实体化即获无敌：开局直接入场、复活经出生闪光后入场，两条路径都从此值起算。
     invulnTicks: PLAYER_INVULN_TICKS,
     level: 0, // 复活即用 createPlayer 重建 → star 等级自然归 0
@@ -156,6 +157,7 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
     hp: enemyHp(kind),
     // 智能坦克出生后立即规划路径；传统敌人仍沿出生朝向行进半秒再做首次随机决策。
     aiTicks: kind === 'smart' ? 0 : AI_DECISION_MIN_TICKS,
+    escortFarTicks: 0,
     invulnTicks: 0, // 敌方无出生护盾，但可拾取 helmet 获得护盾
     level: 0,
     carriesPowerup: false, // 由出生器按出队计数标记（见 enemy.ts updateSpawner）
@@ -172,8 +174,6 @@ export function createEnemy(kind: TankKind, id: number, spawnIndex: number): Tan
 }
 
 const EPS = 1e-6;
-const MAX_X = FIELD_WIDTH - TANK_SIZE; // 192
-const MAX_Y = FIELD_HEIGHT - TANK_SIZE; // 192
 
 function isVertical(dir: Direction): boolean {
   return dir === 'up' || dir === 'down';
@@ -288,6 +288,21 @@ function tanksOverlap(ax: number, ay: number, bx: number, by: number): boolean {
   return ax < bx + TANK_SIZE && ax + TANK_SIZE > bx && ay < by + TANK_SIZE && ay + TANK_SIZE > by;
 }
 
+export interface TankBlocker {
+  x: number;
+  y: number;
+  destroyed?: boolean;
+}
+
+function blockerOverlap(x: number, y: number, blocker: TankBlocker): boolean {
+  return (
+    x < blocker.x + ESCORT_SIZE &&
+    x + TANK_SIZE > blocker.x &&
+    y < blocker.y + ESCORT_SIZE &&
+    y + TANK_SIZE > blocker.y
+  );
+}
+
 // 16×16 坦克盒能否完整占据候选位置。转向吸附会沿当前移动轴瞬移最多 4px，
 // 因而不能复用只检查“前沿一行/一列”的常规移动碰撞；这里检查完整盒与所有实心占位。
 export function canTankOccupy(
@@ -296,10 +311,14 @@ export function canTankOccupy(
   y: number,
   level: LevelState,
   others: TankState[],
+  blocker?: TankBlocker,
 ): boolean {
-  if (x < 0 || y < 0 || x > MAX_X || y > MAX_Y) return false;
+  const maxX = level.cols * SUBTILE - TANK_SIZE;
+  const maxY = level.rows * SUBTILE - TANK_SIZE;
+  if (x < 0 || y < 0 || x > maxX || y > maxY) return false;
   const solid = tankSolidTest(tank, level);
   if (terrainBlocksTankAt(level, x, y, solid)) return false;
+  if (blocker && !blocker.destroyed && blockerOverlap(x, y, blocker)) return false;
   for (const o of others) {
     if (o === tank || !o.alive) continue;
     if (tanksOverlap(x, y, o.x, o.y)) return false;
@@ -309,10 +328,17 @@ export function canTankOccupy(
 
 // 沿当前朝向尽量前进：先按地形紧贴边缘，再对其他坦克做实心夹紧（紧贴其外侧停下）。
 // others 为场上全部坦克（含自身与死者，内部跳过）；单轴移动，垂直轴坐标本帧不变。
-function moveTank(tank: TankState, level: LevelState, others: TankState[]): void {
+function moveTank(
+  tank: TankState,
+  level: LevelState,
+  others: TankState[],
+  blocker?: TankBlocker,
+): void {
   // boots 快靴：本帧步长按倍率放大（不改 tank.speed 基值，到期自然恢复）。
   const d = tank.speedBoostTicks > 0 ? tank.speed * BOOTS_SPEED_MULT : tank.speed;
   const solid = tankSolidTest(tank, level);
+  const maxX = level.cols * SUBTILE - TANK_SIZE;
+  const maxY = level.rows * SUBTILE - TANK_SIZE;
   const { x, y } = tank;
   switch (tank.dir) {
     case 'up': {
@@ -326,11 +352,14 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
         // 不得把当前坦克反向推出；朝重叠坦克移动时最多原地阻塞，绝不产生反向位移。
         if (o.y < y && tanksOverlap(x, ny, o.x, o.y)) ny = Math.max(ny, o.y + TANK_SIZE);
       }
+      if (blocker && !blocker.destroyed && blocker.y < y && blockerOverlap(x, ny, blocker)) {
+        ny = Math.max(ny, blocker.y + ESCORT_SIZE);
+      }
       tank.y = Math.max(0, Math.min(y, ny));
       break;
     }
     case 'down': {
-      const target = Math.min(MAX_Y, y + d);
+      const target = Math.min(maxY, y + d);
       let ny = furthestTerrainClear(y, target, (candidate) =>
         terrainBlocksTankAt(level, x, candidate, solid),
       );
@@ -338,7 +367,10 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
         if (o === tank || !o.alive) continue;
         if (o.y > y && tanksOverlap(x, ny, o.x, o.y)) ny = Math.min(ny, o.y - TANK_SIZE);
       }
-      tank.y = Math.min(MAX_Y, Math.max(y, ny));
+      if (blocker && !blocker.destroyed && blocker.y > y && blockerOverlap(x, ny, blocker)) {
+        ny = Math.min(ny, blocker.y - TANK_SIZE);
+      }
+      tank.y = Math.min(maxY, Math.max(y, ny));
       break;
     }
     case 'left': {
@@ -350,11 +382,14 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
         if (o === tank || !o.alive) continue;
         if (o.x < x && tanksOverlap(nx, y, o.x, o.y)) nx = Math.max(nx, o.x + TANK_SIZE);
       }
+      if (blocker && !blocker.destroyed && blocker.x < x && blockerOverlap(nx, y, blocker)) {
+        nx = Math.max(nx, blocker.x + ESCORT_SIZE);
+      }
       tank.x = Math.max(0, Math.min(x, nx));
       break;
     }
     case 'right': {
-      const target = Math.min(MAX_X, x + d);
+      const target = Math.min(maxX, x + d);
       let nx = furthestTerrainClear(x, target, (candidate) =>
         terrainBlocksTankAt(level, candidate, y, solid),
       );
@@ -362,7 +397,10 @@ function moveTank(tank: TankState, level: LevelState, others: TankState[]): void
         if (o === tank || !o.alive) continue;
         if (o.x > x && tanksOverlap(nx, y, o.x, o.y)) nx = Math.min(nx, o.x - TANK_SIZE);
       }
-      tank.x = Math.min(MAX_X, Math.max(x, nx));
+      if (blocker && !blocker.destroyed && blocker.x > x && blockerOverlap(nx, y, blocker)) {
+        nx = Math.min(nx, blocker.x - TANK_SIZE);
+      }
+      tank.x = Math.min(maxX, Math.max(x, nx));
       break;
     }
   }
@@ -376,17 +414,20 @@ export function turnTank(
   desired: Direction,
   level: LevelState,
   tanks: TankState[],
+  blocker?: TankBlocker,
 ): void {
   if (desired === tank.dir) return;
   if (isVertical(tank.dir) !== isVertical(desired)) {
     let nx = tank.x;
     let ny = tank.y;
+    const maxX = level.cols * SUBTILE - TANK_SIZE;
+    const maxY = level.rows * SUBTILE - TANK_SIZE;
     if (isVertical(tank.dir)) {
-      ny = Math.min(MAX_Y, Math.max(0, snapAxis(tank.y)));
+      ny = Math.min(maxY, Math.max(0, snapAxis(tank.y)));
     } else {
-      nx = Math.min(MAX_X, Math.max(0, snapAxis(tank.x)));
+      nx = Math.min(maxX, Math.max(0, snapAxis(tank.x)));
     }
-    if (canTankOccupy(tank, nx, ny, level, tanks)) {
+    if (canTankOccupy(tank, nx, ny, level, tanks, blocker)) {
       tank.x = nx;
       tank.y = ny;
     }
@@ -408,6 +449,7 @@ export function applyInput(
   input: InputState,
   level: LevelState,
   tanks: TankState[],
+  blocker?: TankBlocker,
 ): void {
   const desired = desiredDir(input);
   if (desired === null) {
@@ -416,7 +458,7 @@ export function applyInput(
     if (tank.slideTicks > 0 && centerOnIce(tank, level)) {
       const px = tank.x;
       const py = tank.y;
-      moveTank(tank, level, tanks); // 沿当前朝向按自身速度滑行一步（含地形/坦克碰撞夹紧）
+      moveTank(tank, level, tanks, blocker); // 沿当前朝向按自身速度滑行一步（含地形/坦克碰撞夹紧）
       const blocked = tank.x === px && tank.y === py;
       tank.slideTicks--;
       if (blocked) tank.slideTicks = 0;
@@ -429,8 +471,8 @@ export function applyInput(
   }
 
   tank.moving = true;
-  turnTank(tank, desired, level, tanks); // 转向必然生效（吸附不可用时原地转车头）
-  moveTank(tank, level, tanks);
+  turnTank(tank, desired, level, tanks, blocker); // 转向必然生效（吸附不可用时原地转车头）
+  moveTank(tank, level, tanks, blocker);
   // 移动后：中心若在冰面则装填滑行计时（松键后可继续滑行），离开冰面则清零。
   tank.slideTicks = centerOnIce(tank, level) ? ICE_SLIDE_TICKS : 0;
 }

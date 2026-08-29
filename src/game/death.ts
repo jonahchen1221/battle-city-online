@@ -6,6 +6,7 @@ import {
 } from '../core/constants';
 import { createPlayer, type TankState } from './tank';
 import type { GameState } from './state';
+import { escortPlayerSpawn } from './escort';
 
 // 大爆炸：32×32，居中于 16×16 坦克。
 export function pushBigExplosion(state: GameState, tank: TankState): void {
@@ -37,7 +38,11 @@ export function onPlayerKilled(state: GameState, tank: TankState): void {
   }
 
   if (state.livesByPlayer[idx] > 0) {
-    state.spawning.push({ tank: createPlayer(idx, tank.id), ticksLeft: SPAWN_FLASH_TICKS });
+    const revived = createPlayer(idx, tank.id);
+    const spawn = escortPlayerSpawn(state.escort, idx, state.level);
+    revived.x = spawn.x;
+    revived.y = spawn.y;
+    state.spawning.push({ tank: revived, ticksLeft: SPAWN_FLASH_TICKS });
   }
 }
 

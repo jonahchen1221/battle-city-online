@@ -68,6 +68,7 @@ function playerBulletOnBoss(id: number, kind: BulletState['kind']): BulletState 
     fromEnemy: false,
     attacksEagle: true,
     alive: true,
+    viewportBounds: null,
     steelPiercing: false,
   };
 }
@@ -81,25 +82,26 @@ function enemiesOnField(state: GameState): number {
 
 // ── 关卡序列 ──
 
-test('12 关循环：第 6 / 12 关为 Boss 关，通关第 12 关回到第 1 关', () => {
+test('12 关循环：第 6 / 12 关为 Boss 关，通关第 12 关回到移动第 1 关', () => {
   assert.equal(STAGE_COUNT, 12);
-  assert.deepEqual([...BOSS_STAGES], [1, 6, 12]);
+  assert.deepEqual([...BOSS_STAGES], [6, 12]);
   for (let stage = 1; stage <= STAGE_COUNT; stage++) {
     assert.equal(
       isBossStage(stage),
-      stage === 1 || stage === 6 || stage === 12,
+      stage === 6 || stage === 12,
       `第 ${stage} 关 isBossStage`,
     );
   }
-  // 回卷关号同样归一：第 13 关 = 第 1 关（Boss），第 18 关 = 第 6 关（Boss）。
-  assert.equal(isBossStage(13), true);
+  // 回卷关号同样归一：第 13 关 = 第 1 关（移动），第 18 关 = 第 6 关（Boss）。
+  assert.equal(isBossStage(13), false);
   assert.equal(isBossStage(18), true);
 
   const state = createGameState(1, 1, STAGE_COUNT);
   assert.ok(state.boss, '第 12 关应有 Boss');
   nextStage(state);
   assert.equal(state.stage, 1);
-  assert.ok(state.boss, '第 1 关现在也是 Boss 关，回卷后应重新生成 Boss');
+  assert.equal(state.boss, null, '第 1 关是移动护送关，回卷后不应生成 Boss');
+  assert.ok(state.escort, '回卷后应生成移动护送目标');
 });
 
 test('Boss 竞技场：无鹰巢、Boss 空域留空、玩家出生位是空地', () => {
