@@ -7,7 +7,6 @@
 
 import {
   createGameState,
-  resetGameState,
   GameState,
   GameEvent,
   PowerupPickupEvent,
@@ -64,7 +63,14 @@ import {
   powerupTickerText,
 } from './ui';
 
-export type ScreenName = 'title' | 'createRoom' | 'joinCode' | 'lobby' | 'localGame' | 'netGame';
+export type ScreenName =
+  | 'title'
+  | 'singleStage'
+  | 'createRoom'
+  | 'joinCode'
+  | 'lobby'
+  | 'localGame'
+  | 'netGame';
 
 // 标题菜单项。局域网（本机 / 私网 IP / .local）额外露出 LOCAL GAME，点进去即加入固定房间。
 type TitleItem = 'NAME' | '1 PLAYER' | 'LOCAL GAME' | 'CREATE ROOM' | 'JOIN ROOM';
@@ -166,6 +172,10 @@ export class App {
   private playerName = DEFAULT_PLAYER_NAME;
   private nameBuffer = DEFAULT_PLAYER_NAME;
   private nameEditing = false;
+
+  // ── 单人开局配置 ──
+  private singleStartingStage = 1;
+  private singleStageBuffer = '';
 
   // ── 建房配置 ──
   private createStartingStage = 1;
@@ -352,6 +362,12 @@ export class App {
         if (pad.down) this.moveTitleSel(1);
         if (pad.confirm || pad.start) this.confirmTitle();
         break;
+      case 'singleStage':
+        if (pad.back) this.cancelSingleStage();
+        else if (pad.left || pad.down) this.adjustSingleStage(-1);
+        else if (pad.right || pad.up) this.adjustSingleStage(1);
+        else if (pad.confirm || pad.start) this.submitSingleGame();
+        break;
       case 'createRoom':
         if (pad.back) this.cancelCreateRoom();
         else if (pad.left || pad.down) this.adjustCreateStage(-1);
@@ -377,6 +393,9 @@ export class App {
     switch (this.screen) {
       case 'title':
         this.drawTitle();
+        break;
+      case 'singleStage':
+        this.drawSingleStage();
         break;
       case 'createRoom':
         this.drawCreateRoom();
@@ -681,20 +700,29 @@ export class App {
     // 仅菜单画面响应，避免与游戏 Keyboard 抢键。
     if (
       this.screen !== 'title' &&
+      this.screen !== 'singleStage' &&
       this.screen !== 'createRoom' &&
       this.screen !== 'joinCode' &&
       this.screen !== 'lobby'
     ) return;
-    // 建房配置和 LOCAL 大厅的关卡选择允许按住方向键连续调整；其余菜单严格按边沿触发。
+    // 单人/建房配置和 LOCAL 大厅的关卡选择允许按住方向键连续调整；其余菜单严格按边沿触发。
     const localStageRepeat =
       this.screen === 'lobby' &&
       isLocalRoomCode(this.roomCode) &&
       ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'].includes(e.code);
-    if (e.repeat && this.screen !== 'createRoom' && !localStageRepeat) return;
+    if (
+      e.repeat &&
+      this.screen !== 'singleStage' &&
+      this.screen !== 'createRoom' &&
+      !localStageRepeat
+    ) return;
 
     switch (this.screen) {
       case 'title':
         this.onTitleKey(e);
+        break;
+      case 'singleStage':
+        this.onSingleStageKey(e);
         break;
       case 'createRoom':
         this.onCreateRoomKey(e);
@@ -746,11 +774,9 @@ export class App {
         this.statusMsg = '';
         break;
       case '1 PLAYER':
-        // 1 PLAYER：全新本地单机局。设 prevStart=true，避免刚按下的 Enter 被当作暂停边沿。
-        resetGameState(this.localState, (Date.now() >>> 0) || 20260708);
-        this.localState.prevStart = true;
-        this.clearPowerupTicker();
-        this.screen = 'localGame';
+        this.singleStageBuffer = '';
+        this.statusMsg = '';
+        this.screen = 'singleStage';
         break;
       case 'LOCAL GAME':
         this.joinLocalGame();
@@ -814,6 +840,105 @@ export class App {
     const saved = savePlayerName(name);
     this.statusMsg = saved ? 'NAME SAVED' : '';
     this.statusError = saved ? '' : 'STORAGE UNAVAILABLE';
+  }
+
+  private onSingleStageKey(e: KeyboardEvent): void {
+    if (e.code === 'Escape' && !e.repeat) {
+      e.preventDefault();
+      this.cancelSingleStage();
+      return;
+    }
+    if (e.code === 'Enter' && !e.repeat) {
+      e.preventDefault();
+      this.submitSingleGame();
+      return;
+    }
+    if (e.code === 'Backspace' && !e.repeat) {
+      e.preventDefault();
+      this.singleStageBuffer = this.singleStageBuffer.slice(0, -1);
+      this.statusError = '';
+      return;
+    }
+
+    let delta = 0;
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowDown') delta = -1;
+    if (e.code === 'ArrowRight' || e.code === 'ArrowUp') delta = 1;
+    if (e.code === 'PageDown') delta = -5;
+    if (e.code === 'PageUp') delta = 5;
+    if (delta !== 0) {
+      e.preventDefault();
+      this.adjustSingleStage(delta);
+      return;
+    }
+    if (e.code === 'Home') {
+      e.preventDefault();
+      this.setSingleStage(1);
+      return;
+    }
+    if (e.code === 'End') {
+      e.preventDefault();
+      this.setSingleStage(STAGE_COUNT);
+      return;
+    }
+
+    const digit = /^(?:Digit|Numpad)([0-9])$/.exec(e.code)?.[1];
+    if (!digit || e.repeat) return;
+    e.preventDefault();
+    const next = this.singleStageBuffer.length < 2 ? this.singleStageBuffer + digit : digit;
+    this.singleStageBuffer = next;
+    const stage = this.singleStageValue();
+    if (stage === null) {
+      this.statusError = `STAGE 1 TO ${STAGE_COUNT}`;
+    } else {
+      this.singleStartingStage = stage;
+      this.statusError = '';
+    }
+  }
+
+  private singleStageValue(): number | null {
+    if (!this.singleStageBuffer) return this.singleStartingStage;
+    const stage = Number(this.singleStageBuffer);
+    return Number.isInteger(stage) && stage >= 1 && stage <= STAGE_COUNT ? stage : null;
+  }
+
+  private setSingleStage(stage: number): void {
+    this.singleStartingStage = stage;
+    this.singleStageBuffer = '';
+    this.statusError = '';
+  }
+
+  private adjustSingleStage(delta: number): void {
+    const current = this.singleStageValue() ?? this.singleStartingStage;
+    const stage = ((current - 1 + delta) % STAGE_COUNT + STAGE_COUNT) % STAGE_COUNT + 1;
+    this.setSingleStage(stage);
+  }
+
+  private cancelSingleStage(): void {
+    this.singleStageBuffer = '';
+    this.statusMsg = '';
+    this.statusError = '';
+    this.screen = 'title';
+  }
+
+  private submitSingleGame(): void {
+    const stage = this.singleStageValue();
+    if (stage === null) {
+      this.statusError = `STAGE 1 TO ${STAGE_COUNT}`;
+      return;
+    }
+
+    this.singleStartingStage = stage;
+    this.singleStageBuffer = '';
+    const nextLevelEpoch = this.localState.levelEpoch + 1;
+    const fresh = createGameState((Date.now() >>> 0) || 20260708, 1, stage);
+    fresh.levelEpoch = nextLevelEpoch;
+    Object.assign(this.localState, fresh);
+    // 避免打开选择页和确认开局的 Enter 被游戏层当成结算用的 start 按键沿。
+    this.localState.prevStart = true;
+    this.clearPowerupTicker();
+    this.statusMsg = '';
+    this.statusError = '';
+    this.screen = 'localGame';
   }
 
   private onCreateRoomKey(e: KeyboardEvent): void {
@@ -1171,18 +1296,43 @@ export class App {
 
   // ───────────────────────── 绘制：建房配置 ─────────────────────────
 
+  private drawSingleStage(): void {
+    this.drawStageSelect(
+      '1 PLAYER',
+      this.singleStageBuffer,
+      this.singleStartingStage,
+      this.singleStageValue(),
+      'ENTER START   ESC CANCEL',
+    );
+  }
+
   private drawCreateRoom(): void {
+    this.drawStageSelect(
+      'CREATE ROOM',
+      this.createStageBuffer,
+      this.createStartingStage,
+      this.createStageValue(),
+      'ENTER CREATE   ESC CANCEL',
+    );
+  }
+
+  private drawStageSelect(
+    title: string,
+    stageBuffer: string,
+    startingStage: number,
+    stage: number | null,
+    confirmHint: string,
+  ): void {
     const { ctx } = this;
     const atlas = this.renderer.spriteAtlas;
     clearScreen(ctx);
     const cx = NATIVE_WIDTH / 2;
 
-    drawLogoTextCentered(ctx, atlas, 'CREATE ROOM', cx, 28, 3, COLOR_TITLE);
+    drawLogoTextCentered(ctx, atlas, title, cx, 28, 3, COLOR_TITLE);
     drawTextCentered(ctx, atlas, 'SELECT STARTING STAGE', cx, 78, COLOR_MENU);
     drawPixelPanel(ctx, cx - 72, 97, 144, 62);
 
-    const stage = this.createStageValue();
-    const display = this.createStageBuffer || String(this.createStartingStage);
+    const display = stageBuffer || String(startingStage);
     drawBigTextCentered(ctx, atlas, '<', cx - 48, 113, 2, COLOR_MENU_DIM);
     drawBigTextCentered(
       ctx,
@@ -1199,7 +1349,7 @@ export class App {
       drawTextCentered(ctx, atlas, STAGE_KIND_TEXT[stageKind(stage)], cx, 170, COLOR_OK);
     }
     drawTextCentered(ctx, atlas, `ARROWS CHANGE   TYPE 1 TO ${STAGE_COUNT}`, cx, 194, COLOR_MENU_DIM);
-    drawTextCentered(ctx, atlas, 'ENTER CREATE   ESC CANCEL', cx, 210, COLOR_MENU_DIM);
+    drawTextCentered(ctx, atlas, confirmHint, cx, 210, COLOR_MENU_DIM);
     this.drawStatusLines(227);
   }
 

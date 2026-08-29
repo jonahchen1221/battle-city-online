@@ -192,6 +192,10 @@ export const SMART_AI_BRICK_COST = 6;
 export const SMART_AI_DODGE_LOOKAHEAD_TICKS = 36;
 // 刚移出弹道后继续侧移片刻，避免 A* 立即把坦克拉回尚未通过的炮弹前。
 export const SMART_AI_DODGE_COMMIT_TICKS = 8;
+// 提前量射击：按玩家当前朝向 / 移动状态向前推演，覆盖转向前摇与中距离弹道飞行时间。
+export const SMART_AI_LEAD_LOOKAHEAD_TICKS = 72;
+// 未出膛枪线感知沿用较短窗口：只规避玩家已经架好的近期威胁，不读取输入或做超远程读心。
+export const SMART_AI_READY_GUN_LOOKAHEAD_TICKS = 36;
 // 智能坦克围绕目标搜索射击位的距离带：保持中距离，避免只会贴脸追踪。
 export const SMART_AI_FIRING_MIN_DISTANCE = 48;
 export const SMART_AI_FIRING_IDEAL_DISTANCE = 80;
@@ -201,6 +205,11 @@ export const SMART_AI_FIRING_DISTANCE_STEP = 16;
 export const SMART_AI_FLANK_SIDE_COST = 16;
 // 候选射线上有砖时降低优先级：可清障，但优先抢占已经打通的火力线。
 export const SMART_AI_FIRING_BRICK_PENALTY = 12;
+// 多 AI 协同：相近玩家间按当前已分配人数均衡兵力；同一目标则预约不同侧翼与射击位。
+// 目标分流使用平方距离，因此惩罚量也是 px²；64px 的额外路程仍允许明显更近的目标被集火。
+export const SMART_AI_TARGET_LOAD_PENALTY = 64 * 64;
+export const SMART_AI_RESERVED_GOAL_RADIUS = TANK_SIZE * 2;
+export const SMART_AI_SAME_FLANK_PENALTY = SMART_AI_FLANK_SIDE_COST * 2;
 // 关卡敌军总数（单一可调常量；暂不随人数变化）。各档 STAGE_ENEMY_MIX 之和均等于此值。
 // Boss 关不走有限队列（编成为空），故不受此值约束。
 export const STAGE_ENEMY_TOTAL = 20;

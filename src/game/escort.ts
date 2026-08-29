@@ -49,6 +49,10 @@ export interface EscortGuardSlot {
   height: number;
 }
 
+// 不同护送地图采用不同的敌军投入方向。方向以车辆当前朝向为基准，因而在转弯后会随车队
+// 一起旋转；这样既能制造稳定的侧翼/夹击节奏，又不会把出生点留在已经驶过的地图远端。
+export type EscortSpawnApproach = 'front' | 'left' | 'right' | 'rear';
+
 // 以完整折线路程为分母，计算车辆已实际行驶的比例；停驶不会推进，转弯后累计前序路段。
 export function escortProgress(escort: EscortState): number {
   if (escort.route.length < 2) return 1;
@@ -277,12 +281,133 @@ export const ESCORT_ROUTES: ReadonlyArray<ReadonlyArray<EscortWaypoint>> = [
 ];
 
 // 第 e 次护送（e = 组号 stageGroup）直接取第 e 条路线；取模仅为越界关号提供安全回卷。
-function escortVariant(stage: number): number {
+export function escortVariantForStage(stage: number): number {
   return (stageGroup(stage) - 1) % ESCORT_ROUTES.length;
 }
 
 export function escortRouteForStage(stage: number): EscortWaypoint[] {
-  return ESCORT_ROUTES[escortVariant(stage)].map((point) => ({ ...point }));
+  return ESCORT_ROUTES[escortVariantForStage(stage)].map((point) => ({ ...point }));
+}
+
+type EscortGuardSide = 'left' | 'right' | 'both';
+
+interface EscortGuardBandSpec {
+  segment: number;
+  cell: typeof Cell.ICE | typeof Cell.TREES;
+  side?: EscortGuardSide;
+}
+
+interface EscortRoadblockSpec {
+  segment: number;
+  fraction: number;
+}
+
+interface EscortMapProfile {
+  guardBands: ReadonlyArray<EscortGuardBandSpec>;
+  roadblockRects?: ReadonlyArray<readonly [number, number, number, number]>;
+  roadblocks?: ReadonlyArray<EscortRoadblockSpec>;
+  spawnApproaches: ReadonlyArray<EscortSpawnApproach>;
+}
+
+// 路线形状之外，每张图再拥有一项会直接影响贴车玩法的主特征：冰面护卫带、树林伏击带、
+// 不同数量的城门，以及固定的进攻方向序列。路障数量刻意从 0 到 4 不等，打破原先每图
+// 都是“两堵砖墙”的相同推进节奏。
+const ESCORT_MAP_PROFILES: ReadonlyArray<EscortMapProfile> = [
+  // 1 桥头争夺：三次过桥、三次短暂停车，正面压力为主。
+  {
+    guardBands: [],
+    roadblockRects: [[37, 62, 6, 2], [37, 31, 6, 2], [37, 10, 6, 2]],
+    spawnApproaches: ['front'],
+  },
+  // 2 运河折返：横穿运河时树林遮挡护卫视野，敌军左右交替夹击。
+  {
+    guardBands: [
+      { segment: 1, cell: Cell.TREES },
+      { segment: 3, cell: Cell.TREES },
+    ],
+    roadblockRects: [[37, 73, 6, 2], [29, 64, 2, 6]],
+    spawnApproaches: ['left', 'right'],
+  },
+  // 3 冰原交火：全程护卫位结冰、没有强制停车，难点从清障改为控车。
+  {
+    guardBands: [0, 1, 2, 3, 4].map((segment) => ({ segment, cell: Cell.ICE })),
+    spawnApproaches: ['left', 'front', 'right'],
+  },
+  // 4 双河堡垒：桥头左右轮番出兵，多人局自然形成两翼分工。
+  {
+    guardBands: [],
+    roadblockRects: [[57, 76, 6, 2], [43, 69, 2, 6]],
+    spawnApproaches: ['left', 'right'],
+  },
+  // 5 分段要塞：四道城门把长路线切成四次攻坚。
+  {
+    guardBands: [],
+    roadblocks: [
+      { segment: 0, fraction: 0.5 },
+      { segment: 2, fraction: 0.5 },
+      { segment: 4, fraction: 0.5 },
+      { segment: 6, fraction: 0.5 },
+    ],
+    spawnApproaches: ['front'],
+  },
+  // 6 终局回廊：不设路障，侧翼压力迫使玩家在贴车和穿中庭抢先清场之间选择。
+  {
+    guardBands: [
+      { segment: 2, cell: Cell.TREES, side: 'left' },
+      { segment: 4, cell: Cell.TREES, side: 'right' },
+    ],
+    spawnApproaches: ['left', 'right', 'front'],
+  },
+  // 7 蛇形峡谷：每次横切时遮蔽侧翻转，保持连续行驶、不靠路障制造难度。
+  {
+    guardBands: [
+      { segment: 1, cell: Cell.TREES, side: 'left' },
+      { segment: 3, cell: Cell.TREES, side: 'right' },
+      { segment: 5, cell: Cell.TREES, side: 'left' },
+      { segment: 7, cell: Cell.TREES, side: 'right' },
+    ],
+    spawnApproaches: ['left', 'left', 'right', 'right'],
+  },
+  // 8 群岛船坞：三座码头门，敌人守在前方；玩家可用本关固定提供的船走水路包抄。
+  {
+    guardBands: [],
+    roadblocks: [
+      { segment: 0, fraction: 0.33 },
+      { segment: 2, fraction: 0.5 },
+      { segment: 4, fraction: 0.5 },
+    ],
+    spawnApproaches: ['front'],
+  },
+  // 9 风暴棋盘：冰面与树林沿路线逐段交替，只保留一道中盘路障。
+  {
+    guardBands: [
+      ...[0, 2, 4, 6, 8].map((segment) => ({ segment, cell: Cell.ICE }) as const),
+      ...[1, 3, 5, 7, 9].map((segment) => ({ segment, cell: Cell.TREES }) as const),
+    ],
+    roadblocks: [{ segment: 5, fraction: 0.5 }],
+    spawnApproaches: ['left', 'front', 'right'],
+  },
+  // 10 回钩堡垒：三道内环城门，投入序列含车后增援，折返时形成真正的前后夹击。
+  {
+    guardBands: [
+      { segment: 3, cell: Cell.TREES },
+      { segment: 5, cell: Cell.ICE },
+    ],
+    roadblocks: [
+      { segment: 1, fraction: 0.5 },
+      { segment: 4, fraction: 0.5 },
+      { segment: 7, fraction: 0.5 },
+    ],
+    spawnApproaches: ['front', 'rear', 'left', 'right'],
+  },
+];
+
+export function escortSpawnApproachForStage(
+  stage: number,
+  spawnOrdinal: number,
+): EscortSpawnApproach {
+  const pattern = ESCORT_MAP_PROFILES[escortVariantForStage(stage)].spawnApproaches;
+  return pattern[Math.max(0, spawnOrdinal) % pattern.length];
 }
 
 function routeDirection(from: EscortWaypoint, to: EscortWaypoint): Direction {
@@ -325,6 +450,82 @@ function carveRoute(level: LevelState, route: ReadonlyArray<EscortWaypoint>): vo
   }
 }
 
+function fillPixelRect(
+  level: LevelState,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  cell: CellType,
+): void {
+  fillRect(
+    level,
+    Math.floor(x / SUBTILE),
+    Math.floor(y / SUBTILE),
+    Math.ceil(width / SUBTILE),
+    Math.ceil(height / SUBTILE),
+    cell,
+  );
+}
+
+// carveRoute 先保证车体和护卫位都不会被实心地形卡死；随后只把可通行的冰/树林重新铺回
+// 护卫带。车辆本身无冰面滑行状态，玩家贴车时却会真实受到滑行或视线遮挡影响。
+function paintGuardBand(
+  level: LevelState,
+  route: ReadonlyArray<EscortWaypoint>,
+  spec: EscortGuardBandSpec,
+): void {
+  const a = route[spec.segment];
+  const b = route[spec.segment + 1];
+  if (!a || !b) return;
+  const dir = routeDirection(a, b);
+  const side = spec.side ?? 'both';
+  let leftRect: readonly [number, number, number, number];
+  let rightRect: readonly [number, number, number, number];
+
+  if (dir === 'up' || dir === 'down') {
+    const top = Math.min(a.y, b.y);
+    const height = Math.abs(a.y - b.y) + ESCORT_SIZE;
+    const west = [a.x - TANK_SIZE, top, TANK_SIZE, height] as const;
+    const east = [a.x + ESCORT_SIZE, top, TANK_SIZE, height] as const;
+    leftRect = dir === 'up' ? west : east;
+    rightRect = dir === 'up' ? east : west;
+  } else {
+    const left = Math.min(a.x, b.x);
+    const width = Math.abs(a.x - b.x) + ESCORT_SIZE;
+    const north = [left, a.y - TANK_SIZE, width, TANK_SIZE] as const;
+    const south = [left, a.y + ESCORT_SIZE, width, TANK_SIZE] as const;
+    leftRect = dir === 'left' ? south : north;
+    rightRect = dir === 'left' ? north : south;
+  }
+
+  if (side === 'left' || side === 'both') fillPixelRect(level, ...leftRect, spec.cell);
+  if (side === 'right' || side === 'both') fillPixelRect(level, ...rightRect, spec.cell);
+}
+
+function putRouteRoadblock(
+  level: LevelState,
+  route: ReadonlyArray<EscortWaypoint>,
+  spec: EscortRoadblockSpec,
+): void {
+  const a = route[spec.segment];
+  const b = route[spec.segment + 1];
+  if (!a || !b) return;
+  const fraction = Math.max(0.1, Math.min(0.9, spec.fraction));
+  if (a.x === b.x) {
+    const y = Math.round((a.y + (b.y - a.y) * fraction) / SUBTILE) * SUBTILE;
+    fillPixelRect(level, a.x - SUBTILE, y, ESCORT_SIZE + SUBTILE * 2, SUBTILE * 2, Cell.BRICK);
+  } else {
+    const x = Math.round((a.x + (b.x - a.x) * fraction) / SUBTILE) * SUBTILE;
+    fillPixelRect(level, x, a.y - SUBTILE, SUBTILE * 2, ESCORT_SIZE + SUBTILE * 2, Cell.BRICK);
+  }
+}
+
+export function escortRoadblockCountForStage(stage: number): number {
+  const profile = ESCORT_MAP_PROFILES[escortVariantForStage(stage)];
+  return (profile.roadblockRects?.length ?? 0) + (profile.roadblocks?.length ?? 0);
+}
+
 // 十套 80×90 子格移动地图。先布置各自地貌，再沿对应折线路线开出护送走廊。
 export function createEscortLevel(stage = 1): LevelState {
   const size = ESCORT_FIELD_COLS * ESCORT_FIELD_ROWS;
@@ -336,7 +537,7 @@ export function createEscortLevel(stage = 1): LevelState {
     rev: 0,
   };
 
-  const variant = escortVariant(stage);
+  const variant = escortVariantForStage(stage);
   const route = escortRouteForStage(stage);
   switch (variant) {
     case 0:
@@ -540,22 +741,12 @@ export function createEscortLevel(stage = 1): LevelState {
 
   carveRoute(level, route);
 
-  // 每张图两道可被玩家清除的路线障碍；位置随路线变化。
-  const roadblocks: ReadonlyArray<ReadonlyArray<[number, number, number, number]>> = [
-    [[37, 62, 6, 2], [37, 31, 6, 2]],
-    [[37, 73, 6, 2], [29, 64, 2, 6]],
-    [[17, 70, 6, 2], [37, 59, 2, 6]],
-    [[57, 76, 6, 2], [43, 69, 2, 6]],
-    [[37, 77, 6, 2], [24, 72, 2, 6]],
-    [[37, 79, 6, 2], [60, 62, 2, 6]],
-    [[49, 49, 6, 2], [44, 27, 2, 6]],
-    [[17, 70, 6, 2], [40, 35, 2, 6]],
-    [[59, 72, 6, 2], [31, 45, 2, 6]],
-    [[21, 47, 6, 2], [53, 38, 6, 2]],
-  ];
-  for (const [col, row, width, height] of roadblocks[variant]) {
+  const profile = ESCORT_MAP_PROFILES[variant];
+  for (const band of profile.guardBands) paintGuardBand(level, route, band);
+  for (const [col, row, width, height] of profile.roadblockRects ?? []) {
     fillRect(level, col, row, width, height, Cell.BRICK);
   }
+  for (const roadblock of profile.roadblocks ?? []) putRouteRoadblock(level, route, roadblock);
 
   // 地形生成后再次保证四名玩家的固定初始/复活点为 2×2 空地；车辆起始走廊由 carveRoute 保证。
   const start = route[0];

@@ -32,6 +32,7 @@ import {
   createEscortLevel,
   createEscortState,
   escortPlayerSpawn,
+  escortVariantForStage,
   type EscortState,
 } from './escort';
 
@@ -211,6 +212,18 @@ export function createStageEnemyQueue(stage: number): TankKind[] {
   return createStageQueue(stage);
 }
 
+function prioritizeEscortNeutralQueue(queue: PowerupKind[], stage: number): void {
+  const wrench = queue.indexOf('wrench');
+  if (wrench > 0) [queue[0], queue[wrench]] = [queue[wrench], queue[0]];
+
+  // 群岛船坞的核心分流是“守桥或驾船走水路”；确保第二枚中立道具就是船，让这条支线
+  // 稳定出现而不依赖洗牌。首枚扳手仍保留护送关统一的倒计时容错。
+  if (escortVariantForStage(stage) === 7) {
+    const boat = queue.indexOf('boat');
+    if (boat > 1) [queue[1], queue[boat]] = [queue[boat], queue[1]];
+  }
+}
+
 // 建立一局全新游戏。stage 为 1-based 关号（默认第 1 关），载入对应关卡地形与出生队列。
 // 开局即进入 'stagestart' 幕布（模拟冻结，STAGE_START_TICKS 帧后自动转 playing），并发一次 stageStart 事件。
 export function createGameState(seed: number, playerCount = 1, stage = 1): GameState {
@@ -252,8 +265,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   const neutralQueue = shuffledNeutralQueue(rng, bossStage, levelHasWater(level));
   // 护送关首枚中立道具固定为扳手，让玩家在 10 秒后稳定获得一次倒计时奖励。
   if (escort) {
-    const wrench = neutralQueue.indexOf('wrench');
-    if (wrench > 0) [neutralQueue[0], neutralQueue[wrench]] = [neutralQueue[wrench], neutralQueue[0]];
+    prioritizeEscortNeutralQueue(neutralQueue, stage);
   }
   const state: GameState = {
     tick: 0,
@@ -400,11 +412,7 @@ export function nextStage(state: GameState): void {
     levelHasWater(state.level),
   );
   if (state.escort) {
-    const wrench = state.neutralQueue.indexOf('wrench');
-    if (wrench > 0) {
-      [state.neutralQueue[0], state.neutralQueue[wrench]] =
-        [state.neutralQueue[wrench], state.neutralQueue[0]];
-    }
+    prioritizeEscortNeutralQueue(state.neutralQueue, nextStageNum);
   }
   state.neutralTimer = NEUTRAL_POWERUP_FIRST_TICKS;
   state.enemiesDequeued = 0;

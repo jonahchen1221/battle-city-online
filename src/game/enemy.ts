@@ -26,19 +26,23 @@ import {
   SMART_AI_REPLAN_TICKS,
   SMART_AI_STUCK_TICKS,
   SMART_AI_ESCAPE_TICKS,
+  SMART_AI_TURN_FIRE_DELAY_TICKS,
   SMART_AI_FIRE_COOLDOWN_TICKS,
   SMART_AI_BRICK_COST,
   SMART_AI_DODGE_LOOKAHEAD_TICKS,
   SMART_AI_DODGE_COMMIT_TICKS,
+  SMART_AI_LEAD_LOOKAHEAD_TICKS,
+  SMART_AI_READY_GUN_LOOKAHEAD_TICKS,
   SMART_AI_FIRING_MIN_DISTANCE,
   SMART_AI_FIRING_IDEAL_DISTANCE,
   SMART_AI_FIRING_MAX_DISTANCE,
   SMART_AI_FIRING_DISTANCE_STEP,
   SMART_AI_FLANK_SIDE_COST,
   SMART_AI_FIRING_BRICK_PENALTY,
+  SMART_AI_TARGET_LOAD_PENALTY,
+  SMART_AI_RESERVED_GOAL_RADIUS,
+  SMART_AI_SAME_FLANK_PENALTY,
   SMART_POWERUP_SEEK_RADIUS,
-  SPIRAL_RADIUS,
-  SPIRAL_PERIOD_TICKS,
   bossMinionsOnField,
   BOSS_MINION_INTERVAL_TICKS,
   BOSS_MINION_CARRIER_EVERY,
@@ -59,6 +63,8 @@ import {
   liveBulletCount,
   maxBulletsFor,
   spawnWeaponBullets,
+  bulletHitRect,
+  spiralBlastRect,
   type BulletState,
 } from './bullet';
 import {
@@ -68,7 +74,11 @@ import {
 } from './powerup';
 import { collisionTanks } from './boss';
 import { createStageEnemyQueue, type GameState } from './state';
-import type { EscortState } from './escort';
+import {
+  escortSpawnApproachForStage,
+  type EscortSpawnApproach,
+  type EscortState,
+} from './escort';
 
 // 敌方 AI + 生成器。纯逻辑：一切随机取自 state.rng，可复现。
 
@@ -267,6 +277,7 @@ interface PredictedBulletFrame {
   tick: number;
   x: number;
   y: number;
+  blast: boolean;
 }
 
 interface SmartBulletThreat {
@@ -276,6 +287,7 @@ interface SmartBulletThreat {
 }
 
 interface PredictedBulletTrajectory {
+  bullet: BulletState;
   frames: PredictedBulletFrame[];
 }
 
@@ -283,45 +295,31 @@ function predictedBulletPosition(
   bullet: BulletState,
   ticks: number,
 ): { x: number; y: number } {
-  let x = bullet.x + bullet.vx * ticks;
-  let y = bullet.y + bullet.vy * ticks;
-  if (bullet.kind !== 'spiral') return { x, y };
-
-  const w = (2 * Math.PI) / SPIRAL_PERIOD_TICKS;
-  const offset =
-    (Math.sin((bullet.age + ticks) * w) - Math.sin(bullet.age * w)) * SPIRAL_RADIUS;
-  switch (bullet.dir) {
-    case 'up':
-      x += offset;
-      break;
-    case 'down':
-      x -= offset;
-      break;
-    case 'left':
-      y -= offset;
-      break;
-    case 'right':
-      y += offset;
-      break;
-  }
-  return { x, y };
+  // F 弹的双螺旋只是渲染摆幅；逻辑核心与其他弹一样严格按 vx/vy 直飞。
+  return {
+    x: bullet.x + bullet.vx * ticks,
+    y: bullet.y + bullet.vy * ticks,
+  };
 }
 
 // 预判只读地形，不真的开砖。普通弹碰到砖/钢即结束；激光可穿砖，带钻头的激光也可穿钢。
 // 鹰巢、边界、Boss 与护送车都能在子弹抵达智能坦克前把它截住，因此可作为可信掩体。
-function predictedBulletBlocked(
+// silent 表示越过大地图开火视口（F 弹不爆炸）；detonate 表示真实碰撞，F 弹会在该点炎爆。
+type PredictedBulletStop = 'silent' | 'detonate';
+
+function predictedBulletStop(
   bullet: BulletState,
   state: GameState,
   x: number,
   y: number,
-): boolean {
+): PredictedBulletStop | null {
   if (
     bullet.viewportBounds &&
     (x < bullet.viewportBounds.left ||
       y < bullet.viewportBounds.top ||
       x + BULLET_SIZE > bullet.viewportBounds.right ||
       y + BULLET_SIZE > bullet.viewportBounds.bottom)
-  ) return true;
+  ) return 'silent';
   if (
     state.escort &&
     navigationBoxesOverlap(
@@ -334,7 +332,7 @@ function predictedBulletBlocked(
       ESCORT_SIZE,
       ESCORT_SIZE,
     )
-  ) return true;
+  ) return 'detonate';
   if (
     state.boss &&
     !state.boss.dead &&
@@ -348,7 +346,7 @@ function predictedBulletBlocked(
       state.boss.size,
       state.boss.size,
     )
-  ) return true;
+  ) return 'detonate';
 
   const c0 = Math.floor(x / SUBTILE);
   const c1 = Math.floor((x + BULLET_SIZE - 1e-6) / SUBTILE);
@@ -369,63 +367,64 @@ function predictedBulletBlocked(
             x + BULLET_SIZE,
             y + BULLET_SIZE,
           )
-        ) return true;
+        ) return 'detonate';
         continue;
       }
       if (cell === Cell.STEEL) {
         const inField = col >= 0 && row >= 0 && col < state.level.cols && row < state.level.rows;
-        if (bullet.kind !== 'laser' || !bullet.steelPiercing || !inField) return true;
+        if (bullet.kind !== 'laser' || !bullet.steelPiercing || !inField) return 'detonate';
       } else if (cell === Cell.EAGLE) {
-        return true;
+        return 'detonate';
       }
     }
   }
-  return false;
+  return null;
 }
 
 // 与真实子弹推进一致，把高速弹一帧的路径拆成至多 4px 的采样段，避免激光越过薄掩体。
+// F 弹使用真实的 16×8 热区；撞地形 / Boss / 护送车后额外记录 24×24 炎爆帧。
 function predictBulletFrames(
   bullet: BulletState,
   state: GameState,
+  maxTicks = SMART_AI_DODGE_LOOKAHEAD_TICKS,
 ): PredictedBulletFrame[] {
   const frames: PredictedBulletFrame[] = [];
   let previous = { x: bullet.x, y: bullet.y };
-  for (let tick = 1; tick <= SMART_AI_DODGE_LOOKAHEAD_TICKS; tick++) {
+  for (let tick = 1; tick <= maxTicks; tick++) {
     const next = predictedBulletPosition(bullet, tick);
     const dx = next.x - previous.x;
     const dy = next.y - previous.y;
     const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / BULLET_SIZE));
-    let blocked = false;
     for (let step = 0; step <= steps; step++) {
       const t = step / steps;
-      if (
-        predictedBulletBlocked(
-          bullet,
-          state,
-          previous.x + dx * t,
-          previous.y + dy * t,
-        )
-      ) {
-        blocked = true;
-        break;
+      const x = previous.x + dx * t;
+      const y = previous.y + dy * t;
+      const stop = predictedBulletStop(bullet, state, x, y);
+      if (stop !== null) {
+        if (bullet.kind === 'spiral' && stop === 'detonate') {
+          frames.push({ tick, x, y, blast: true });
+        }
+        return frames;
       }
     }
-    if (blocked) break;
-    frames.push({ tick, x: next.x, y: next.y });
+    frames.push({ tick, x: next.x, y: next.y, blast: false });
     previous = next;
   }
   return frames;
 }
 
-function bulletFrameHitsTank(
+function trajectoryFrameHitsTank(
+  trajectory: PredictedBulletTrajectory,
   frame: PredictedBulletFrame,
   tank: { x: number; y: number },
 ): boolean {
+  const predicted = { ...trajectory.bullet, x: frame.x, y: frame.y };
+  const hit = frame.blast ? spiralBlastRect(predicted) : bulletHitRect(predicted);
   return navigationBoxesOverlap(
-    frame.x,
-    frame.y,
-    BULLET_SIZE,
-    BULLET_SIZE,
+    hit.left,
+    hit.top,
+    hit.right - hit.left,
+    hit.bottom - hit.top,
     tank.x,
     tank.y,
     TANK_SIZE,
@@ -443,9 +442,9 @@ function imminentSmartBulletThreat(
   let threatTick = Infinity;
   for (const bullet of state.bullets) {
     if (!bullet.alive || bullet.fromEnemy) continue;
-    const frames = predictBulletFrames(bullet, state);
-    trajectories.push({ frames });
-    const hit = frames.find((frame) => bulletFrameHitsTank(frame, tank));
+    const trajectory = { bullet, frames: predictBulletFrames(bullet, state) };
+    trajectories.push(trajectory);
+    const hit = trajectory.frames.find((frame) => trajectoryFrameHitsTank(trajectory, frame, tank));
     if (!hit) continue;
     if (
       threatBullet === null ||
@@ -504,7 +503,7 @@ function smartDodgeDirection(
       if (tick === 1) firstMoved = smartMoved(probe, beforeX, beforeY);
       const hit = threat.trajectories.some((trajectory) => {
         const frame = trajectory.frames[tick - 1];
-        return frame !== undefined && bulletFrameHitsTank(frame, probe);
+        return frame !== undefined && trajectoryFrameHitsTank(trajectory, frame, probe);
       });
       if (hit) {
         hitTick = tick;
@@ -642,6 +641,19 @@ function findSmartDirection(
 
 type SmartFiringSide = Direction;
 
+interface SmartFiringReservation {
+  tankId: number;
+  targetId: number;
+  x: number;
+  y: number;
+  side: SmartFiringSide;
+}
+
+interface SmartCoordinationContext {
+  targetByTankId: Map<number, TankState>;
+  reservations: SmartFiringReservation[];
+}
+
 interface SmartFiringCandidate {
   col: number;
   row: number;
@@ -667,9 +679,23 @@ const SMART_FIRING_SIDES: ReadonlyArray<SmartFiringSide> = [
   'down',
 ];
 
-// id 将同一批智能坦克稳定分散到目标四周；多人局再叠加 playerIndex，避免换目标后仍整队同侧。
-function preferredSmartFiringSide(tank: TankState, target: TankState): SmartFiringSide {
-  const index = Math.abs(tank.id + target.playerIndex) % SMART_FIRING_SIDES.length;
+// 同一目标的智能坦克按 id 形成稳定角色序列：压制位、对侧位、两条垂直侧翼依次占位。
+// 不依赖数组更新顺序或随机数，服务器与客户端回放会得到完全相同的交叉火力分工。
+function preferredSmartFiringSide(
+  tank: TankState,
+  target: TankState,
+  coordination: SmartCoordinationContext,
+): SmartFiringSide {
+  const teammates = [...coordination.targetByTankId.entries()]
+    .filter(([, assigned]) => assigned.id === target.id)
+    .map(([tankId]) => tankId)
+    .sort((a, b) => a - b);
+  if (teammates.length <= 1) {
+    const soloIndex = Math.abs(tank.id + target.playerIndex) % SMART_FIRING_SIDES.length;
+    return SMART_FIRING_SIDES[soloIndex];
+  }
+  const rank = Math.max(0, teammates.indexOf(tank.id));
+  const index = (rank + Math.max(0, target.playerIndex)) % SMART_FIRING_SIDES.length;
   return SMART_FIRING_SIDES[index];
 }
 
@@ -677,6 +703,23 @@ function smartFiringSideCost(side: SmartFiringSide, preferred: SmartFiringSide):
   if (side === preferred) return 0;
   if (side === oppositeDirection(preferred)) return SMART_AI_FLANK_SIDE_COST / 2;
   return SMART_AI_FLANK_SIDE_COST;
+}
+
+function smartCoordinationCandidateCost(
+  tank: TankState,
+  target: TankState,
+  candidate: SmartFiringCandidate,
+  coordination: SmartCoordinationContext,
+): number {
+  let cost = 0;
+  for (const reservation of coordination.reservations) {
+    // id 小者拥有稳定预约优先级；高 id 队友主动改位，避免双方每次重算都同时交换目标点。
+    if (reservation.tankId >= tank.id || reservation.targetId !== target.id) continue;
+    const distance = Math.abs(candidate.x - reservation.x) + Math.abs(candidate.y - reservation.y);
+    if (distance < SMART_AI_RESERVED_GOAL_RADIUS) return Infinity;
+    if (candidate.side === reservation.side) cost += SMART_AI_SAME_FLANK_PENALTY;
+  }
+  return cost;
 }
 
 function smartFiringCandidate(
@@ -743,6 +786,7 @@ function findSmartFiringPlan(
   state: GameState,
   level: LevelState,
   obstacles: TankState[],
+  coordination: SmartCoordinationContext,
 ): SmartFiringPlan | null {
   const navCols = level.cols - NAV_TANK_CELLS + 1;
   const navRows = level.rows - NAV_TANK_CELLS + 1;
@@ -820,7 +864,7 @@ function findSmartFiringPlan(
     }
   }
 
-  const preferred = preferredSmartFiringSide(tank, target);
+  const preferred = preferredSmartFiringSide(tank, target, coordination);
   let best: SmartFiringCandidate | null = null;
   let bestScore = Infinity;
   for (const candidate of candidates) {
@@ -829,11 +873,14 @@ function findSmartFiringPlan(
     const rangeCost =
       Math.abs(candidate.distance - SMART_AI_FIRING_IDEAL_DISTANCE) / SUBTILE;
     const brickCost = candidate.shotPath === 'brick' ? SMART_AI_FIRING_BRICK_PENALTY : 0;
+    const coordinationCost = smartCoordinationCandidateCost(tank, target, candidate, coordination);
+    if (!Number.isFinite(coordinationCost)) continue;
     const score =
       routeCost +
       rangeCost +
       smartFiringSideCost(candidate.side, preferred) +
-      brickCost;
+      brickCost +
+      coordinationCost;
     if (
       score < bestScore ||
       (score === bestScore && best !== null && candidate.index < best.index)
@@ -883,6 +930,82 @@ function nearestPlayer(tank: TankState, state: GameState): TankState | null {
     }
   }
   return target;
+}
+
+function smartFiringSideFromGoal(tank: TankState, target: TankState): SmartFiringSide {
+  const dx = tank.smartGoalX - target.x;
+  const dy = tank.smartGoalY - target.y;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? 'left' : 'right';
+  return dy < 0 ? 'up' : 'down';
+}
+
+// 普通多人局在距离相近时主动均衡追击人数；明显更近的玩家仍会被两台以上 AI 集火。
+// 对战关保留席位一对一规则。随后从上一轮仍有效的目标位恢复预约，让本帧首台 AI 也能看到队友意图。
+function buildSmartCoordination(state: GameState): SmartCoordinationContext {
+  const targetByTankId = new Map<number, TankState>();
+  const players = state.tanks
+    .filter((tank) => tank.alive && isPlayerTank(tank))
+    .sort((a, b) => a.playerIndex - b.playerIndex);
+  const smartTanks = state.tanks
+    .filter((tank) => tank.alive && tank.kind === 'smart')
+    .sort((a, b) => a.id - b.id);
+  const targetLoads = new Map<number, number>();
+
+  for (const tank of smartTanks) {
+    const versusTarget = versusAssignedPlayer(tank, state);
+    let target = versusTarget;
+    if (!target) {
+      let bestScore = Infinity;
+      for (const candidate of players) {
+        const dx = candidate.x - tank.x;
+        const dy = candidate.y - tank.y;
+        const load = targetLoads.get(candidate.id) ?? 0;
+        const score = dx * dx + dy * dy + load * SMART_AI_TARGET_LOAD_PENALTY;
+        if (
+          score < bestScore ||
+          (score === bestScore && target !== null && candidate.playerIndex < target.playerIndex)
+        ) {
+          target = candidate;
+          bestScore = score;
+        }
+      }
+    }
+    if (!target) continue;
+    targetByTankId.set(tank.id, target);
+    targetLoads.set(target.id, (targetLoads.get(target.id) ?? 0) + 1);
+  }
+
+  const reservations: SmartFiringReservation[] = [];
+  for (const tank of smartTanks) {
+    const target = targetByTankId.get(tank.id);
+    if (!target || tank.smartGoalX < 0 || tank.smartGoalY < 0) continue;
+    reservations.push({
+      tankId: tank.id,
+      targetId: target.id,
+      x: tank.smartGoalX,
+      y: tank.smartGoalY,
+      side: smartFiringSideFromGoal(tank, target),
+    });
+  }
+  return { targetByTankId, reservations };
+}
+
+function syncSmartFiringReservation(
+  tank: TankState,
+  target: TankState | null,
+  coordination: SmartCoordinationContext,
+): void {
+  coordination.reservations = coordination.reservations.filter(
+    (reservation) => reservation.tankId !== tank.id,
+  );
+  if (!target || tank.smartGoalX < 0 || tank.smartGoalY < 0) return;
+  coordination.reservations.push({
+    tankId: tank.id,
+    targetId: target.id,
+    x: tank.smartGoalX,
+    y: tank.smartGoalY,
+    side: smartFiringSideFromGoal(tank, target),
+  });
 }
 
 // 严格优先级：无敌 > 合适武器 > 星星 > 修复 > 临时机动 > 船。
@@ -1124,6 +1247,135 @@ function shotThreatensEscort(tank: TankState, dir: Direction, state: GameState):
     : tank.x + TANK_SIZE <= escort.x;
 }
 
+interface SmartAimPlan {
+  dir: Direction;
+  targetPath: SmartShotPath;
+  interceptTick: number;
+}
+
+function predictTargetPositions(
+  target: TankState,
+  state: GameState,
+  level: LevelState,
+  obstacles: TankState[],
+  maxTicks: number,
+): Array<{ x: number; y: number }> {
+  const probe = { ...target };
+  const probeObstacles = obstacles.map((obstacle) => obstacle === target ? probe : obstacle);
+  const positions = [{ x: probe.x, y: probe.y }];
+  for (let tick = 1; tick <= maxTicks; tick++) {
+    const input = probe.dashTicks > 0 || !probe.moving
+      ? emptyInput()
+      : driveInput(probe.dir);
+    applyInput(probe, input, level, probeObstacles, state.escort ?? undefined);
+    positions.push({ x: probe.x, y: probe.y });
+  }
+  return positions;
+}
+
+function smartAimPlan(
+  tank: TankState,
+  target: TankState,
+  state: GameState,
+  level: LevelState,
+  obstacles: TankState[],
+): SmartAimPlan | null {
+  const directDir = aimDirection(tank, target);
+  const directPath = directDir === null || shotThreatensEagle(tank, directDir, state)
+    ? 'hard'
+    : smartShotPath(tank, target, directDir, state);
+  const positions = predictTargetPositions(
+    target,
+    state,
+    level,
+    obstacles,
+    SMART_AI_LEAD_LOOKAHEAD_TICKS,
+  );
+  const directionOrder = [
+    tank.dir,
+    ...NAV_DIRECTIONS.map((step) => step.dir).filter((dir) => dir !== tank.dir),
+  ];
+  let best: SmartAimPlan | null = null;
+
+  for (const dir of directionOrder) {
+    if (shotThreatensEagle(tank, dir, state)) continue;
+    const turnDelay = dir === tank.dir
+      ? tank.smartTurnFireTicks
+      : SMART_AI_TURN_FIRE_DELAY_TICKS;
+    if (turnDelay >= SMART_AI_LEAD_LOOKAHEAD_TICKS) continue;
+    const shooter = { ...tank, dir };
+    const bullets = spawnWeaponBullets(shooter, -1000 - tank.id * 10, level);
+    for (const bullet of bullets) {
+      const trajectory: PredictedBulletTrajectory = {
+        bullet,
+        frames: predictBulletFrames(
+          bullet,
+          state,
+          SMART_AI_LEAD_LOOKAHEAD_TICKS - turnDelay,
+        ),
+      };
+      for (const frame of trajectory.frames) {
+        const interceptTick = turnDelay + frame.tick;
+        const targetPosition = positions[interceptTick];
+        if (!targetPosition || !trajectoryFrameHitsTank(trajectory, frame, targetPosition)) continue;
+        const plan: SmartAimPlan = {
+          dir,
+          targetPath: 'clear',
+          interceptTick,
+        };
+        if (best === null || plan.interceptTick < best.interceptTick) best = plan;
+        break;
+      }
+    }
+  }
+
+  if (best) return best;
+  // 经典炮面对砖墙时第一发用于开路，未必能在本次轨迹内命中；保留原有主动清障射击。
+  if (directDir !== null && directPath !== 'hard') {
+    return { dir: directDir, targetPath: directPath, interceptTick: 0 };
+  }
+  return null;
+}
+
+// 把“玩家炮口已对准且当前弹槽可用”视为尚未出膛的短期威胁。这里只读取场上可见状态，
+// 不读取本帧 InputState；智能坦克能够看懂架枪，但不能预知玩家下一次按键。
+function readiedPlayerGunThreat(tank: TankState, state: GameState): SmartBulletThreat | null {
+  if (tank.invulnTicks > 0 || state.playerFreezeTicks > 0) return null;
+  const trajectories: PredictedBulletTrajectory[] = [];
+  let threatBullet: BulletState | null = null;
+  let threatTick = Infinity;
+  for (const player of state.tanks) {
+    if (!player.alive || !isPlayerTank(player)) continue;
+    if (
+      player.fireCooldown > 0 ||
+      liveBulletCount(state.bullets, player.id) >= maxBulletsFor(player)
+    ) continue;
+    const bullets = spawnWeaponBullets(player, -2000 - player.id * 10, state.level);
+    for (const bullet of bullets) {
+      const trajectory: PredictedBulletTrajectory = {
+        bullet,
+        frames: predictBulletFrames(bullet, state, SMART_AI_READY_GUN_LOOKAHEAD_TICKS),
+      };
+      trajectories.push(trajectory);
+      const hit = trajectory.frames.find(
+        (frame) => trajectoryFrameHitsTank(trajectory, frame, tank),
+      );
+      if (!hit) continue;
+      if (
+        threatBullet === null ||
+        hit.tick < threatTick ||
+        (hit.tick === threatTick && bullet.id < threatBullet.id)
+      ) {
+        threatBullet = bullet;
+        threatTick = hit.tick;
+      }
+    }
+  }
+  return threatBullet === null
+    ? null
+    : { bullet: threatBullet, hitTick: threatTick, trajectories };
+}
+
 function fireSmartTank(
   tank: TankState,
   state: GameState,
@@ -1205,51 +1457,145 @@ function enemyCount(state: GameState): number {
   return n;
 }
 
-// 普通关在地图上半场随机出生；护送关改为在车队前方一个视口内出生，
+// 普通关在地图上半场随机出生；护送关按地图配置从车头、两翼或车后投入。
 // 要求地形可通行、不与在场坦克及出生闪光重叠。最多尝试 SPAWN_TRY_LIMIT 次，全失败返回 null
 //（本帧放弃，由调用方短暂延时后重试 —— 不消耗出生队列）。
 const SPAWN_TRY_LIMIT = 20;
 const SPAWN_RETRY_TICKS = 30;
+
+function alignedRandom(rng: Rng, min: number, max: number): number {
+  return min + rng.int(Math.floor((max - min) / SUBTILE) + 1) * SUBTILE;
+}
+
+// 在车辆局部坐标系中采样投入点：forward 是车头方向，right 是车体右侧。最后钳在世界
+// 边缘，确保车队靠近终点时“前方投入”仍能退化为边界出生，而不是永远找不到落点。
+function escortSpawnCandidate(
+  state: GameState,
+  approach: EscortSpawnApproach,
+): { x: number; y: number } {
+  const escort = state.escort!;
+  let forwardMin: number;
+  let forwardMax: number;
+  let lateralMin: number;
+  let lateralMax: number;
+  switch (approach) {
+    case 'front':
+      forwardMin = 48;
+      forwardMax = 176;
+      lateralMin = -160;
+      lateralMax = 160;
+      break;
+    case 'rear':
+      forwardMin = -128;
+      forwardMax = -48;
+      lateralMin = -128;
+      lateralMax = 128;
+      break;
+    case 'left':
+      forwardMin = -72;
+      forwardMax = 152;
+      lateralMin = -176;
+      lateralMax = -48;
+      break;
+    case 'right':
+      forwardMin = -72;
+      forwardMax = 152;
+      lateralMin = 48;
+      lateralMax = 176;
+      break;
+  }
+
+  const forward = alignedRandom(state.rng, forwardMin, forwardMax);
+  const lateral = alignedRandom(state.rng, lateralMin, lateralMax);
+  let fx = 0;
+  let fy = 0;
+  let rx = 0;
+  let ry = 0;
+  switch (escort.dir) {
+    case 'up':
+      fy = -1;
+      rx = 1;
+      break;
+    case 'down':
+      fy = 1;
+      rx = -1;
+      break;
+    case 'left':
+      fx = -1;
+      ry = -1;
+      break;
+    case 'right':
+      fx = 1;
+      ry = 1;
+      break;
+  }
+
+  const escortCx = escort.x + ESCORT_SIZE / 2;
+  const escortCy = escort.y + ESCORT_SIZE / 2;
+  const maxX = state.level.cols * SUBTILE - TANK_SIZE;
+  const maxY = state.level.rows * SUBTILE - TANK_SIZE;
+  const x = escortCx + fx * forward + rx * lateral - TANK_SIZE / 2;
+  const y = escortCy + fy * forward + ry * lateral - TANK_SIZE / 2;
+  return {
+    x: Math.max(0, Math.min(maxX, x)),
+    y: Math.max(0, Math.min(maxY, y)),
+  };
+}
+
+function spawnSpotClear(
+  state: GameState,
+  tank: TankState,
+  obstacles: TankState[],
+  x: number,
+  y: number,
+): boolean {
+  if (!canTankOccupy(tank, x, y, state.level, obstacles, state.escort ?? undefined)) return false;
+  const escort = state.escort;
+  if (
+    escort &&
+    x < escort.x + ESCORT_SIZE &&
+    x + TANK_SIZE > escort.x &&
+    y < escort.y + ESCORT_SIZE &&
+    y + TANK_SIZE > escort.y
+  ) return false;
+  return !state.spawning.some(
+    (spawn) => Math.abs(spawn.tank.x - x) < TANK_SIZE && Math.abs(spawn.tank.y - y) < TANK_SIZE,
+  );
+}
+
+function tryEscortSpawnApproach(
+  state: GameState,
+  tank: TankState,
+  obstacles: TankState[],
+  approach: EscortSpawnApproach,
+): { x: number; y: number } | null {
+  for (let i = 0; i < SPAWN_TRY_LIMIT; i++) {
+    const candidate = escortSpawnCandidate(state, approach);
+    if (spawnSpotClear(state, tank, obstacles, candidate.x, candidate.y)) return candidate;
+  }
+  return null;
+}
+
 function pickSpawnSpot(
   state: GameState,
   tank: TankState,
   obstacles: TankState[],
+  spawnOrdinal = state.enemiesDequeued,
 ): { x: number; y: number } | null {
   const worldWidth = state.level.cols * SUBTILE;
   const worldHeight = state.level.rows * SUBTILE;
+  if (state.escort) {
+    const approach = escortSpawnApproachForStage(state.stage, spawnOrdinal);
+    const preferred = tryEscortSpawnApproach(state, tank, obstacles, approach);
+    if (preferred || approach === 'front') return preferred;
+    // 侧翼被水/钢完全封住时回退到传统的车头投入，避免地图地貌令出生队列永久停摆。
+    return tryEscortSpawnApproach(state, tank, obstacles, 'front');
+  }
+
   let minX = 0;
   let maxX = worldWidth - TANK_SIZE;
   let minY = 0;
   let maxY = worldHeight / 2 - TANK_SIZE;
-  if (state.escort) {
-    const escort = state.escort;
-    switch (escort.dir) {
-      case 'up':
-        minX = Math.max(0, escort.x - 160);
-        maxX = Math.min(worldWidth - TANK_SIZE, escort.x + 160);
-        minY = Math.max(0, escort.y - 180);
-        maxY = Math.max(minY, Math.min(worldHeight - TANK_SIZE, escort.y - 48));
-        break;
-      case 'down':
-        minX = Math.max(0, escort.x - 160);
-        maxX = Math.min(worldWidth - TANK_SIZE, escort.x + 160);
-        minY = Math.min(worldHeight - TANK_SIZE, escort.y + ESCORT_SIZE + 16);
-        maxY = Math.max(minY, Math.min(worldHeight - TANK_SIZE, escort.y + ESCORT_SIZE + 148));
-        break;
-      case 'left':
-        minX = Math.max(0, escort.x - 180);
-        maxX = Math.max(minX, Math.min(worldWidth - TANK_SIZE, escort.x - 48));
-        minY = Math.max(0, escort.y - 160);
-        maxY = Math.min(worldHeight - TANK_SIZE, escort.y + 160);
-        break;
-      case 'right':
-        minX = Math.min(worldWidth - TANK_SIZE, escort.x + ESCORT_SIZE + 16);
-        maxX = Math.max(minX, Math.min(worldWidth - TANK_SIZE, escort.x + ESCORT_SIZE + 148));
-        minY = Math.max(0, escort.y - 160);
-        maxY = Math.min(worldHeight - TANK_SIZE, escort.y + 160);
-        break;
-    }
-  }
   minX = Math.ceil(minX / SUBTILE) * SUBTILE;
   maxX = Math.floor(maxX / SUBTILE) * SUBTILE;
   minY = Math.ceil(minY / SUBTILE) * SUBTILE;
@@ -1259,27 +1605,14 @@ function pickSpawnSpot(
   for (let i = 0; i < SPAWN_TRY_LIMIT; i++) {
     const x = minX + state.rng.int(xSlots) * SUBTILE;
     const y = minY + state.rng.int(ySlots) * SUBTILE;
-    // obstacles 含 Boss 车体伪坦克；escort 作为 32×32 独立阻挡体传入。
-    if (!canTankOccupy(tank, x, y, state.level, obstacles, state.escort ?? undefined)) continue;
-    if (
-      state.escort &&
-      x < state.escort.x + ESCORT_SIZE &&
-      x + TANK_SIZE > state.escort.x &&
-      y < state.escort.y + ESCORT_SIZE &&
-      y + TANK_SIZE > state.escort.y
-    ) continue;
-    // 出生闪光中的坦克还不在 tanks 里，单独查重叠，避免两团闪光叠在同一点。
-    const overlapsFlash = state.spawning.some(
-      (s) => Math.abs(s.tank.x - x) < TANK_SIZE && Math.abs(s.tank.y - y) < TANK_SIZE,
-    );
-    if (overlapsFlash) continue;
+    if (!spawnSpotClear(state, tank, obstacles, x, y)) continue;
     return { x, y };
   }
   return null;
 }
 
 // 生成器：计时归零且场上有空位、队列非空时，取队首出生（进入出生闪光）。
-// 出生点在上半场随机（见 pickSpawnSpot）；找不到可用落点则 SPAWN_RETRY_TICKS 后重试。
+// 普通关出生点在上半场随机，护送关使用各图进攻方向（见 pickSpawnSpot）；找不到可用落点则重试。
 // 所有敌军出生完毕后停止（胜负判定属后续任务）。
 function updateSpawner(state: GameState, obstacles: TankState[]): void {
   // 护送关以抵达终点为胜利条件，因此原始 20 台耗尽后循环本关编成，持续保持沿途战斗。
@@ -1374,7 +1707,7 @@ function recycleEscapedEscortEnemies(state: GameState): void {
 
     tank.escortFarTicks++;
     if (tank.escortFarTicks < ESCORT_ENEMY_RECYCLE_TICKS) continue;
-    const spot = pickSpawnSpot(state, tank, collisionTanks(state));
+    const spot = pickSpawnSpot(state, tank, collisionTanks(state), state.enemiesDequeued + tank.id);
     if (!spot) continue;
 
     tank.x = spot.x;
@@ -1469,6 +1802,7 @@ function planSmartMovement(
   state: GameState,
   level: LevelState,
   obstacles: TankState[],
+  coordination: SmartCoordinationContext,
 ): Direction | null {
   if (powerupTarget) {
     clearSmartFiringGoal(tank);
@@ -1485,7 +1819,14 @@ function planSmartMovement(
     return null;
   }
 
-  const firingPlan = findSmartFiringPlan(tank, target, state, level, obstacles);
+  const firingPlan = findSmartFiringPlan(
+    tank,
+    target,
+    state,
+    level,
+    obstacles,
+    coordination,
+  );
   if (firingPlan) {
     tank.smartGoalX = firingPlan.x;
     tank.smartGoalY = firingPlan.y;
@@ -1501,13 +1842,14 @@ function planSmartMovement(
   );
 }
 
-// 智能坦克：锁定最近玩家，规划可达的中距离射击位并按 id 分散到不同侧翼。
-// 途中遇到火力线会机会射击；若尚未抵达战术位，装填期间继续包抄而不是原地露头等待。
+// 智能坦克：按协同分配锁定玩家，规划中距离交叉火力位；途中既会提前量射击，也会在
+// 无法立即反击时读懂玩家已经架好的枪线。真实来弹永远拥有最高闪避优先级。
 function updateSmartEnemy(
   tank: TankState,
   state: GameState,
   level: LevelState,
   obstacles: TankState[],
+  coordination: SmartCoordinationContext,
 ): void {
   if (tank.smartTurnFireTicks > 0) tank.smartTurnFireTicks--;
 
@@ -1524,7 +1866,7 @@ function updateSmartEnemy(
     }
   }
 
-  const target = nearestPlayer(tank, state);
+  const target = coordination.targetByTankId.get(tank.id) ?? nearestPlayer(tank, state);
   const powerupTarget = smartPowerupTarget(tank, state);
   if (!target && !powerupTarget) {
     tank.moving = false;
@@ -1559,37 +1901,50 @@ function updateSmartEnemy(
       state,
       level,
       obstacles,
+      coordination,
     ) ?? desired;
     tank.aiTicks = SMART_AI_REPLAN_TICKS;
   }
 
-  if (target) {
-    const aim = aimDirection(tank, target);
-    if (aim !== null && !shotThreatensEagle(tank, aim, state)) {
-      const targetPath = smartShotPath(tank, target, aim, state);
-      if (targetPath !== 'hard') {
-        const atFiringGoal = !powerupTarget && smartFiringGoalReached(tank);
-        const weaponReady = tank.fireCooldown === 0 &&
-          liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
-        const waitingAfterAimTurn = tank.dir === aim && tank.smartTurnFireTicks > 0;
-        // 路过火力线但尚未装填好时不反复转头，否则横向吸附会把每帧侧移重置成 0.75px。
-        if (weaponReady || atFiringGoal || waitingAfterAimTurn) {
-          tank.moving = false;
-          tank.smartStuckTicks = 0;
-          tank.smartEscapeTicks = 0;
-          // 转向必然生效（吸附不可用时原地转车头，见 tank.ts turnTank）；新朝向需稳定约 150ms 后再开火。
-          turnTank(tank, aim, level, obstacles, state.escort ?? undefined);
-          if (tank.smartTurnFireTicks > 0) return;
-          if (fireSmartTank(tank, state, targetPath)) {
-            // 路过的射线只打一发就继续包抄；抵达选定射击位后才稳定压制。
-            if (!atFiringGoal) tank.aiTicks = 0;
-            return;
-          }
-          if (atFiringGoal) return;
-        }
+  let holdAtFiringGoal = false;
+  const atFiringGoal = !powerupTarget && smartFiringGoalReached(tank);
+  const weaponReady = tank.fireCooldown === 0 &&
+    liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
+  const aimPlan = target && (weaponReady || atFiringGoal || tank.smartTurnFireTicks > 0)
+    ? smartAimPlan(tank, target, state, level, obstacles)
+    : null;
+  if (target && aimPlan) {
+    const waitingAfterAimTurn = tank.dir === aimPlan.dir && tank.smartTurnFireTicks > 0;
+    // 路过火力线但尚未装填好时不反复转头；抵达战术位后则保持炮口并在装填期观察威胁。
+    if (weaponReady || atFiringGoal || waitingAfterAimTurn) {
+      tank.moving = false;
+      tank.smartStuckTicks = 0;
+      tank.smartEscapeTicks = 0;
+      turnTank(tank, aimPlan.dir, level, obstacles, state.escort ?? undefined);
+      if (tank.smartTurnFireTicks > 0) return;
+      if (fireSmartTank(tank, state, aimPlan.targetPath)) {
+        // 路过的提前量射线只打一发就继续包抄；抵达选定射击位后才稳定压制。
+        if (!atFiringGoal) tank.aiTicks = 0;
+        return;
       }
+      holdAtFiringGoal = atFiringGoal;
     }
   }
+
+  // 没有可立即兑现的反击时，才规避玩家尚未出膛但已经架好的枪线；这样近距离对射仍会反打，
+  // 装填中或被硬掩体挡住时则不会继续暴露在炮口正前方。
+  const gunThreat = readiedPlayerGunThreat(tank, state);
+  if (gunThreat) {
+    const dodge = smartDodgeDirection(tank, gunThreat, state, level, obstacles);
+    if (dodge !== null) {
+      applyInput(tank, driveInput(dodge), level, obstacles, state.escort ?? undefined);
+      tank.smartStuckTicks = 0;
+      tank.smartEscapeTicks = SMART_AI_DODGE_COMMIT_TICKS;
+      tank.aiTicks = 0;
+      return;
+    }
+  }
+  if (holdAtFiringGoal) return;
 
   // 玩家移动后，旧射击位可能不再形成火力线；到点却无法瞄准时立即更新目标位。
   if (!powerupTarget && target && smartFiringGoalReached(tank)) {
@@ -1600,6 +1955,7 @@ function updateSmartEnemy(
       state,
       level,
       obstacles,
+      coordination,
     ) ?? desired;
     tank.aiTicks = SMART_AI_REPLAN_TICKS;
   }
@@ -1621,6 +1977,7 @@ function updateSmartEnemy(
     state,
     level,
     obstacles,
+    coordination,
   );
   let blockedDir = desired;
   if (retry !== null && retry !== desired) {
@@ -1650,13 +2007,21 @@ export function updateEnemies(state: GameState, level: LevelState): void {
   const obstacles = collisionTanks(state);
   updateSpawning(state, level, obstacles);
   recycleEscapedEscortEnemies(state);
+  const coordination = buildSmartCoordination(state);
 
   const frozen = state.enemyFreezeTicks > 0;
   const slowedSkip = !frozen && state.enemySlowTicks > 0 && state.tick % 2 !== 0;
   if (!frozen && !slowedSkip) {
     for (const tank of state.tanks) {
       if (!tank.alive || isPlayerTank(tank)) continue;
-      if (tank.kind === 'smart') updateSmartEnemy(tank, state, level, obstacles);
+      if (tank.kind === 'smart') {
+        updateSmartEnemy(tank, state, level, obstacles, coordination);
+        syncSmartFiringReservation(
+          tank,
+          coordination.targetByTankId.get(tank.id) ?? null,
+          coordination,
+        );
+      }
       else updateOneEnemy(tank, state, level, obstacles);
     }
   }

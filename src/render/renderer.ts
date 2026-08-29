@@ -133,6 +133,40 @@ const WEAPON_LETTER_COLOR: Record<WeaponKind, string> = {
   machine: COLOR_WEAPON_MACHINE,
 };
 
+// 红警式军衔星：5×5 美术像素的五角星，外围再扩一圈深色描边。
+// 一至三级分别使用铜 / 银 / 金，既显示数量也显示军衔色，缩小到实际游戏尺寸仍能辨认。
+const TANK_RANK_STAR_MASK = [
+  '..#..',
+  '#.#.#',
+  '.###.',
+  '#####',
+  '.#.#.',
+] as const;
+const TANK_RANK_STAR_COLORS = [
+  { body: '#c86c2c', highlight: '#ffbe68' },
+  { body: '#a8c4d0', highlight: '#f4fcff' },
+  { body: '#e8ac18', highlight: '#fff09a' },
+] as const;
+const TANK_RANK_STAR_OUTLINE = '#101018';
+const TANK_RANK_STAR_ART_SIZE = 7; // 5px 星体 + 四周各 1px 描边
+const TANK_RANK_STAR_ART_GAP = 1;
+const TANK_RANK_STAR_PIXELS = TANK_RANK_STAR_MASK.flatMap((row, y) =>
+  [...row].flatMap((pixel, x) => pixel === '#' ? [{ x, y }] : []),
+);
+const TANK_RANK_STAR_OUTLINE_PIXELS = (() => {
+  const pixels = new Map<string, { x: number; y: number }>();
+  for (const pixel of TANK_RANK_STAR_PIXELS) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const x = pixel.x + dx;
+        const y = pixel.y + dy;
+        pixels.set(`${x},${y}`, { x, y });
+      }
+    }
+  }
+  return [...pixels.values()];
+})();
+
 // 渲染层只读 GameState，不做任何逻辑推进。
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -979,8 +1013,6 @@ export class Renderer {
           if (on) this.drawDashRing(cx, cy, 1, COLOR_DASH_READY);
         }
         if (!freezeBlinkOff) {
-          // 车尾的 1–3 枚亮色等级标记，让实际游戏尺寸下的升级模型仍能快速辨级。
-          this.drawPlayerLevelPips(tank, px, py);
           if (tank.level >= 3) {
             if (tank.armor > 0) this.drawPlayerArmorPlates(px, py, state.tick);
             else this.drawPlayerBrokenArmor(px, py, state.tick);
@@ -995,6 +1027,10 @@ export class Renderer {
         const shieldFrame = Math.floor(state.tick / SHIELD_ANIM_TICKS) % 2;
         drawTile(ctx, atlas.shield[shieldFrame], px, py);
       }
+
+      // 玩家与敌军共用的晋升军衔：1–3 颗星对应 star 等级，固定在炮管反方向的车尾装甲上。
+      // 星标置于护盾之上避免被流光吞没；玩家冻结闪灭时同步隐藏，不留下悬空 UI。
+      if (!freezeBlinkOff) this.drawTankRankStars(tank, px, py, state.tick);
 
       // 多人局：在每台在场玩家坦克上方绘制该玩家配色的 2 位名字，
       // 居中于坦克、夹紧在战场矩形内（与坦克同处裁剪区内，故也会被树林遮挡）。
@@ -1050,13 +1086,54 @@ export class Renderer {
     );
   }
 
-  private drawPlayerLevelPips(tank: TankState, px: number, py: number): void {
+  private drawTankRankStars(tank: TankState, px: number, py: number, tick: number): void {
     const count = Math.max(0, Math.min(3, tank.level));
-    const color = PLAYER_LABEL_COLORS[tank.playerIndex] ?? '#ffffff';
-    const startX = px + 8 - (count * 2 - 0.5) / 2;
-    for (let i = 0; i < count; i++) {
-      this.drawArtRect(startX + i * 2, py + 13.5, 1.5, 1, '#101010');
-      this.drawArtRect(startX + i * 2, py + 13, 1.5, 1, color);
+    if (count === 0) return;
+
+    const palette = TANK_RANK_STAR_COLORS[count - 1];
+    const totalArtWidth =
+      count * TANK_RANK_STAR_ART_SIZE + (count - 1) * TANK_RANK_STAR_ART_GAP;
+    const artPixel = 1 / ART_SCALE;
+    const badgeSize = TANK_RANK_STAR_ART_SIZE / ART_SCALE;
+    const badgeLength = totalArtWidth / ART_SCALE;
+    const vertical = tank.dir === 'left' || tank.dir === 'right';
+    let startX = px + TANK_SIZE / 2 - (vertical ? badgeSize : badgeLength) / 2;
+    let startY = py + TANK_SIZE / 2 - (vertical ? badgeLength : badgeSize) / 2;
+    // 军衔牌始终铆在车尾装甲：炮口朝哪边，星标就在相反一边；横向车则把星列转成竖排。
+    switch (tank.dir) {
+      case 'up': startY = py + TANK_SIZE - badgeSize; break;
+      case 'down': startY = py; break;
+      case 'left': startX = px + TANK_SIZE - badgeSize; break;
+      case 'right': startX = px; break;
+    }
+    const goldGlint = count === 3 && Math.floor(tick / 10) % 4 === 0;
+
+    for (let star = 0; star < count; star++) {
+      const offset =
+        star * (TANK_RANK_STAR_ART_SIZE + TANK_RANK_STAR_ART_GAP) / ART_SCALE;
+      const originX = startX + (vertical ? 0 : offset);
+      const originY = startY + (vertical ? offset : 0);
+
+      // 先把星体八邻域扩一像素作为描边，再覆盖铜 / 银 / 金主体。
+      for (const pixel of TANK_RANK_STAR_OUTLINE_PIXELS) {
+        this.drawArtRect(
+          originX + (pixel.x + 1) * artPixel,
+          originY + (pixel.y + 1) * artPixel,
+          artPixel,
+          artPixel,
+          TANK_RANK_STAR_OUTLINE,
+        );
+      }
+      for (const pixel of TANK_RANK_STAR_PIXELS) {
+        const highlight = pixel.y <= 1 || (goldGlint && pixel.y === 2 && pixel.x === 2);
+        this.drawArtRect(
+          originX + (pixel.x + 1) * artPixel,
+          originY + (pixel.y + 1) * artPixel,
+          artPixel,
+          artPixel,
+          highlight ? palette.highlight : palette.body,
+        );
+      }
     }
   }
 

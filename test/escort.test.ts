@@ -6,14 +6,17 @@ import {
   ESCORT_SIZE,
   ESCORT_TIME_BONUS_TICKS,
   SHOVEL_TICKS,
+  SUBTILE,
   TANK_SIZE,
 } from '../src/core/constants';
 import { createGameState } from '../src/game/state';
 import {
+  escortRoadblockCountForStage,
   escortGuardSlots,
   escortHasGuard,
   escortPushSlot,
   escortPusherCount,
+  escortSpawnApproachForStage,
   updateEscort,
   resolveEscortHits,
 } from '../src/game/escort';
@@ -26,6 +29,43 @@ import { updatePhase } from '../src/game/phase';
 
 // 四段循环下的护送关号：每组第 2 关，十次护送各用一张独立地图与路线。
 const ESCORT_STAGES = [2, 6, 10, 14, 18, 22, 26, 30, 34, 38];
+
+function cellAtSlotCenter(
+  state: ReturnType<typeof createGameState>,
+  playerCount = 1,
+): number {
+  const slot = escortGuardSlots(state.escort!, playerCount)[0];
+  return getCell(
+    state.level,
+    Math.floor((slot.x + slot.width / 2) / SUBTILE),
+    Math.floor((slot.y + slot.height / 2) / SUBTILE),
+  );
+}
+
+test('escort maps expose distinct guard terrain, roadblock rhythms, and attack patterns', () => {
+  const icefield = createGameState(10, 1, 10);
+  assert.equal(cellAtSlotCenter(icefield), Cell.ICE, '冰原关开局护卫位应直接位于冰面');
+
+  const canal = createGameState(6, 1, 6);
+  Object.assign(canal.escort!, { x: 240, y: 520, dir: 'left' as const, routeIndex: 2 });
+  assert.equal(cellAtSlotCenter(canal), Cell.TREES, '运河横穿段的护卫位应被树林遮挡');
+
+  assert.deepEqual(
+    ESCORT_STAGES.map(escortRoadblockCountForStage),
+    [3, 2, 0, 2, 4, 0, 0, 3, 1, 3],
+    '十张图不应退化为相同的两道路障节奏',
+  );
+  assert.deepEqual(
+    [0, 1, 2, 3].map((ordinal) => escortSpawnApproachForStage(38, ordinal)),
+    ['front', 'rear', 'left', 'right'],
+    '回钩堡垒应包含车后增援与左右夹击',
+  );
+  assert.deepEqual(
+    [0, 1, 2, 3].map((ordinal) => escortSpawnApproachForStage(14, ordinal)),
+    ['left', 'right', 'left', 'right'],
+    '双河堡垒应左右交替投入敌军',
+  );
+});
 
 test('all ten tactical escort maps can be completed after destructible roadblocks are cleared', () => {
   for (const stage of ESCORT_STAGES) {

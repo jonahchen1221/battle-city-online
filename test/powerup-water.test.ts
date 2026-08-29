@@ -32,6 +32,11 @@ test('无水场景的中立道具队列不包含船，有水场景仍会出现�
   assert.equal(wet.neutralQueue.includes('boat'), true);
 });
 
+test('群岛船坞固定先提供护送容错，再提供水路包抄所需的船', () => {
+  const dockyard = createGameState(30, 1, 30);
+  assert.deepEqual(dockyard.neutralQueue.slice(0, 2), ['wrench', 'boat']);
+});
+
 test('携带者掉落在无水场景排除船，在有水场景保留船', () => {
   const dry = createGameState(1, 1, 1);
   dry.rng = boatSeekingRng();

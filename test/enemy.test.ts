@@ -6,17 +6,19 @@ import { updateEnemies } from '../src/game/enemy';
 import { update } from '../src/game/update';
 import { emptyInput } from '../src/core/types';
 import { Cell, createEmptyLevel, setCell } from '../src/game/level';
-import { spawnBullet } from '../src/game/bullet';
+import { spawnBullet, spawnWeaponBullets } from '../src/game/bullet';
 import { resolveEagleHit } from '../src/game/phase';
 import {
   EAGLE_COL,
   EAGLE_ROW,
+  ESCORT_SIZE,
   ESCORT_ENEMY_RECYCLE_TICKS,
   ESCORT_STOPPED_SPAWN_DIVISOR,
   SMART_AI_FIRE_COOLDOWN_TICKS,
   SMART_AI_TURN_FIRE_DELAY_TICKS,
   STAGE_ENEMY_TOTAL,
   SUBTILE,
+  TANK_SIZE,
   SMART_AI_STUCK_TICKS,
 } from '../src/core/constants';
 
@@ -47,6 +49,32 @@ test('escort stages refill their enemy composition while normal stages stay fini
 
   assert.equal(normalState.spawning.length, 0);
   assert.equal(normalState.enemyQueue.length, 0);
+});
+
+test('double-river escort reinforcements materialize on alternating vehicle flanks', () => {
+  const state = createGameState(114, 1, 14);
+  state.phase = 'playing';
+  state.level = createEmptyLevel(state.level.cols, state.level.rows);
+  state.enemyQueue = ['basic', 'basic'];
+  state.enemySpawnTimer = 0;
+  state.spawning = [];
+  Object.assign(state.tanks[0], { x: 0, y: state.level.rows * SUBTILE - TANK_SIZE });
+  Object.assign(state.escort!, { x: 304, y: 352, dir: 'up' as const });
+
+  updateEnemies(state, state.level);
+  const left = state.spawning[0].tank;
+  assert.ok(
+    left.x + TANK_SIZE / 2 < state.escort!.x + ESCORT_SIZE / 2,
+    'first reinforcement should enter from the left',
+  );
+
+  state.enemySpawnTimer = 0;
+  updateEnemies(state, state.level);
+  const right = state.spawning[1].tank;
+  assert.ok(
+    right.x + TANK_SIZE / 2 > state.escort!.x + ESCORT_SIZE / 2,
+    'second reinforcement should enter from the right',
+  );
 });
 
 test('enemy waits in spawn flash while its spawn point is occupied', () => {
@@ -237,6 +265,52 @@ test('smart enemy trusts solid cover instead of dodging a bullet that will hit s
   assert.equal(smart.moving, false);
 });
 
+test('smart enemy dodges the real wide heat lane of an incoming spiral shot', () => {
+  const state = createGameState(127, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 64, y: 160, dir: 'up' as const, weapon: 'spiral' as const });
+  // 逻辑核心只覆盖 x=70..74，车体从 x=77 开始；只有 F 弹真实的 16px 热区会命中。
+  Object.assign(smart, { x: 77, y: 80, dir: 'down' as const, aiTicks: 5 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.bullets = spawnWeaponBullets(player, state.nextBulletId, state.level);
+  state.nextBulletId += state.bullets.length;
+
+  updateEnemies(state, state.level);
+
+  assert.ok(smart.x > 77, `expected a dodge away from the wide heat lane, got x=${smart.x}`);
+  assert.equal(smart.y, 80);
+  assert.equal(smart.dir, 'right');
+});
+
+test('smart enemy predicts a spiral blast where the core will hit brick cover', () => {
+  const state = createGameState(128, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  const level = createEmptyLevel();
+  setCell(level, 10, 14, Cell.BRICK);
+  setCell(level, 11, 14, Cell.BRICK);
+  Object.assign(player, { x: 80, y: 160, dir: 'up' as const, weapon: 'spiral' as const });
+  // x=96 恰好在直飞热区之外，但仍落在核心撞砖后的 24x24 炎爆边缘内。
+  Object.assign(smart, { x: 96, y: 96, dir: 'down' as const, aiTicks: 5 });
+  state.phase = 'playing';
+  state.level = level;
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.bullets = spawnWeaponBullets(player, state.nextBulletId, level);
+  state.nextBulletId += state.bullets.length;
+
+  updateEnemies(state, level);
+
+  assert.ok(smart.x > 96, `expected a dodge away from the predicted blast, got x=${smart.x}`);
+  assert.equal(smart.dir, 'right');
+});
+
 test('smart enemy plans around another tank instead of entering a blocked lane', () => {
   const state = createGameState(77, 1, 1);
   const player = state.tanks[0];
@@ -349,6 +423,98 @@ test('smart enemy waits about 150ms between turning to aim and firing', () => {
   assert.equal(state.bullets[0].attacksEagle, false);
 });
 
+test('smart enemy leads a moving player through a future firing-lane intersection', () => {
+  const state = createGameState(129, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 40, y: 120, dir: 'right' as const, moving: true });
+  Object.assign(smart, { x: 80, y: 0, dir: 'down' as const, aiTicks: 5 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  updateEnemies(state, state.level);
+
+  assert.deepEqual({ x: smart.x, y: smart.y }, { x: 80, y: 0 });
+  assert.equal(state.bullets[0]?.ownerId, smart.id);
+  assert.equal(state.bullets[0]?.dir, 'down');
+});
+
+test('smart enemy leaves a readied player gun line while its own weapon is reloading', () => {
+  const state = createGameState(130, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 80, y: 160, dir: 'up' as const, fireCooldown: 0 });
+  Object.assign(smart, {
+    x: 80,
+    y: 80,
+    dir: 'down' as const,
+    aiTicks: 5,
+    fireCooldown: SMART_AI_FIRE_COOLDOWN_TICKS,
+  });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  updateEnemies(state, state.level);
+
+  assert.ok(smart.x < 80, `expected an even-id tank to leave the aimed lane to the left, got x=${smart.x}`);
+  assert.equal(smart.y, 80);
+  assert.equal(smart.dir, 'left');
+  assert.equal(state.bullets.length, 0, 'gun-line awareness must not invent a player projectile');
+});
+
+test('smart enemies with colliding id-based preferences reserve different crossfire flanks', () => {
+  const state = createGameState(131, 1, 1);
+  const player = state.tanks[0];
+  const first = createEnemy('smart', 4, 0);
+  const second = createEnemy('smart', 8, 0);
+  Object.assign(player, { x: 160, y: 160, invulnTicks: 9999 });
+  Object.assign(first, { x: 128, y: 48, aiTicks: 0 });
+  Object.assign(second, { x: 192, y: 48, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, first, second];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  updateEnemies(state, state.level);
+
+  assert.ok(first.smartGoalX < player.x, `first role should reserve the left flank: ${first.smartGoalX}`);
+  assert.ok(second.smartGoalX > player.x, `second role should reserve the right flank: ${second.smartGoalX}`);
+  assert.equal(first.smartGoalY, player.y);
+  assert.equal(second.smartGoalY, player.y);
+});
+
+test('smart enemies balance comparable targets instead of dogpiling one multiplayer lane', () => {
+  const state = createGameState(132, 2, 1);
+  const players = state.tanks.filter((tank) => tank.kind === 'player');
+  const first = createEnemy('smart', 4, 0);
+  const second = createEnemy('smart', 8, 0);
+  Object.assign(players[0], { x: 0, y: 160, invulnTicks: 9999 });
+  Object.assign(players[1], { x: 304, y: 160, invulnTicks: 9999 });
+  Object.assign(first, { x: 128, y: 48, aiTicks: 0 });
+  Object.assign(second, { x: 192, y: 48, aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [players[0], players[1], first, second];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  updateEnemies(state, state.level);
+
+  const goalDistance = (tank: typeof first, player: typeof players[number]): number =>
+    Math.abs(tank.smartGoalX - player.x) + Math.abs(tank.smartGoalY - player.y);
+  assert.ok(goalDistance(first, players[0]) <= 112);
+  assert.ok(goalDistance(first, players[1]) > 112);
+  assert.ok(goalDistance(second, players[1]) <= 112);
+  assert.ok(goalDistance(second, players[0]) > 112);
+});
+
 test('smart enemy fires through destructible brick when a player is aligned', () => {
   const state = createGameState(42, 1);
   const player = state.tanks[0];
@@ -434,7 +600,8 @@ test('smart enemy keeps a minimum cooldown after its previous bullet disappears'
   const state = createGameState(44, 1, 1);
   const player = state.tanks[0];
   const smart = createEnemy('smart', 2, 0);
-  Object.assign(player, { x: 40, y: 120 });
+  // 玩家炮口朝下，避免本用例被“装填期主动离开玩家枪线”的新战术分支干扰。
+  Object.assign(player, { x: 40, y: 120, dir: 'down' as const });
   Object.assign(smart, { x: 40, y: 40, dir: 'down', aiTicks: 0 });
   state.phase = 'playing';
   state.level = createEmptyLevel();
