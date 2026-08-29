@@ -156,7 +156,14 @@ function advanceTankPowerupTimers(state: GameState): void {
     if (tank.invulnTicks > 0) tank.invulnTicks--;
     if (tank.speedBoostTicks > 0) tank.speedBoostTicks--;
     if (tank.ghostTicks > 0) tank.ghostTicks--;
-    if (tank.fireCooldown > 0) tank.fireCooldown--;
+    if (tank.fireCooldown > 0) {
+      // 敌方射击冷却属于 AI 行动节拍：timer 冻结时暂停，hourglass 减速时仅在偶数 tick
+      // 推进。否则智能坦克的确定性 20 帧冷却会在沙漏期间照常走完，实际射速完全不降。
+      const enemyActionBlocked =
+        !isPlayerTank(tank) &&
+        (state.enemyFreezeTicks > 0 || (state.enemySlowTicks > 0 && state.tick % 2 !== 0));
+      if (!enemyActionBlocked) tank.fireCooldown--;
+    }
   }
 }
 

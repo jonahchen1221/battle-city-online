@@ -38,7 +38,7 @@ import {
   normalizeStage,
   STAGE_ENEMY_TOTAL,
 } from '../core/constants';
-import { Cell, LevelState, getCell } from './level';
+import { Cell, LevelState, brickMaskOverlapsRect, getCell } from './level';
 import {
   TankState,
   createEnemy,
@@ -381,6 +381,112 @@ function rangesOverlap(a0: number, a1: number, b0: number, b1: number): boolean 
   return a0 < b1 && a1 > b0;
 }
 
+interface ShotCorridor {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+type SmartShotPath = 'clear' | 'brick' | 'hard';
+
+// 从炮口到目标车体近侧边缘的 4px 弹道走廊。目标本身不纳入走廊，避免把目标脚下地形
+// 误判为“目标前方障碍”。aimDirection 已保证目标位于 dir 对应的前方。
+function shotCorridorToTarget(
+  tank: TankState,
+  target: TankState,
+  dir: Direction,
+): ShotCorridor {
+  const cx = tank.x + TANK_SIZE / 2;
+  const cy = tank.y + TANK_SIZE / 2;
+  const halfBullet = BULLET_SIZE / 2;
+  switch (dir) {
+    case 'up':
+      return {
+        x0: cx - halfBullet,
+        y0: target.y + TANK_SIZE,
+        x1: cx + halfBullet,
+        y1: tank.y,
+      };
+    case 'down':
+      return {
+        x0: cx - halfBullet,
+        y0: tank.y + TANK_SIZE,
+        x1: cx + halfBullet,
+        y1: target.y,
+      };
+    case 'left':
+      return {
+        x0: target.x + TANK_SIZE,
+        y0: cy - halfBullet,
+        x1: tank.x,
+        y1: cy + halfBullet,
+      };
+    case 'right':
+      return {
+        x0: tank.x + TANK_SIZE,
+        y0: cy - halfBullet,
+        x1: target.x,
+        y1: cy + halfBullet,
+      };
+  }
+}
+
+function corridorOverlapsBox(
+  corridor: ShotCorridor,
+  box: { x: number; y: number },
+  size: number,
+): boolean {
+  return (
+    rangesOverlap(corridor.x0, corridor.x1, box.x, box.x + size) &&
+    rangesOverlap(corridor.y0, corridor.y1, box.y, box.y + size)
+  );
+}
+
+// 瞄准射线分类：砖可由智能坦克原地射穿；钢、鹰巢、护送车与 Boss 无法由小兵炮弹清除，
+// 必须放弃“停车压制”并回到 A* / 动态障碍脱困流程。护送车只检查目标之前的线段，
+// 因此玩家站在车前时可以正常被射击，玩家在车后时才会触发绕路。
+function smartShotPath(
+  tank: TankState,
+  target: TankState,
+  dir: Direction,
+  state: GameState,
+): SmartShotPath {
+  const corridor = shotCorridorToTarget(tank, target, dir);
+  if (corridor.x1 <= corridor.x0 || corridor.y1 <= corridor.y0) return 'clear';
+  if (state.escort && corridorOverlapsBox(corridor, state.escort, ESCORT_SIZE)) return 'hard';
+  if (
+    state.boss &&
+    !state.boss.dead &&
+    corridorOverlapsBox(corridor, state.boss, state.boss.size)
+  ) return 'hard';
+
+  const c0 = Math.floor(corridor.x0 / SUBTILE);
+  const c1 = Math.ceil(corridor.x1 / SUBTILE) - 1;
+  const r0 = Math.floor(corridor.y0 / SUBTILE);
+  const r1 = Math.ceil(corridor.y1 / SUBTILE) - 1;
+  let brick = false;
+  for (let row = r0; row <= r1; row++) {
+    for (let col = c0; col <= c1; col++) {
+      const cell = getCell(state.level, col, row);
+      if (cell === Cell.STEEL || cell === Cell.EAGLE) return 'hard';
+      if (
+        cell === Cell.BRICK &&
+        brickMaskOverlapsRect(
+          state.level,
+          col,
+          row,
+          corridor.x0,
+          corridor.y0,
+          corridor.x1,
+          corridor.y1,
+        )
+      ) brick = true;
+    }
+  }
+  return brick ? 'brick' : 'clear';
+}
+
 // 只要炮弹沿当前射线继续飞行有可能触及鹰巢，就禁止智能坦克开火。该检查不依赖中间墙体，
 // 因而即使砖墙稍后被其他炮弹打掉，已发射的智能坦克炮弹也不会误伤基地。
 function shotThreatensEagle(tank: TankState, dir: Direction, state: GameState): boolean {
@@ -434,13 +540,19 @@ function shotThreatensEscort(tank: TankState, dir: Direction, state: GameState):
     : tank.x + TANK_SIZE <= escort.x;
 }
 
-function fireSmartTank(tank: TankState, state: GameState): void {
+function fireSmartTank(
+  tank: TankState,
+  state: GameState,
+  targetPath?: SmartShotPath,
+): void {
   const canFire = tank.fireCooldown === 0 &&
     liveBulletCount(state.bullets, tank.id) < maxBulletsFor(tank);
   if (
     !canFire ||
     shotThreatensEagle(tank, tank.dir, state) ||
-    shotThreatensEscort(tank, tank.dir, state)
+    (targetPath === undefined
+      ? shotThreatensEscort(tank, tank.dir, state)
+      : targetPath === 'hard')
   ) return;
   const spawned = spawnWeaponBullets(tank, state.nextBulletId, state.level);
   state.nextBulletId += spawned.length;
@@ -493,24 +605,6 @@ function beginSmartEscape(
   // 四周确实封死时继续按原逻辑射击清障，稍后再尝试脱困。
   tank.smartStuckTicks = 0;
   return false;
-}
-
-// 垂直↔水平转向可能因“最近 8px 吸附点”压到半砖而被拒绝。若仍原地重复同一规划，
-// 智能坦克会永久死锁；此时先沿当前轴反向退出一小步，让下一帧能吸附到后方安全网格。
-function recoverFromRejectedTurn(
-  tank: TankState,
-  state: GameState,
-  obstacles: TankState[],
-  level: LevelState,
-): void {
-  applyInput(
-    tank,
-    driveInput(oppositeDirection(tank.dir)),
-    level,
-    obstacles,
-    state.escort ?? undefined,
-  );
-  tank.aiTicks = 0;
 }
 
 // 当前场上（含出生闪光中的）敌方坦克数量。出生队列现在也可能含玩家复活，需排除。
@@ -801,13 +895,16 @@ function updateSmartEnemy(
   if (target) {
     const aim = aimDirection(tank, target);
     if (aim !== null && !shotThreatensEagle(tank, aim, state)) {
-      tank.moving = false;
-      tank.smartStuckTicks = 0;
-      tank.smartEscapeTicks = 0;
-      // 转向必然生效（吸附不可用时原地转车头，见 tank.ts turnTank），转完即可开火压制。
-      turnTank(tank, aim, level, obstacles, state.escort ?? undefined);
-      fireSmartTank(tank, state);
-      return;
+      const targetPath = smartShotPath(tank, target, aim, state);
+      if (targetPath !== 'hard') {
+        tank.moving = false;
+        tank.smartStuckTicks = 0;
+        tank.smartEscapeTicks = 0;
+        // 转向必然生效（吸附不可用时原地转车头，见 tank.ts turnTank），转完即可开火压制。
+        turnTank(tank, aim, level, obstacles, state.escort ?? undefined);
+        fireSmartTank(tank, state, targetPath);
+        return;
+      }
     }
   }
 
@@ -822,10 +919,6 @@ function updateSmartEnemy(
   const px = tank.x;
   const py = tank.y;
   applyInput(tank, driveInput(desired), level, obstacles, state.escort ?? undefined);
-  if (tank.dir !== desired) {
-    recoverFromRejectedTurn(tank, state, obstacles, level);
-    return;
-  }
   if (tank.x !== px || tank.y !== py) {
     tank.smartStuckTicks = 0;
     return;
@@ -836,10 +929,6 @@ function updateSmartEnemy(
   const retry = findSmartDirection(tank, chaseTarget, level);
   if (retry !== null && retry !== desired) {
     applyInput(tank, driveInput(retry), level, obstacles, state.escort ?? undefined);
-    if (tank.dir !== retry) {
-      recoverFromRejectedTurn(tank, state, obstacles, level);
-      return;
-    }
     if (tank.x !== px || tank.y !== py) {
       tank.smartStuckTicks = 0;
       return;

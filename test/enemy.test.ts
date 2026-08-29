@@ -254,23 +254,86 @@ test('smart enemy aims and fires immediately when a player enters its firing lan
   assert.equal(state.bullets[0].attacksEagle, false);
 });
 
-test('smart enemy does not fire through the escort at a player', () => {
-  const state = createGameState(43, 1, 2);
+test('smart enemy fires through destructible brick when a player is aligned', () => {
+  const state = createGameState(42, 1);
   const player = state.tanks[0];
   const smart = createEnemy('smart', 2, 0);
-  const escort = state.escort!;
-  Object.assign(player, { x: escort.x + 8, y: escort.y + 48 });
-  Object.assign(smart, { x: escort.x + 8, y: escort.y - 16, dir: 'down', aiTicks: 0 });
+  Object.assign(player, { x: 40, y: 120 });
+  Object.assign(smart, { x: 40, y: 40, dir: 'down', aiTicks: 0 });
   state.phase = 'playing';
-  state.level = createEmptyLevel(state.level.cols, state.level.rows);
+  state.level = createEmptyLevel();
+  for (const col of [5, 6]) setCell(state.level, col, 8, Cell.BRICK);
   state.tanks = [player, smart];
   state.spawning = [];
   state.enemyQueue = [];
 
-  for (let tick = 0; tick < 5; tick++) updateEnemies(state, state.level);
+  updateEnemies(state, state.level);
+
+  assert.deepEqual({ x: smart.x, y: smart.y }, { x: 40, y: 40 });
+  assert.equal(state.bullets[0]?.ownerId, smart.id);
+});
+
+test('smart enemy routes around an indestructible steel wall instead of camping and firing', () => {
+  const state = createGameState(42, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 40, y: 120 });
+  Object.assign(smart, { x: 40, y: 40, dir: 'down', aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  for (const col of [5, 6]) setCell(state.level, col, 8, Cell.STEEL);
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+
+  for (let tick = 0; tick < 120; tick++) updateEnemies(state, state.level);
+
+  assert.ok(smart.y >= 72, `expected smart tank to pass the wall, got (${smart.x}, ${smart.y})`);
+  assert.notEqual(smart.x, 40, 'smart tank should leave the blocked firing lane to go around steel');
+});
+
+test('smart enemy does not fire through the escort and starts escaping around it', () => {
+  const state = createGameState(43, 1, 2);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  const escort = state.escort!;
+  const startX = escort.x + 8;
+  Object.assign(player, { x: escort.x + 8, y: escort.y + 48 });
+  Object.assign(smart, { x: startX, y: escort.y - 16, dir: 'down', aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel(state.level.cols, state.level.rows);
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = ['basic'];
+  state.enemySpawnTimer = 999;
+
+  for (let tick = 0; tick < SMART_AI_STUCK_TICKS; tick++) {
+    updateEnemies(state, state.level);
+  }
 
   assert.equal(state.bullets.length, 0);
   assert.equal(smart.fireCooldown, 0);
+  assert.notEqual(smart.x, startX, 'smart tank should sidestep instead of remaining aim-locked');
+  assert.equal(smart.smartEscapeTicks, SMART_AI_ESCAPE_TICKS);
+});
+
+test('smart enemy may shoot a player who stands before the escort on the same ray', () => {
+  const state = createGameState(43, 1, 2);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  const escort = state.escort!;
+  Object.assign(player, { x: escort.x + 8, y: escort.y - 32 });
+  Object.assign(smart, { x: escort.x + 8, y: escort.y - 64, dir: 'down', aiTicks: 0 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel(state.level.cols, state.level.rows);
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = ['basic'];
+  state.enemySpawnTimer = 999;
+
+  updateEnemies(state, state.level);
+
+  assert.equal(state.bullets[0]?.ownerId, smart.id);
 });
 
 test('smart enemy keeps a minimum cooldown after its previous bullet disappears', () => {
@@ -298,6 +361,53 @@ test('smart enemy keeps a minimum cooldown after its previous bullet disappears'
   update(state, [emptyInput()]);
   assert.equal(state.bullets.length, 1);
   assert.equal(state.bullets[0].ownerId, smart.id);
+});
+
+test('hourglass halves smart enemy aimed-fire cadence', () => {
+  const shotsInSixtyTicks = (slowed: boolean): number => {
+    const state = createGameState(45, 1, 1);
+    const player = state.tanks[0];
+    const smart = createEnemy('smart', 2, 0);
+    Object.assign(player, { x: 40, y: 200 });
+    Object.assign(smart, { x: 40, y: 40, dir: 'down', aiTicks: 0 });
+    state.phase = 'playing';
+    state.level = createEmptyLevel();
+    state.tanks = [player, smart];
+    state.spawning = [];
+    state.enemyQueue = [];
+    state.enemySlowTicks = slowed ? 120 : 0;
+    const firstBulletId = state.nextBulletId;
+
+    for (let tick = 0; tick < 60; tick++) {
+      update(state, [emptyInput()]);
+      // 立即移除本帧炮弹，只测冷却节拍，不让“同时在场一发”的弹位上限干扰结果。
+      for (const bullet of state.bullets) bullet.alive = false;
+    }
+    return state.nextBulletId - firstBulletId;
+  };
+
+  assert.equal(shotsInSixtyTicks(false), 3);
+  assert.equal(shotsInSixtyTicks(true), 2);
+});
+
+test('timer freeze pauses smart enemy fire cooldown', () => {
+  const state = createGameState(46, 1, 1);
+  const player = state.tanks[0];
+  const smart = createEnemy('smart', 2, 0);
+  Object.assign(player, { x: 40, y: 200 });
+  Object.assign(smart, { x: 40, y: 40, dir: 'down', fireCooldown: 10 });
+  state.phase = 'playing';
+  state.level = createEmptyLevel();
+  state.tanks = [player, smart];
+  state.spawning = [];
+  state.enemyQueue = [];
+  state.enemyFreezeTicks = 5;
+
+  for (let tick = 0; tick < 4; tick++) update(state, [emptyInput()]);
+  assert.equal(smart.fireCooldown, 10);
+
+  update(state, [emptyInput()]);
+  assert.equal(smart.fireCooldown, 9, 'cooldown should resume on the first unfrozen action tick');
 });
 
 test('smart enemy detours toward an eligible nearby powerup', () => {
