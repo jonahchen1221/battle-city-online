@@ -4,13 +4,14 @@ import {
   PLAYER_LIVES_START_MP,
   STAGE_COUNT,
   STAGE_ENEMY_MIX,
-  isBossStage,
+  stageGroup,
+  stageKind,
   SPAWN_FLASH_TICKS,
   NEUTRAL_POWERUP_FIRST_TICKS,
   TANK_SIZE,
 } from '../core/constants';
 import { LevelState, cloneLevel } from './level';
-import { STAGES } from './levels';
+import { bossArenaForStage, normalLevelForStage } from './levels';
 import { TankState, TankKind, EnemyKind, WeaponKind, createPlayer, isPlayerTank } from './tank';
 import { BulletState } from './bullet';
 import { MVP_POWERUP_KINDS, shuffledNeutralQueue } from './powerup';
@@ -21,7 +22,6 @@ import {
   createEscortLevel,
   createEscortState,
   escortPlayerSpawn,
-  isEscortStage,
   type EscortState,
 } from './escort';
 
@@ -89,7 +89,7 @@ export interface GameState {
   nextEnemyId: number; // 敌方坦克 id 分配器
   nextBulletId: number; // 子弹 id 分配器（联机插值按此稳定匹配多发同源子弹）
   stage: number; // 当前关号（1-based，1..STAGE_COUNT）
-  // Boss 关（第 6 / 12 关）的 Boss 实体；普通关恒为 null。
+  // Boss 关（每组第 3 关：3 / 6 / … / 30）的 Boss 实体；普通关 / 护送关恒为 null。
   // 纯数据，随快照整体下发；过关条件与败因判定见 phase.ts。
   boss: BossState | null;
   phase: Phase; // 当前阶段
@@ -137,8 +137,11 @@ function emptyKillsByPlayer(playerCount: number): Array<Record<EnemyKind, number
   }));
 }
 
-function createStageQueue(stageIndex: number): TankKind[] {
-  const mix = STAGE_ENEMY_MIX[stageIndex % STAGE_ENEMY_MIX.length];
+// 某关的敌军出生队列。普通关 / 护送关取本组编成（STAGE_ENEMY_MIX[组号-1]）；
+// Boss 关不走有限队列（返回空数组），小兵由 enemy.ts updateBossMinions 无限补充。
+function createStageQueue(stage: number): TankKind[] {
+  if (stageKind(stage) === 'boss') return [];
+  const mix = STAGE_ENEMY_MIX[(stageGroup(stage) - 1) % STAGE_ENEMY_MIX.length];
   const remaining = mix.map((m) => ({ kind: m.kind, count: m.count }));
   const total = remaining.reduce((s, m) => s + m.count, 0);
   const queue: TankKind[] = [];
@@ -156,9 +159,13 @@ function createStageQueue(stageIndex: number): TankKind[] {
 // 建立一局全新游戏。stage 为 1-based 关号（默认第 1 关），载入对应关卡地形与出生队列。
 // 开局即进入 'stagestart' 幕布（模拟冻结，STAGE_START_TICKS 帧后自动转 playing），并发一次 stageStart 事件。
 export function createGameState(seed: number, playerCount = 1, stage = 1): GameState {
-  const stageIndex = (stage - 1) % STAGE_COUNT;
-  const escortStage = isEscortStage(stage);
-  const level = escortStage ? createEscortLevel(stage) : cloneLevel(STAGES[stageIndex]);
+  // 关卡类型（普通 / 护送 / Boss）单点分流：取图、建队列、建 boss/escort 全部据此。
+  const kind = stageKind(stage);
+  const escortStage = kind === 'escort';
+  const bossStage = kind === 'boss';
+  const level = escortStage
+    ? createEscortLevel(stage)
+    : cloneLevel(bossStage ? bossArenaForStage(stage) : normalLevelForStage(stage));
   const escort = escortStage ? createEscortState(level, stage) : null;
   // 玩家坦克：id 为 1..N，playerIndex 为 0..N-1。
   const tanks: TankState[] = [];
@@ -171,8 +178,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   }
   // rng 先行创建：本关中立道具队列的洗牌即取自它（必须在 state 组装前完成）。
   const rng = createRng(seed);
-  // Boss 关走专属中立池（2 星 + 头盔 + 战靴 + 1 件随机武器），普通关维持原 5 种池。
-  const bossStage = !escortStage && isBossStage(stage);
+  // Boss 关走专属中立池（2 星 + 头盔 + 战靴 + 1 件随机武器），普通关 / 护送关维持原 5 种池。
   const neutralQueue = shuffledNeutralQueue(rng, bossStage);
   // 护送关首枚中立道具固定为扳手，让玩家在 10 秒后稳定获得一次修车机会。
   if (escort) {
@@ -189,7 +195,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     bullets: [],
     spawning: [],
     explosions: [],
-    enemyQueue: createStageQueue(stageIndex),
+    enemyQueue: createStageQueue(stage),
     enemySpawnTimer: 0, // 开局即可出生第一台
     nextEnemyId: playerCount + 1, // 玩家占用 id=1..N
     nextBulletId: 1,
@@ -235,7 +241,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
 //                  出队计数 enemiesDequeued / 出生计时 / 出生点、paused / pendingResult。
 export function nextStage(state: GameState): void {
   const nextStageNum = (state.stage % STAGE_COUNT) + 1;
-  const stageIndex = nextStageNum - 1;
+  const nextKind = stageKind(nextStageNum);
 
   // ── MVP 开局奖励（仅多人局）──
   // 规则：以「本关得分差」评 MVP —— delta[i] = 当前累计分 − 本关开始时的累计分快照；
@@ -271,15 +277,18 @@ export function nextStage(state: GameState): void {
 
   state.stage = nextStageNum;
   state.levelEpoch++;
-  state.level = isEscortStage(nextStageNum)
-    ? createEscortLevel(nextStageNum)
-    : cloneLevel(STAGES[stageIndex]);
-  state.escort = isEscortStage(nextStageNum)
-    ? createEscortState(state.level, nextStageNum)
-    : null;
-  state.enemyQueue = createStageQueue(stageIndex);
-  // Boss 关重建一台满血 Boss；普通关清空。
-  state.boss = !state.escort && isBossStage(nextStageNum) ? createBoss(state.playerCount) : null;
+  state.level =
+    nextKind === 'escort'
+      ? createEscortLevel(nextStageNum)
+      : cloneLevel(
+          nextKind === 'boss'
+            ? bossArenaForStage(nextStageNum)
+            : normalLevelForStage(nextStageNum),
+        );
+  state.escort = nextKind === 'escort' ? createEscortState(state.level, nextStageNum) : null;
+  state.enemyQueue = createStageQueue(nextStageNum);
+  // Boss 关重建一台满血 Boss；普通关 / 护送关清空。
+  state.boss = nextKind === 'boss' ? createBoss(state.playerCount) : null;
 
   // 每关独立的战斗态一律清空。
   state.tanks = [];

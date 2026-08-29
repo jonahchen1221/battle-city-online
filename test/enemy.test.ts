@@ -17,7 +17,7 @@ import {
 } from '../src/core/constants';
 
 test('escort-stage traditional enemies steer back toward the convoy combat zone', () => {
-  const state = createGameState(100, 1, 1);
+  const state = createGameState(100, 1, 2);
   const player = state.tanks[0];
   const basic = createEnemy('basic', 2, 0);
   const escort = state.escort!;
@@ -34,7 +34,7 @@ test('escort-stage traditional enemies steer back toward the convoy combat zone'
 });
 
 test('a hidden traditional enemy far behind the escort is recycled ahead with a spawn flash', () => {
-  const state = createGameState(101, 1, 1);
+  const state = createGameState(101, 1, 2);
   const player = state.tanks[0];
   const basic = createEnemy('basic', 2, 0);
   const escort = state.escort!;
@@ -61,7 +61,7 @@ test('a hidden traditional enemy far behind the escort is recycled ahead with a 
 });
 
 test('traditional enemy movement remains un-leashed on normal stages', () => {
-  const state = createGameState(102, 1, 2);
+  const state = createGameState(102, 1, 1);
   const player = state.tanks[0];
   const basic = createEnemy('basic', 2, 0);
   Object.assign(basic, { x: 40, y: 40, dir: 'left', aiTicks: 30 });
@@ -245,7 +245,7 @@ test('smart enemy turns in place at a half-brick snap point and fires immediatel
 });
 
 test('smart enemy neither fires down the eagle lane nor damages the eagle with its bullets', () => {
-  const state = createGameState(42, 1, 2); // 普通鹰巢关；第 1 关暂作护送测试关
+  const state = createGameState(42, 1, 1); // 第 1 关为普通鹰巢关（护送关是每组第 2 关）
   const player = state.tanks[0];
   const smart = createEnemy('smart', 2, 0);
   const eagleX = EAGLE_COL * SUBTILE;
@@ -276,14 +276,20 @@ test('smart enemy neither fires down the eagle lane nor damages the eagle with i
   assert.equal(state.eagleDestroyed, true, 'traditional enemy bullets should keep classic behavior');
 });
 
+// 编成按“组号 t”取（第 t 组的普通关关号是 3t-2、护送关是 3t-1，两者共用第 t 档编成）。
 test('stage enemy queues include smart tanks without changing the configured total', () => {
   const expectedSmartCounts = [4, 5, 6, 7, 8];
-  for (let stage = 1; stage <= 5; stage++) {
-    const state = createGameState(42, 1, stage);
-    assert.equal(state.enemyQueue.length, STAGE_ENEMY_TOTAL);
-    assert.equal(
-      state.enemyQueue.filter((kind) => kind === 'smart').length,
-      expectedSmartCounts[stage - 1],
-    );
+  for (let group = 1; group <= 5; group++) {
+    for (const stage of [group * 3 - 2, group * 3 - 1]) {
+      const state = createGameState(42, 1, stage);
+      assert.equal(state.enemyQueue.length, STAGE_ENEMY_TOTAL, `第 ${stage} 关队列长度`);
+      assert.equal(
+        state.enemyQueue.filter((kind) => kind === 'smart').length,
+        expectedSmartCounts[group - 1],
+        `第 ${stage} 关（第 ${group} 组）智能坦克数`,
+      );
+    }
   }
+  // Boss 关不走有限队列。
+  assert.equal(createGameState(42, 1, 3).enemyQueue.length, 0);
 });

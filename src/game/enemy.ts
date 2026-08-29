@@ -30,7 +30,8 @@ import {
   BOSS_MINION_CARRIER_EVERY,
   BOSS_MINION_KINDS_A,
   BOSS_MINION_KINDS_B,
-  BOSS_STAGES,
+  STAGE_COUNT,
+  normalizeStage,
 } from '../core/constants';
 import { Cell, LevelState, getCell } from './level';
 import {
@@ -754,7 +755,7 @@ export function updateEnemies(state: GameState, level: LevelState): void {
 }
 
 // ── Boss 关小兵补充器 ──
-// Boss 关的 STAGE_ENEMY_MIX 为空数组（不走有限队列），改由此处无限补充：
+// Boss 关不走有限出生队列（enemyQueue 为空），改由此处无限补充：
 // 场上至多 BOSS_MINION_MAX 只、每 BOSS_MINION_INTERVAL_TICKS 帧一只，
 // 种类按关（A：basic/fast；B：power/smart 对半随机），每第 BOSS_MINION_CARRIER_EVERY 只携带道具。
 // Boss 已死时停止补充（此时正在走 stageclear 延迟）。落点沿用 pickSpawnSpot 的上半场随机采样。
@@ -765,9 +766,9 @@ function updateBossMinions(state: GameState, obstacles: TankState[]): void {
   if (enemyCount(state) >= BOSS_MINION_MAX) return;
   if (boss.minionTimer > 0) return;
 
-  // 关号决定种类池：最终战（BOSS_STAGES 最后一档）用 B 池，其余 Boss 关用 A 池。
+  // 关号决定种类池：最终战（归一后 = STAGE_COUNT，即第 30 关）用 B 池，其余 Boss 关用 A 池。
   const pool =
-    state.stage === BOSS_STAGES[BOSS_STAGES.length - 1] ? BOSS_MINION_KINDS_B : BOSS_MINION_KINDS_A;
+    normalizeStage(state.stage) === STAGE_COUNT ? BOSS_MINION_KINDS_B : BOSS_MINION_KINDS_A;
   const kind = pool[state.rng.int(pool.length)];
   const tank = createEnemy(kind, state.nextEnemyId, 0);
   const spot = pickSpawnSpot(state, tank, obstacles);

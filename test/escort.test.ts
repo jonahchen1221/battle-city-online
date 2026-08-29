@@ -4,12 +4,16 @@ import {
   ESCORT_FIELD_COLS,
   ESCORT_FIELD_ROWS,
   ESCORT_REPAIR_AMOUNT,
+  STAGE_COUNT,
   TANK_SIZE,
+  stageKind,
 } from '../src/core/constants';
 import { createGameState } from '../src/game/state';
 import {
+  ESCORT_ROUTES,
   escortGuardSlots,
   escortHasGuard,
+  escortRouteForStage,
   updateEscort,
   resolveEscortHits,
 } from '../src/game/escort';
@@ -22,15 +26,28 @@ import { updatePhase } from '../src/game/phase';
 import { destroyPlayerTank } from '../src/game/death';
 import { emptyInput } from '../src/core/types';
 
-test('escort and normal modes alternate, with six distinct escort maps and routes', () => {
-  const movingStages = [1, 3, 5, 7, 9, 11].map((stage) => createGameState(stage, 1, stage));
-  for (let stage = 1; stage <= 12; stage++) {
+// 三段循环下的护送关号：每组第 2 关。前六次护送各用一条路线。
+const ESCORT_STAGES = [2, 5, 8, 11, 14, 17];
+
+test('escort stages sit second in every cycle, with six distinct escort maps and routes', () => {
+  const movingStages = ESCORT_STAGES.map((stage) => createGameState(stage, 1, stage));
+  for (let stage = 1; stage <= STAGE_COUNT; stage++) {
     const state = createGameState(stage, 1, stage);
-    assert.equal(Boolean(state.escort), stage % 2 === 1);
-    if (stage % 2 === 0) {
+    assert.equal(Boolean(state.escort), stageKind(stage) === 'escort', `stage ${stage}`);
+    if (stageKind(stage) !== 'escort') {
       assert.equal(state.level.cols, 40);
       assert.equal(state.level.rows, 30);
     }
+  }
+  // 十次护送轮换六条路线：第 7–10 次回头复用第 1–4 条。
+  for (let e = 1; e <= 10; e++) {
+    const stage = e * 3 - 1;
+    assert.equal(stageKind(stage), 'escort');
+    assert.deepEqual(
+      escortRouteForStage(stage),
+      ESCORT_ROUTES[(e - 1) % ESCORT_ROUTES.length].map((p) => ({ ...p })),
+      `第 ${e} 次护送（第 ${stage} 关）应取第 ${((e - 1) % ESCORT_ROUTES.length) + 1} 条路线`,
+    );
   }
   for (const state of movingStages) {
     assert.equal(state.level.cols, ESCORT_FIELD_COLS);
@@ -50,7 +67,7 @@ test('escort and normal modes alternate, with six distinct escort maps and route
 });
 
 test('a turning escort switches direction at a waypoint and rotates its guard slots', () => {
-  const state = createGameState(13, 1, 3);
+  const state = createGameState(13, 1, 5); // 第 2 次护送 → 第 2 条路线（含转弯）
   const escort = state.escort!;
   const player = state.tanks[0];
   const corner = escort.route[1];
@@ -75,7 +92,7 @@ test('a turning escort switches direction at a waypoint and rotates its guard sl
 });
 
 test('all six escort routes can be completed through every turn', () => {
-  for (const stage of [1, 3, 5, 7, 9, 11]) {
+  for (const stage of ESCORT_STAGES) {
     const state = createGameState(200 + stage, 1, stage);
     const escort = state.escort!;
     const player = state.tanks[0];
@@ -95,7 +112,7 @@ test('all six escort routes can be completed through every turn', () => {
 });
 
 test('the mobile eagle stops at a brick roadblock and resumes as soon as it is cleared', () => {
-  const state = createGameState(2, 1, 1);
+  const state = createGameState(2, 1, 2);
   const escort = state.escort!;
   state.tanks = state.tanks.filter((tank) => tank.kind === 'player');
   escort.y = 504; // 第一道路障位于 y=496..512，车头恰好贴住下边。
@@ -115,7 +132,7 @@ test('the mobile eagle stops at a brick roadblock and resumes as soon as it is c
 });
 
 test('any tank standing in front stops the escort before their boxes overlap', () => {
-  const state = createGameState(9, 2, 1);
+  const state = createGameState(9, 2, 2);
   const escort = state.escort!;
   const guard = state.tanks[0];
   const player = state.tanks[1];
@@ -135,7 +152,7 @@ test('any tank standing in front stops the escort before their boxes overlap', (
 });
 
 test('the escort moves only while its single-player guard slot is occupied', () => {
-  const state = createGameState(12, 1, 1);
+  const state = createGameState(12, 1, 2);
   const escort = state.escort!;
   const player = state.tanks[0];
   Object.assign(player, { x: escort.x - 80, y: escort.y + 48 });
@@ -154,7 +171,7 @@ test('the escort moves only while its single-player guard slot is occupied', () 
 
 test('guard slots scale from one required two-cell strip to two simultaneously occupied strips', () => {
   for (const playerCount of [1, 2]) {
-    const state = createGameState(300 + playerCount, playerCount, 1);
+    const state = createGameState(300 + playerCount, playerCount, 2);
     const escort = state.escort!;
     state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
     const slots = escortGuardSlots(escort, playerCount);
@@ -168,7 +185,7 @@ test('guard slots scale from one required two-cell strip to two simultaneously o
   }
 
   for (const playerCount of [3, 4]) {
-    const state = createGameState(400 + playerCount, playerCount, 1);
+    const state = createGameState(400 + playerCount, playerCount, 2);
     const escort = state.escort!;
     state.level = createEmptyLevel(ESCORT_FIELD_COLS, ESCORT_FIELD_ROWS);
     const slots = escortGuardSlots(escort, playerCount);
@@ -191,7 +208,7 @@ test('guard slots scale from one required two-cell strip to two simultaneously o
 });
 
 test('players can move through the expanded world but cannot drive through the escort', () => {
-  const state = createGameState(8, 1, 1);
+  const state = createGameState(8, 1, 2);
   const player = state.tanks[0];
   Object.assign(player, { x: 400, y: 600, dir: 'right' as const });
   const right = emptyInput();
@@ -207,7 +224,7 @@ test('players can move through the expanded world but cannot drive through the e
 });
 
 test('players respawn at the original escort-stage spawn after the convoy has moved', () => {
-  const state = createGameState(10, 1, 1);
+  const state = createGameState(10, 1, 2);
   const player = state.tanks[0];
   const originalSpawn = { x: player.x, y: player.y };
   state.escort!.y = 320;
@@ -219,7 +236,7 @@ test('players respawn at the original escort-stage spawn after the convoy has mo
 });
 
 test('enemy bullets damage the escort once per hit window, while wrench repairs it', () => {
-  const state = createGameState(3, 1, 1);
+  const state = createGameState(3, 1, 2);
   const escort = state.escort!;
   const enemy = createEnemy('basic', 99, 0);
   Object.assign(enemy, { x: escort.x, y: escort.y - 16, dir: 'down' as const });
@@ -241,7 +258,7 @@ test('enemy bullets damage the escort once per hit window, while wrench repairs 
 });
 
 test('smart tank bullets ignore the escort', () => {
-  const state = createGameState(11, 1, 1);
+  const state = createGameState(11, 1, 2);
   const escort = state.escort!;
   const smart = createEnemy('smart', 99, 0);
   Object.assign(smart, { x: escort.x, y: escort.y - 16, dir: 'down' as const });
@@ -258,7 +275,7 @@ test('smart tank bullets ignore the escort', () => {
 });
 
 test('escort arrival clears the stage and destruction has failure priority', () => {
-  const state = createGameState(4, 1, 1);
+  const state = createGameState(4, 1, 2);
   const escort = state.escort!;
   state.phase = 'playing';
   escort.arrived = true;

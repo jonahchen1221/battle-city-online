@@ -92,7 +92,7 @@ test('enemy grenade destroys players through the normal life and respawn flow', 
 });
 
 test('smart enemy ignores battle-swinging powerups even when overlapping them', () => {
-  const state = createGameState(42, 1, 2);
+  const state = createGameState(42, 1, 1);
   const smart = createEnemy('smart', 2, 0);
   Object.assign(smart, { x: 32, y: 32 });
   state.tanks.push(smart);

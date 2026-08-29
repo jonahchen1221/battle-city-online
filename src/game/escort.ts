@@ -13,7 +13,10 @@ import {
   PLAYER_SPAWN_POINTS,
   SUBTILE,
   TANK_SIZE,
+  stageGroup,
 } from '../core/constants';
+// 关卡类型判定统一在 constants.ts（见 stageKind）；此处原样再导出，调用方无需改导入路径。
+export { isEscortStage } from '../core/constants';
 import type { Direction } from '../core/types';
 import { Cell, type CellType, type LevelState, brickMaskOverlapsRect, getCell } from './level';
 import type { GameState } from './state';
@@ -110,37 +113,34 @@ export function escortHasGuard(state: GameState): boolean {
   return occupied.length > 0 && occupied.every(Boolean);
 }
 
-export function isEscortStage(stage: number): boolean {
-  return stage % 2 === 1;
-}
-
-const ESCORT_ROUTES: ReadonlyArray<ReadonlyArray<EscortWaypoint>> = [
-  // 1：中央直路，教学版。
+// 六条护送路线，按“第几次护送”轮换（见 escortVariant）。
+export const ESCORT_ROUTES: ReadonlyArray<ReadonlyArray<EscortWaypoint>> = [
+  // 路线 1：中央直路，教学版。
   [{ x: 304, y: 656 }, { x: 304, y: 16 }],
-  // 3：先向西绕行，再横穿至东侧终点。
+  // 路线 2：先向西绕行，再横穿至东侧终点。
   [
     { x: 304, y: 656 }, { x: 304, y: 520 }, { x: 176, y: 520 },
     { x: 176, y: 320 }, { x: 400, y: 320 }, { x: 400, y: 16 },
   ],
-  // 5：从西侧上行，经中部横路切回中央。
+  // 路线 3：从西侧上行，经中部横路切回中央。
   [
     { x: 144, y: 656 }, { x: 144, y: 480 }, { x: 432, y: 480 },
     { x: 432, y: 240 }, { x: 304, y: 240 }, { x: 304, y: 16 },
   ],
-  // 7：东侧起步的双折线。
+  // 路线 4：东侧起步的双折线。
   [
     { x: 464, y: 656 }, { x: 464, y: 560 }, { x: 240, y: 560 },
     { x: 240, y: 400 }, { x: 400, y: 400 }, { x: 400, y: 208 },
     { x: 304, y: 208 }, { x: 304, y: 16 },
   ],
-  // 9：最终移动关，多次横穿地图。
+  // 路线 5：多次横穿地图。
   [
     { x: 304, y: 656 }, { x: 304, y: 584 }, { x: 112, y: 584 },
     { x: 112, y: 416 }, { x: 480, y: 416 }, { x: 480, y: 240 },
     { x: 208, y: 240 }, { x: 208, y: 80 }, { x: 304, y: 80 },
     { x: 304, y: 16 },
   ],
-  // 11：终盘回形路线，长距离横移与连续转向交替出现。
+  // 路线 6：回形路线，长距离横移与连续转向交替出现。
   [
     { x: 304, y: 656 }, { x: 304, y: 600 }, { x: 496, y: 600 },
     { x: 496, y: 480 }, { x: 96, y: 480 }, { x: 96, y: 304 },
@@ -149,8 +149,10 @@ const ESCORT_ROUTES: ReadonlyArray<ReadonlyArray<EscortWaypoint>> = [
   ],
 ];
 
+// 第 e 次护送（e = 组号 stageGroup）取 ESCORT_ROUTES[(e-1) % 路线数]：十次护送里前六次各用一条，
+// 第 7–10 次回头复用第 1–4 条。
 function escortVariant(stage: number): number {
-  return Math.floor(((Math.max(1, stage) - 1) % 12) / 2);
+  return (stageGroup(stage) - 1) % ESCORT_ROUTES.length;
 }
 
 export function escortRouteForStage(stage: number): EscortWaypoint[] {

@@ -14,7 +14,7 @@ export const FIELD_WIDTH = FIELD_COLS * SUBTILE; // 320
 export const FIELD_HEIGHT = FIELD_ROWS * SUBTILE; // 240
 
 // ── 护送关 ──
-// 奇数关为移动护送、偶数关为普通关：移动 → 普通 → 移动。
+// 关卡循环为「普通 → 护送 → Boss」三段（见 stageKind）：护送关是每组的第 2 关。
 // 护送关世界是普通战场的 2×3，渲染仍只展示 320×240 视口。
 export const ESCORT_FIELD_COLS = FIELD_COLS * 2; // 80 子格 = 640px
 export const ESCORT_FIELD_ROWS = FIELD_ROWS * 3; // 90 子格 = 720px
@@ -140,38 +140,73 @@ export const AI_FIRE_DENOM = 60;
 export const SMART_AI_REPLAN_TICKS = 12;
 // A* 中进入含砖位置的代价：优先选择短绕路，无路可绕时仍会主动射穿砖墙。
 export const SMART_AI_BRICK_COST = 6;
-// 关卡敌军总数（单一可调常量；暂不随人数变化）。各关 STAGE_ENEMY_MIX 之和均等于此值。
-// Boss 关不走有限队列（编成为空数组），故不受此值约束。
+// 关卡敌军总数（单一可调常量；暂不随人数变化）。各档 STAGE_ENEMY_MIX 之和均等于此值。
+// Boss 关不走有限队列（编成为空），故不受此值约束。
 export const STAGE_ENEMY_TOTAL = 20;
-// 关卡总数（levels.ts STAGES 的长度）；通关第 12 关后回卷到第 1 关。
-// 序列：普通关 1–5 → Boss 关 A（6）→ 普通关 7–11 → Boss 关 B / 最终战（12）。
-export const STAGE_COUNT = 12;
-// Boss 关的关号（1-based）。第 6 关为 Boss A 竞技场，第 12 关为 Boss B（最终战）。
-// 第 1 关保留为移动护送教学关，方便测试移动玩法。
-export const BOSS_STAGES: ReadonlyArray<number> = [6, 12];
-// 某关号是否为 Boss 关。stage 可为任意正整数（回卷关号先归一到 1..STAGE_COUNT）。
-export function isBossStage(stage: number): boolean {
-  return BOSS_STAGES.includes(((stage - 1) % STAGE_COUNT) + 1);
+
+// ── 关卡编排：普通 → 护送 → Boss 三段循环 ──
+// 一个循环组（“组”）含三关，共 STAGE_GROUP_COUNT 组 = STAGE_COUNT 关；通关第 30 关回卷第 1 关。
+//   组 t 的三关关号为 3t-2（普通）/ 3t-1（护送）/ 3t（Boss）。
+//   普通关取第 t 张普通图与第 t 档敌军编成；护送关取第 ((t-1) % 路线数) 条路线；
+//   Boss 关竞技场 A/B 交替（t 奇 A、t 偶 B），最终战（第 30 关）用 B 池小兵。
+export const STAGE_CYCLE = 3; // 一组的关数（普通 / 护送 / Boss 各一）
+export const STAGE_GROUP_COUNT = 10; // 组数（= 普通图张数 = 敌军编成档数）
+export const STAGE_COUNT = STAGE_CYCLE * STAGE_GROUP_COUNT; // 30
+
+export type StageKind = 'normal' | 'escort' | 'boss';
+
+// 把任意关号（含回卷 / 越界）归一到 1..STAGE_COUNT。
+export function normalizeStage(stage: number): number {
+  const n = Math.floor(stage) - 1;
+  return (((n % STAGE_COUNT) + STAGE_COUNT) % STAGE_COUNT) + 1;
 }
-// 每关敌军编成（普通关总数均为 STAGE_ENEMY_TOTAL，逐关升级）。
+
+// 某关号所属的循环组（1..STAGE_GROUP_COUNT）：普通图张号 / 护送次序 / Boss 次序共用这一个序号。
+export function stageGroup(stage: number): number {
+  return Math.ceil(normalizeStage(stage) / STAGE_CYCLE);
+}
+
+// 关卡类型：归一后按 %3 分流（1 → 普通、2 → 护送、0 → Boss）。
+// isBossStage / isEscortStage 一律派生自它，绝不再各自算关号。
+export function stageKind(stage: number): StageKind {
+  const slot = normalizeStage(stage) % STAGE_CYCLE;
+  if (slot === 1) return 'normal';
+  if (slot === 2) return 'escort';
+  return 'boss';
+}
+
+export function isBossStage(stage: number): boolean {
+  return stageKind(stage) === 'boss';
+}
+
+export function isEscortStage(stage: number): boolean {
+  return stageKind(stage) === 'escort';
+}
+
+// Boss 关的关号（1-based）：[3, 6, …, 30]，由编排派生，不再手写。
+export const BOSS_STAGES: ReadonlyArray<number> = Array.from(
+  { length: STAGE_GROUP_COUNT },
+  (_, i) => (i + 1) * STAGE_CYCLE,
+);
+
+// 各组的敌军编成（普通关与护送关共用，总数均为 STAGE_ENEMY_TOTAL，逐组升级），按 stageGroup 取。
 // 出生队列按各种类剩余数轮转交错（round-robin）构建，确定性、无需 rng（见 state.ts）。
-// Boss 关（第 6 / 12 关，索引 5 / 11）为空数组：不走有限队列，小兵由 Boss 关专属逻辑无限补充
-//（见 enemy.ts updateBossMinions）。
+// Boss 关不取本表：小兵由 Boss 关专属逻辑无限补充（见 enemy.ts updateBossMinions）。
 export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; count: number }>> = [
-  // 第 1 关：基础 14 + 快速 2 + 智能 4（移动护送教学关）
+  // 第 1 组（第 1 / 2 关）：基础 14 + 快速 2 + 智能 4
   [
     { kind: 'basic', count: 14 },
     { kind: 'fast', count: 2 },
     { kind: 'smart', count: 4 },
   ],
-  // 第 2 关：基础 8 + 快速 5 + 威力 2 + 智能 5（智能占 25%）
+  // 第 2 组：基础 8 + 快速 5 + 威力 2 + 智能 5（智能占 25%）
   [
     { kind: 'basic', count: 8 },
     { kind: 'fast', count: 5 },
     { kind: 'power', count: 2 },
     { kind: 'smart', count: 5 },
   ],
-  // 第 3 关：基础 5 + 快速 5 + 威力 2 + 装甲 2 + 智能 6（智能占 30%）
+  // 第 3 组：基础 5 + 快速 5 + 威力 2 + 装甲 2 + 智能 6（智能占 30%）
   [
     { kind: 'basic', count: 5 },
     { kind: 'fast', count: 5 },
@@ -179,7 +214,7 @@ export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; cou
     { kind: 'armor', count: 2 },
     { kind: 'smart', count: 6 },
   ],
-  // 第 4 关：基础 2 + 快速 5 + 威力 3 + 装甲 3 + 智能 7（智能占 35%）
+  // 第 4 组：基础 2 + 快速 5 + 威力 3 + 装甲 3 + 智能 7（智能占 35%）
   [
     { kind: 'basic', count: 2 },
     { kind: 'fast', count: 5 },
@@ -187,53 +222,49 @@ export const STAGE_ENEMY_MIX: ReadonlyArray<ReadonlyArray<{ kind: EnemyKind; cou
     { kind: 'armor', count: 3 },
     { kind: 'smart', count: 7 },
   ],
-  // 第 5 关：快速 4 + 威力 4 + 装甲 4 + 智能 8（智能占 40%，不再出现基础型）
+  // 第 5 组：快速 4 + 威力 4 + 装甲 4 + 智能 8（智能占 40%，不再出现基础型）
   [
     { kind: 'fast', count: 4 },
     { kind: 'power', count: 4 },
     { kind: 'armor', count: 4 },
     { kind: 'smart', count: 8 },
   ],
-  // ── 第 6 关：Boss 关 A ── 空编成：小兵由 Boss 逻辑无限补充（basic / fast）。
-  [],
-  // ── 后半程（第 7–11 关，原第 6–10 关的五张图）──
-  // 硬骨头（威力 + 装甲）合计逐关单调不减：8 → 8 → 9 → 10 → 11 → 12；
-  // 智能坦克稳定在 45%，快速坦克逐关退场，最终由装甲与威力压满战场。
-  // 第 7 关：快速 3 + 威力 4 + 装甲 4 + 智能 9（智能占 45%）
+  // ── 后半程（第 6–10 组）──
+  // 硬骨头（威力 + 装甲）合计逐组单调不减：8 → 8 → 9 → 10 → 11 → 12；
+  // 智能坦克稳定在 45%，快速坦克逐组退场，最终由装甲与威力压满战场。
+  // 第 6 组：快速 3 + 威力 4 + 装甲 4 + 智能 9（智能占 45%）
   [
     { kind: 'fast', count: 3 },
     { kind: 'power', count: 4 },
     { kind: 'armor', count: 4 },
     { kind: 'smart', count: 9 },
   ],
-  // 第 8 关：快速 2 + 威力 4 + 装甲 5 + 智能 9
+  // 第 7 组：快速 2 + 威力 4 + 装甲 5 + 智能 9
   [
     { kind: 'fast', count: 2 },
     { kind: 'power', count: 4 },
     { kind: 'armor', count: 5 },
     { kind: 'smart', count: 9 },
   ],
-  // 第 9 关：快速 1 + 威力 5 + 装甲 5 + 智能 9
+  // 第 8 组：快速 1 + 威力 5 + 装甲 5 + 智能 9
   [
     { kind: 'fast', count: 1 },
     { kind: 'power', count: 5 },
     { kind: 'armor', count: 5 },
     { kind: 'smart', count: 9 },
   ],
-  // 第 10 关：威力 5 + 装甲 6 + 智能 9（快速坦克退场）
+  // 第 9 组：威力 5 + 装甲 6 + 智能 9（快速坦克退场）
   [
     { kind: 'power', count: 5 },
     { kind: 'armor', count: 6 },
     { kind: 'smart', count: 9 },
   ],
-  // 第 11 关：威力 4 + 装甲 8 + 智能 8（装甲占四成，普通关最难）
+  // 第 10 组：威力 4 + 装甲 8 + 智能 8（装甲占四成，普通关最难）
   [
     { kind: 'power', count: 4 },
     { kind: 'armor', count: 8 },
     { kind: 'smart', count: 8 },
   ],
-  // ── 第 12 关：Boss 关 B（最终战）── 空编成：小兵为 power / smart 对半随机。
-  [],
 ];
 // 同屏敌军上限的基数与每多一名玩家的增量。
 export const MAX_ENEMIES_BASE = 4;
@@ -395,7 +426,7 @@ export const MACHINE_MAX_BULLETS = 3;
 export const LASER_SPRITE_SIZE = 8;
 export const LASER_SPRITE_OFFSET = (LASER_SPRITE_SIZE - BULLET_SIZE) / 2; // 2
 
-// ── Boss 关（第 6 / 12 关）──
+// ── Boss 关（每组第 3 关：3 / 6 / … / 30）──
 // Boss 是一台 32×32 巨型坦克（普通坦克的 2×2，即 4 格大小）：对坦克是实心障碍，
 // 对小兵子弹是吸收体，能在战场内四向移动，并以双发破障激光打通砖墙（钢墙打不穿，只能绕行）。
 // 只有玩家子弹能对它造成伤害（受击次数制，见 BOSS_DAMAGE_*）。全部数值以 tick 计。
@@ -469,7 +500,7 @@ export const BOSS_DEATH_EXPLOSION_RANGE = 3; // → 3..5
 export const BOSS_MINION_MAX = 2;
 export const BOSS_MINION_INTERVAL_TICKS = 400;
 export const BOSS_MINION_CARRIER_EVERY = 2;
-// 各 Boss 关的小兵种类池（按 state.rng 等概率取）。
+// 各 Boss 关的小兵种类池（按 state.rng 等概率取）：最终战（第 STAGE_COUNT 关）用 B 池，其余用 A 池。
 export const BOSS_MINION_KINDS_A: ReadonlyArray<EnemyKind> = ['basic', 'fast'];
 export const BOSS_MINION_KINDS_B: ReadonlyArray<EnemyKind> = ['power', 'smart'];
 

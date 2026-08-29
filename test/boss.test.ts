@@ -28,6 +28,7 @@ import {
   SUBTILE,
   TANK_SIZE,
   isBossStage,
+  stageKind,
   bossMaxHp,
 } from '../src/core/constants';
 import { createGameState, nextStage, type GameState } from '../src/game/state';
@@ -43,7 +44,11 @@ import {
 import { isPlayerTank, type TankState } from '../src/game/tank';
 import type { BulletState } from '../src/game/bullet';
 import { Cell, createEmptyLevel, getCell, setCell } from '../src/game/level';
-import { STAGES } from '../src/game/levels';
+import { BOSS_ARENAS } from '../src/game/levels';
+
+// 三段循环下的代表关号：Boss A = 第 3 关（组 1）、Boss B / 最终战 = 第 30 关（组 10）。
+const BOSS_A_STAGE = 3;
+const BOSS_B_STAGE = STAGE_COUNT; // 30
 
 // ── 测试工具 ──
 
@@ -98,40 +103,65 @@ function enemiesOnField(state: GameState): number {
 
 // ── 关卡序列 ──
 
-test('12 关循环：第 6 / 12 关为 Boss 关，通关第 12 关回到移动第 1 关', () => {
-  assert.equal(STAGE_COUNT, 12);
-  assert.deepEqual([...BOSS_STAGES], [6, 12]);
+test('30 关三段循环：每组第 3 关为 Boss 关，通关第 30 关回到第 1 关（普通关）', () => {
+  assert.equal(STAGE_COUNT, 30);
+  assert.deepEqual([...BOSS_STAGES], [3, 6, 9, 12, 15, 18, 21, 24, 27, 30]);
   for (let stage = 1; stage <= STAGE_COUNT; stage++) {
-    assert.equal(
-      isBossStage(stage),
-      stage === 6 || stage === 12,
-      `第 ${stage} 关 isBossStage`,
-    );
+    assert.equal(isBossStage(stage), stage % 3 === 0, `第 ${stage} 关 isBossStage`);
   }
-  // 回卷关号同样归一：第 13 关 = 第 1 关（移动），第 18 关 = 第 6 关（Boss）。
-  assert.equal(isBossStage(13), false);
-  assert.equal(isBossStage(18), true);
+  // 回卷关号同样归一：第 31 关 = 第 1 关（普通），第 33 关 = 第 3 关（Boss）。
+  assert.equal(isBossStage(31), false);
+  assert.equal(isBossStage(33), true);
 
   const state = createGameState(1, 1, STAGE_COUNT);
-  assert.ok(state.boss, '第 12 关应有 Boss');
+  assert.ok(state.boss, '第 30 关应有 Boss');
+  assert.equal(state.escort, null, 'Boss 关不应同时是护送关');
   nextStage(state);
   assert.equal(state.stage, 1);
-  assert.equal(state.boss, null, '第 1 关是移动护送关，回卷后不应生成 Boss');
-  assert.ok(state.escort, '回卷后应生成移动护送目标');
+  assert.equal(state.boss, null, '第 1 关是普通关，回卷后不应生成 Boss');
+  assert.equal(state.escort, null, '第 1 关不是护送关');
+  assert.equal(state.level.cols, FIELD_COLS);
+});
+
+test('三类关的 createGameState 冒烟：boss / escort 互斥，地图尺寸各就各位', () => {
+  const normal = createGameState(7, 1, 1);
+  assert.equal(stageKind(1), 'normal');
+  assert.equal(normal.boss, null);
+  assert.equal(normal.escort, null);
+  assert.equal(normal.level.cols, FIELD_COLS);
+  assert.equal(normal.level.rows, FIELD_ROWS);
+  assert.ok(normal.enemyQueue.length > 0, '普通关走有限出生队列');
+
+  const escort = createGameState(7, 1, 2);
+  assert.equal(stageKind(2), 'escort');
+  assert.equal(escort.boss, null);
+  assert.ok(escort.escort, '护送关应有移动鹰巢');
+  assert.equal(escort.level.cols, FIELD_COLS * 2);
+  assert.equal(escort.level.rows, FIELD_ROWS * 3);
+  assert.ok(escort.enemyQueue.length > 0, '护送关沿用有限出生队列');
+
+  const boss = createGameState(7, 1, 3);
+  assert.equal(stageKind(3), 'boss');
+  assert.ok(boss.boss, 'Boss 关应有 Boss');
+  assert.equal(boss.escort, null);
+  assert.equal(boss.level.cols, FIELD_COLS);
+  assert.equal(boss.level.rows, FIELD_ROWS);
+  assert.equal(boss.enemyQueue.length, 0, 'Boss 关不走有限出生队列');
 });
 
 test('Boss 竞技场：无鹰巢、Boss 空域留空、玩家出生位是空地', () => {
-  for (const stage of BOSS_STAGES) {
-    const level = STAGES[stage - 1];
+  for (let i = 0; i < BOSS_ARENAS.length; i++) {
+    const level = BOSS_ARENAS[i];
+    const name = `竞技场 ${'AB'[i]}`;
     for (let row = 0; row < FIELD_ROWS; row++) {
       for (let col = 0; col < FIELD_COLS; col++) {
-        assert.notEqual(getCell(level, col, row), Cell.EAGLE, `第 ${stage} 关不应有鹰巢`);
+        assert.notEqual(getCell(level, col, row), Cell.EAGLE, `${name} 不应有鹰巢`);
       }
     }
     // Boss 车体覆盖的子格必须全空（否则 Boss 会与地形重叠）。
     for (let row = BOSS_Y / SUBTILE; row < (BOSS_Y + BOSS_SIZE) / SUBTILE; row++) {
       for (let col = BOSS_X / SUBTILE; col < (BOSS_X + BOSS_SIZE) / SUBTILE; col++) {
-        assert.equal(getCell(level, col, row), Cell.EMPTY, `第 ${stage} 关 Boss 空域 (${col},${row})`);
+        assert.equal(getCell(level, col, row), Cell.EMPTY, `${name} Boss 空域 (${col},${row})`);
       }
     }
     for (const p of PLAYER_SPAWN_POINTS) {
@@ -139,7 +169,7 @@ test('Boss 竞技场：无鹰巢、Boss 空域留空、玩家出生位是空地'
       const row0 = p.y / SUBTILE;
       for (let row = row0; row <= row0 + 1; row++) {
         for (let col = col0; col <= col0 + 1; col++) {
-          assert.equal(getCell(level, col, row), Cell.EMPTY, `第 ${stage} 关出生位 (${col},${row})`);
+          assert.equal(getCell(level, col, row), Cell.EMPTY, `${name} 出生位 (${col},${row})`);
         }
       }
     }
@@ -149,10 +179,11 @@ test('Boss 竞技场：无鹰巢、Boss 空域留空、玩家出生位是空地'
 // ── Boss 生成 ──
 
 test('Boss 只在 Boss 关生成，血量随人数放大', () => {
-  assert.equal(createGameState(1, 1, 5).boss, null, '普通关不应有 Boss');
+  assert.equal(createGameState(1, 1, 4).boss, null, '普通关不应有 Boss');
   assert.equal(createGameState(1, 1, 7).boss, null, '普通关不应有 Boss');
+  assert.equal(createGameState(1, 1, 5).boss, null, '护送关不应有 Boss');
 
-  const solo = createGameState(1, 1, 6).boss;
+  const solo = createGameState(1, 1, BOSS_A_STAGE).boss;
   assert.ok(solo);
   assert.equal(solo.hp, 100);
   assert.equal(solo.maxHp, 100);
@@ -161,21 +192,22 @@ test('Boss 只在 Boss 关生成，血量随人数放大', () => {
   assert.equal(solo.x, BOSS_X);
   assert.equal(solo.y, BOSS_Y);
 
-  const trio = createGameState(1, 3, 6).boss;
+  const trio = createGameState(1, 3, BOSS_A_STAGE).boss;
   assert.ok(trio);
   assert.equal(trio.hp, 220); // 100 + 2×60
   assert.equal(bossMaxHp(4), 280);
 
-  // 跨关进入 Boss 关时同样生成（第 11 关 → 第 12 关）。
-  const state = createGameState(1, 2, 11);
+  // 跨关进入 Boss 关时同样生成（第 29 关护送 → 第 30 关最终战）。
+  const state = createGameState(1, 2, BOSS_B_STAGE - 1);
   assert.equal(state.boss, null);
   nextStage(state);
-  assert.equal(state.stage, 12);
+  assert.equal(state.stage, BOSS_B_STAGE);
+  assert.equal(state.escort, null, '进入 Boss 关时护送目标必须清空');
   assert.equal(state.boss?.maxHp, 160);
 });
 
 test('Boss 车体为普通坦克的 2×2，并以四个实心格参与坦克碰撞', () => {
-  const boss = createGameState(2, 1, 6).boss!;
+  const boss = createGameState(2, 1, BOSS_A_STAGE).boss!;
   assert.equal(BOSS_SIZE, TANK_SIZE * 2);
   assert.equal(boss.size, TANK_SIZE * 2);
 
@@ -201,7 +233,7 @@ test('Boss 可在空场上向四个方向追踪玩家（多人局全速）', () 
   ];
   for (const c of cases) {
     // 单机局一阶段 Boss 定点不动（另见单机减压用例），因此追踪方向用双人局验证。
-    const state = playingAt(3, 2, 6);
+    const state = playingAt(3, 2, BOSS_A_STAGE);
     state.level = createEmptyLevel();
     const boss = state.boss!;
     boss.x = 144;
@@ -225,7 +257,7 @@ test('Boss 可在空场上向四个方向追踪玩家（多人局全速）', () 
 });
 
 test('Boss 遇到砖墙会停下并发射双发破障激光，清出 32px 通路后继续移动', () => {
-  const state = playingAt(4, 2, 6);
+  const state = playingAt(4, 2, BOSS_A_STAGE);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   const wallRow = (boss.y + boss.size) / SUBTILE;
@@ -256,7 +288,7 @@ test('Boss 遇到砖墙会停下并发射双发破障激光，清出 32px 通路
 });
 
 test('破障激光打在钢块上即消亡，钢块保留；Boss 改为绕行且不会卡死', () => {
-  const state = playingAt(41, 2, 6);
+  const state = playingAt(41, 2, BOSS_A_STAGE);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   const brickRow = (boss.y + boss.size) / SUBTILE;
@@ -299,7 +331,7 @@ test('破障激光打在钢块上即消亡，钢块保留；Boss 改为绕行且
 });
 
 test('单机减压：一阶段 Boss 定点不动（也不破障），二阶段起慢速追踪', () => {
-  const state = playingAt(42, 1, 6);
+  const state = playingAt(42, 1, BOSS_A_STAGE);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   const startX = boss.x;
@@ -338,7 +370,7 @@ test('单机减压：一阶段 Boss 定点不动（也不破障），二阶段�
 // ── 伤害结算 ──
 
 test('玩家弹对 Boss：普通弹 −1、激光 −2，且一律消亡；小兵弹被吸收不扣血', () => {
-  const state = playingAt(11, 1, 6);
+  const state = playingAt(11, 1, BOSS_A_STAGE);
   const boss = state.boss!;
   const before = boss.hp;
 
@@ -367,7 +399,7 @@ test('玩家弹对 Boss：普通弹 −1、激光 −2，且一律消亡；小�
 });
 
 test('hp 掉到半血以下进入 phase 2，并清空场上 Boss 弹幕', () => {
-  const state = playingAt(12, 1, 6);
+  const state = playingAt(12, 1, BOSS_A_STAGE);
   const boss = state.boss!;
   boss.hp = boss.maxHp / 2 + 1;
 
@@ -398,7 +430,7 @@ test('hp 掉到半血以下进入 phase 2，并清空场上 Boss 弹幕', () => 
 });
 
 test('Boss 死亡：清弹幕、播大爆炸，随后走既有 stageclear 流程', () => {
-  const state = playingAt(13, 1, 6);
+  const state = playingAt(13, 1, BOSS_A_STAGE);
   const boss = state.boss!;
   boss.hp = 1;
 
@@ -428,7 +460,7 @@ test('Boss 死亡：清弹幕、播大爆炸，随后走既有 stageclear 流程
 // ── 攻击 ──
 
 test('Boss 会周期性发动弹幕攻击（fromEnemy 普通弹，玩家可抵消）', () => {
-  const state = playingAt(21, 1, 6);
+  const state = playingAt(21, 1, BOSS_A_STAGE);
   let seen = 0;
   for (let i = 0; i < 900 && seen === 0; i++) {
     update(state, noInputs(1));
@@ -443,7 +475,7 @@ test('Boss 会周期性发动弹幕攻击（fromEnemy 普通弹，玩家可抵�
 });
 
 test('垂直激光：前摇期间不伤人，激活期间同一玩家只结算一次', () => {
-  const state = playingAt(22, 1, 6);
+  const state = playingAt(22, 1, BOSS_A_STAGE);
   const boss = state.boss!;
   const player = state.tanks[0];
   player.invulnTicks = 0; // 本用例专门验证激光伤害
@@ -471,7 +503,7 @@ test('垂直激光：前摇期间不伤人，激活期间同一玩家只结算�
 });
 
 test('phase 2 的 16 向旋转弹幕：2 波、每波 16 发、波间 30 帧', () => {
-  const state = playingAt(23, 1, 6);
+  const state = playingAt(23, 1, BOSS_A_STAGE);
   const boss = state.boss!;
   boss.phase = 2;
   boss.attack = 'spin';
@@ -497,7 +529,7 @@ test('phase 2 的 16 向旋转弹幕：2 波、每波 16 发、波间 30 帧', (
 // ── 小兵 ──
 
 test('Boss 关小兵：场上至多 2 只、按间隔补充、每第 2 只携带道具', () => {
-  const state = playingAt(31, 1, 6);
+  const state = playingAt(31, 1, BOSS_A_STAGE);
   const boss = state.boss!;
 
   // 每次强制放行一只，检查种类池与携带者节奏。
@@ -525,7 +557,7 @@ test('Boss 关小兵：场上至多 2 只、按间隔补充、每第 2 只携带
   );
 
   // 场上数量上限：连续推进期间敌军（含出生闪光）不得超过 2。
-  const run = playingAt(32, 1, 6);
+  const run = playingAt(32, 1, BOSS_A_STAGE);
   let peak = 0;
   for (let i = 0; i < 1500; i++) {
     update(run, noInputs(1));
@@ -536,7 +568,7 @@ test('Boss 关小兵：场上至多 2 只、按间隔补充、每第 2 只携带
 });
 
 test('Boss 关 B（最终战）的小兵为 power / smart', () => {
-  const state = playingAt(33, 1, 12);
+  const state = playingAt(33, 1, BOSS_B_STAGE);
   const boss = state.boss!;
   const kinds = new Set<TankState['kind']>();
   for (let i = 0; i < 8; i++) {
@@ -576,16 +608,21 @@ test('Boss 关中立道具队列：2 星 + 头盔 + 战靴 + 1 件随机武器',
   const normal = createGameState(1, 1, 4).neutralQueue;
   assert.deepEqual([...normal].sort(), [...NEUTRAL_POWERUP_KINDS].sort());
 
-  // 跨关进入 Boss 关时同样切换到专属池。
-  const state = createGameState(5, 1, 5);
+  // 护送关同样用普通池（只是把扳手换到队首，见 state.ts）。
+  const escort = createGameState(1, 1, 2).neutralQueue;
+  assert.deepEqual([...escort].sort(), [...NEUTRAL_POWERUP_KINDS].sort());
+  assert.equal(escort[0], 'wrench', '护送关首枚中立道具固定为扳手');
+
+  // 跨关进入 Boss 关时同样切换到专属池（第 2 关护送 → 第 3 关 Boss）。
+  const state = createGameState(5, 1, BOSS_A_STAGE - 1);
   nextStage(state);
-  assert.equal(state.stage, 6);
+  assert.equal(state.stage, BOSS_A_STAGE);
   assert.equal(state.neutralQueue.length, 5);
   assert.equal(state.neutralQueue.filter((k) => k === 'star').length, 2);
 });
 
 test('时钟（timer）冻结 Boss 2 秒：期间不动、攻击计时全停，仍可被打', () => {
-  const state = playingAt(51, 2, 6);
+  const state = playingAt(51, 2, BOSS_A_STAGE);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   const timerBefore = boss.attackTimer;
@@ -620,7 +657,7 @@ test('时钟（timer）冻结 Boss 2 秒：期间不动、攻击计时全停，�
 });
 
 test('沙漏（hourglass）令 Boss 半速 12 秒：同样帧数内攻击计时只推进一半', () => {
-  const state = playingAt(52, 2, 6);
+  const state = playingAt(52, 2, BOSS_A_STAGE);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   const before = boss.attackTimer;
@@ -637,7 +674,7 @@ test('沙漏（hourglass）令 Boss 半速 12 秒：同样帧数内攻击计时�
   assert.equal(boss.slowTicks, BOSS_SLOW_TICKS - 60, '减速时长按真实帧数递减');
 
   // 对照组：不吃沙漏时同样 60 帧推进满 60 帧。
-  const ref = playingAt(52, 2, 6);
+  const ref = playingAt(52, 2, BOSS_A_STAGE);
   ref.level = createEmptyLevel();
   for (let i = 0; i < 60; i++) {
     ref.tick++;
@@ -657,7 +694,7 @@ test('同 seed 同输入序列：Boss 关跑两遍得到完全一致的 state', 
     return [input];
   };
   const run = (): string => {
-    const state = createGameState(2024, 1, 6);
+    const state = createGameState(2024, 1, BOSS_A_STAGE);
     state.phase = 'playing';
     for (let tick = 0; tick < 800; tick++) {
       update(state, script(tick));
