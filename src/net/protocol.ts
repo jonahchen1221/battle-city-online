@@ -16,6 +16,45 @@ export const SNAPSHOT_INTERVAL_TICKS = 3;
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 export const ROOM_CODE_LENGTH = 4;
 
+// 局域网固定房间：不走 4 字母随机码，同一进程内始终是这一间。
+// 客户端用 ?local 打开；服务端只接受私网 / 本机地址加入。
+export const LOCAL_ROOM_CODE = 'LOCAL';
+export const URL_LOCAL_PARAM = 'local';
+
+export function isLocalRoomCode(code: string): boolean {
+  return code.toUpperCase() === LOCAL_ROOM_CODE;
+}
+
+// 判断主机名或 IP 是否属于本机 / RFC1918 / 链路本地 / .local，用于「是否在局域网」。
+export function isPrivateAddress(host: string): boolean {
+  const raw = host.trim().toLowerCase();
+  if (!raw) return false;
+  const h = raw.replace(/^\[/, '').replace(/\]$/, '');
+  const v4 = h.startsWith('::ffff:') ? h.slice(7) : h;
+
+  if (v4 === 'localhost' || v4 === '127.0.0.1' || v4 === '::1' || v4 === '0.0.0.0') return true;
+  if (v4.endsWith('.local') || v4.endsWith('.localhost')) return true;
+
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v4);
+  if (ipv4) {
+    const a = Number(ipv4[1]);
+    const b = Number(ipv4[2]);
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+
+  if (h.includes(':')) {
+    if (h === '::1') return true;
+    if (h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80:')) return true;
+    return false;
+  }
+
+  return false;
+}
+
 export const MAX_PLAYERS = 4;
 
 // 玩家名固定为 2 位 ASCII 字母 / 数字。统一转为大写，既适配像素字体，

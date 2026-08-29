@@ -188,3 +188,23 @@ test('a replaced socket cannot disconnect or control its resumed seat', () => {
 
   internals(room).destroyNow();
 });
+
+test('persistent lan room stays after the last lobby player leaves', () => {
+  let destroyed = false;
+  const room = new Room('LOCAL', () => {
+    destroyed = true;
+  }, { persistent: true });
+  const host = new FakeWebSocket();
+  assert.equal(room.join(asWebSocket(host), 'H1'), 0);
+  assert.equal(host.latest('joined')?.players[0]?.isHost, true);
+
+  room.handleDisconnect(0);
+  assert.equal(destroyed, false);
+
+  const next = new FakeWebSocket();
+  assert.equal(room.join(asWebSocket(next), 'N1'), 0);
+  assert.equal(next.latest('joined')?.playerIndex, 0);
+  assert.equal(next.latest('joined')?.players[0]?.isHost, true);
+
+  internals(room).destroyNow();
+});

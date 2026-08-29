@@ -14,6 +14,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 
 import {
+  URL_LOCAL_PARAM,
+  isLocalRoomCode,
+  isPrivateAddress,
   normalizePlayerName,
   type ClientMessage,
   type ServerMessage,
@@ -288,7 +291,12 @@ export function createServer(
               sendError(ws, 'bad_message', 'resumeToken 非法');
               return;
             }
-            const room = manager.getRoom(msg.code.toUpperCase());
+            const code = msg.code.toUpperCase();
+            if (isLocalRoomCode(code) && !isPrivateAddress(remoteIp)) {
+              sendError(ws, 'room_not_found', '局域网本地局仅限同一局域网');
+              return;
+            }
+            const room = isLocalRoomCode(code) ? manager.getOrCreateLocalRoom() : manager.getRoom(code);
             if (!room) {
               sendError(ws, 'room_not_found', '房间不存在');
               return;
@@ -379,7 +387,11 @@ export function createServer(
         .filter((a) => a.family === 'IPv4' && !a.internal)
         .map((a) => `http://${a.address}:${port}`);
       console.log(`[server] 本机访问：http://localhost:${port}`);
-      for (const url of lanUrls) console.log(`[server] 局域网访问：${url}`);
+      console.log(`[server] 本机本地局：http://localhost:${port}/?${URL_LOCAL_PARAM}`);
+      for (const url of lanUrls) {
+        console.log(`[server] 局域网访问：${url}`);
+        console.log(`[server] 局域网本地局：${url}/?${URL_LOCAL_PARAM}`);
+      }
     }
   });
 

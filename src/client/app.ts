@@ -42,8 +42,12 @@ import {
   MAX_PLAYERS,
   DEFAULT_PLAYER_NAME,
   PLAYER_NAME_LENGTH,
+  LOCAL_ROOM_CODE,
+  URL_LOCAL_PARAM,
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
+  isLocalRoomCode,
+  isPrivateAddress,
   normalizePlayerName,
 } from '../net/protocol';
 import { NetClient } from './net';
@@ -59,8 +63,10 @@ import {
 
 export type ScreenName = 'title' | 'joinCode' | 'lobby' | 'localGame' | 'netGame';
 
-// 标题菜单项。名字编辑也是首页菜单的一项，确认后进入 2 字符输入态。
-const TITLE_ITEMS = ['NAME', '1 PLAYER', 'CREATE ROOM', 'JOIN ROOM'] as const;
+// 标题菜单项。局域网（本机 / 私网 IP / .local）额外露出 LOCAL GAME，点进去即加入固定房间。
+type TitleItem = 'NAME' | '1 PLAYER' | 'LOCAL GAME' | 'CREATE ROOM' | 'JOIN ROOM';
+const TITLE_ITEMS_OFFLINE: TitleItem[] = ['NAME', '1 PLAYER', 'CREATE ROOM', 'JOIN ROOM'];
+const TITLE_ITEMS_LAN: TitleItem[] = ['NAME', '1 PLAYER', 'LOCAL GAME', 'CREATE ROOM', 'JOIN ROOM'];
 
 // 玩家名只保存在当前浏览器；联机时随 create / join 消息交给服务器广播。
 const PLAYER_NAME_STORAGE_KEY = 'battle-city-player-name';
@@ -146,6 +152,7 @@ export class App {
 
   // ── 标题菜单 ──
   private titleSel = 1;
+  private readonly onLan: boolean;
   private playerName = DEFAULT_PLAYER_NAME;
   private nameBuffer = DEFAULT_PLAYER_NAME;
   private nameEditing = false;
@@ -206,6 +213,7 @@ export class App {
       this.powerupTickerElement?.querySelector<HTMLElement>('.cabinet-ticker-text') ?? null;
     this.playerName = loadPlayerName();
     this.nameBuffer = this.playerName;
+    this.onLan = pageIsOnLan();
     this.localState = createGameState(20260708, 1);
 
     this.net = new NetClient();
@@ -224,19 +232,32 @@ export class App {
       if (document.visibilityState === 'hidden') this.releaseAllInputs();
     });
 
-    // 地址栏带 ?room=ABCD 时跳过标题菜单，直接连服务器加入。
+    // 地址栏带 ?local 或 ?room=ABCD 时跳过标题菜单，直接连服务器加入。
     this.tryAutoJoinFromUrl();
   }
 
-  // 解析 location.search 里的房间码（参数名与值均大小写不敏感）。
-  // 值必须恰为 ROOM_CODE_LENGTH 个字母表内字符才算有效；否则维持标题画面。
+  private titleItems(): TitleItem[] {
+    return this.onLan ? TITLE_ITEMS_LAN : TITLE_ITEMS_OFFLINE;
+  }
+
+  // 解析 location.search：?local（或 ?room=LOCAL）进局域网固定房；?room=ABCD 进普通房。
+  // 普通房间码必须恰为 ROOM_CODE_LENGTH 个字母表内字符才算有效；否则维持标题画面。
   private tryAutoJoinFromUrl(): void {
+    if (urlHasLocalParam()) {
+      this.joinLocalGame();
+      return;
+    }
+
     let raw: string | null = null;
     new URLSearchParams(location.search).forEach((v, k) => {
       if (raw === null && k.toLowerCase() === URL_ROOM_PARAM) raw = v;
     });
     if (raw === null) return;
     const code = (raw as string).toUpperCase();
+    if (isLocalRoomCode(code)) {
+      this.joinLocalGame();
+      return;
+    }
     if (code.length !== ROOM_CODE_LENGTH) return;
     for (const ch of code) if (!ROOM_CODE_ALPHABET.includes(ch)) return;
 
@@ -244,6 +265,17 @@ export class App {
     this.screen = 'joinCode';
     this.pendingAction = { t: 'join', code, resumeToken: loadResumeToken(code) ?? undefined };
     this.statusMsg = 'CONNECTING';
+    this.net.connect();
+  }
+
+  private joinLocalGame(): void {
+    this.pendingAction = {
+      t: 'join',
+      code: LOCAL_ROOM_CODE,
+      resumeToken: loadResumeToken(LOCAL_ROOM_CODE) ?? undefined,
+    };
+    this.statusMsg = 'CONNECTING';
+    this.statusError = '';
     this.net.connect();
   }
 
@@ -399,8 +431,8 @@ export class App {
         this.reconnecting = false;
         this.linkCopiedUntil = 0;
         if (!wasReconnecting) this.screen = 'lobby';
-        // 地址栏始终带上房间码：建房者直接复制地址栏即可分享。
-        history.replaceState(null, '', `${location.pathname}?${URL_ROOM_PARAM}=${msg.code}`);
+        // 地址栏始终带上房间入口：普通房 ?room=ABCD，局域网固定房用 ?local。
+        history.replaceState(null, '', this.roomEntryPath(msg.code));
         break;
       }
       case 'lobby':
@@ -654,31 +686,38 @@ export class App {
 
   // 菜单选择上下移动（循环）。delta 为 -1 / +1。
   private moveTitleSel(delta: number): void {
-    this.titleSel = (this.titleSel + TITLE_ITEMS.length + delta) % TITLE_ITEMS.length;
+    const n = this.titleItems().length;
+    this.titleSel = (this.titleSel + n + delta) % n;
   }
 
   private confirmTitle(): void {
     this.statusError = '';
-    if (this.titleSel === 0) {
-      this.nameEditing = true;
-      this.nameBuffer = '';
-      this.statusMsg = '';
-    } else if (this.titleSel === 1) {
-      // 1 PLAYER：全新本地单机局。设 prevStart=true，避免刚按下的 Enter 被当作暂停边沿。
-      resetGameState(this.localState, (Date.now() >>> 0) || 20260708);
-      this.localState.prevStart = true;
-      this.clearPowerupTicker();
-      this.screen = 'localGame';
-    } else if (this.titleSel === 2) {
-      // CREATE ROOM：连接并建房。
-      this.pendingAction = { t: 'create' };
-      this.statusMsg = 'CONNECTING';
-      this.net.connect();
-    } else {
-      // JOIN ROOM：进入房间码输入。
-      this.codeBuffer = '';
-      this.statusMsg = '';
-      this.screen = 'joinCode';
+    switch (this.titleItems()[this.titleSel]) {
+      case 'NAME':
+        this.nameEditing = true;
+        this.nameBuffer = '';
+        this.statusMsg = '';
+        break;
+      case '1 PLAYER':
+        // 1 PLAYER：全新本地单机局。设 prevStart=true，避免刚按下的 Enter 被当作暂停边沿。
+        resetGameState(this.localState, (Date.now() >>> 0) || 20260708);
+        this.localState.prevStart = true;
+        this.clearPowerupTicker();
+        this.screen = 'localGame';
+        break;
+      case 'LOCAL GAME':
+        this.joinLocalGame();
+        break;
+      case 'CREATE ROOM':
+        this.pendingAction = { t: 'create' };
+        this.statusMsg = 'CONNECTING';
+        this.net.connect();
+        break;
+      case 'JOIN ROOM':
+        this.codeBuffer = '';
+        this.statusMsg = '';
+        this.screen = 'joinCode';
+        break;
     }
   }
 
@@ -794,7 +833,12 @@ export class App {
     }
     if (this.screen !== 'joinCode') return;
     e.preventDefault();
-    const code = extractRoomCode(e.clipboardData?.getData('text') ?? '');
+    const text = e.clipboardData?.getData('text') ?? '';
+    if (pastedLocalGameLink(text)) {
+      this.joinLocalGame();
+      return;
+    }
+    const code = extractRoomCode(text);
     if (!code) return; // 捞不出任何合法字符则保持原输入
     this.codeBuffer = code;
     this.statusError = '';
@@ -841,9 +885,15 @@ export class App {
 
   // 把完整分享链接（含协议）写进剪贴板。局域网 http 非安全上下文没有 navigator.clipboard，
   // 故失败/缺失时回退到临时 textarea + execCommand。
+  private roomEntryPath(code: string): string {
+    return isLocalRoomCode(code)
+      ? `${location.pathname}?${URL_LOCAL_PARAM}`
+      : `${location.pathname}?${URL_ROOM_PARAM}=${code}`;
+  }
+
   private copyRoomLink(): void {
     if (!this.roomCode) return;
-    const url = `${location.origin}${location.pathname}?${URL_ROOM_PARAM}=${this.roomCode}`;
+    const url = `${location.origin}${this.roomEntryPath(this.roomCode)}`;
     const done = () => {
       this.linkCopiedUntil = performance.now() + LINK_COPIED_MS;
     };
@@ -860,7 +910,10 @@ export class App {
   // 大厅里展示的分享地址：去掉协议前缀、全大写以匹配像素字体（只有大写字母/数字/少量标点）。
   private shareUrlText(): string {
     const path = location.pathname === '/' ? '' : location.pathname;
-    return `${location.host}${path}?${URL_ROOM_PARAM}=${this.roomCode}`.toUpperCase();
+    const query = isLocalRoomCode(this.roomCode)
+      ? `?${URL_LOCAL_PARAM}`
+      : `?${URL_ROOM_PARAM}=${this.roomCode}`;
+    return `${location.host}${path}${query}`.toUpperCase();
   }
 
   private isHost(): boolean {
@@ -889,18 +942,20 @@ export class App {
     drawTile(ctx, atlas.playerTank[0].right[0], cx - 76, 95);
     drawTile(ctx, atlas.enemyTank.basic.left[0], cx + 60, 95);
 
+    const items = this.titleItems();
+    const compact = items.length > 4;
+    const menuTop = compact ? 124 : 126;
+    const rowH = compact ? 16 : 18;
     drawPixelPanel(ctx, cx - 86, 116, 172, 87);
 
     // 菜单项 + 黄色迷你坦克光标。
-    const menuTop = 126;
-    const rowH = 18;
-    for (let i = 0; i < TITLE_ITEMS.length; i++) {
+    for (let i = 0; i < items.length; i++) {
       const y = menuTop + i * rowH;
       const selected = i === this.titleSel;
       const label =
-        i === 0
+        items[i] === 'NAME'
           ? `NAME  ${this.nameEditing ? this.nameBuffer.padEnd(PLAYER_NAME_LENGTH, '_') : this.playerName}`
-          : TITLE_ITEMS[i];
+          : items[i];
       const labelX = cx - Math.round(textWidth(label) / 2);
       if (selected) {
         ctx.fillStyle = '#3b160c';
@@ -976,9 +1031,19 @@ export class App {
     clearScreen(ctx);
     const cx = NATIVE_WIDTH / 2;
 
-    drawTextCentered(ctx, atlas, 'ROOM CODE', cx, 16, COLOR_MENU);
-    // 房间码大字（房主可念给同伴）。
-    drawLogoTextCentered(ctx, atlas, this.roomCode || '----', cx, 30, 4, '#d89a31', '#ffe083', '#74501a');
+    drawTextCentered(ctx, atlas, isLocalRoomCode(this.roomCode) ? 'LOCAL GAME' : 'ROOM CODE', cx, 16, COLOR_MENU);
+    // 房间码大字（房主可念给同伴）；局域网固定房显示 LOCAL。
+    drawLogoTextCentered(
+      ctx,
+      atlas,
+      this.roomCode || '----',
+      cx,
+      30,
+      isLocalRoomCode(this.roomCode) ? 3 : 4,
+      '#d89a31',
+      '#ffe083',
+      '#74501a',
+    );
 
     // 分享地址：同伴直接打开即自动加入。可能超出画面宽度，故左边界钳到 0（宁可贴边不换行）。
     if (this.roomCode) {
@@ -1206,6 +1271,22 @@ export class App {
 }
 
 // ───────────────────────── 纯函数工具 ─────────────────────────
+
+function pageIsOnLan(): boolean {
+  return typeof location !== 'undefined' && isPrivateAddress(location.hostname);
+}
+
+function urlHasLocalParam(): boolean {
+  let found = false;
+  new URLSearchParams(location.search).forEach((_v, k) => {
+    if (k.toLowerCase() === URL_LOCAL_PARAM) found = true;
+  });
+  return found;
+}
+
+function pastedLocalGameLink(text: string): boolean {
+  return new RegExp(`[?&]${URL_LOCAL_PARAM}(?:[=&#]|$)`, 'i').test(text) || /[?&]room=LOCAL\b/i.test(text);
+}
 
 function loadPlayerName(): string {
   try {

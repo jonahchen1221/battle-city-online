@@ -9,7 +9,7 @@ import {
   MAX_WS_PAYLOAD_BYTES,
   type ServerOptions,
 } from '../src/server/server';
-import type { ServerMessage } from '../src/net/protocol';
+import { LOCAL_ROOM_CODE, type ServerMessage } from '../src/net/protocol';
 
 function waitForMessage<T extends ServerMessage['t']>(
   ws: WebSocket,
@@ -125,5 +125,28 @@ test('the websocket protocol resumes the credentialed player at the same game in
     assert.equal(rejoined.playerIndex, playerJoined.playerIndex);
     assert.equal(restarted.playerIndex, 1);
     assert.notEqual(rejoined.resumeToken, playerJoined.resumeToken);
+  });
+});
+
+test('lan clients join the same local room without a created code', async () => {
+  await withServer({}, async (url) => {
+    const first = new WebSocket(url);
+    const second = new WebSocket(url);
+    await Promise.all([once(first, 'open'), once(second, 'open')]);
+
+    const firstJoinedPromise = waitForMessage(first, 'joined');
+    first.send(JSON.stringify({ t: 'join', code: LOCAL_ROOM_CODE, name: 'A1' }));
+    const firstJoined = await firstJoinedPromise;
+    assert.equal(firstJoined.code, LOCAL_ROOM_CODE);
+    assert.equal(firstJoined.playerIndex, 0);
+    assert.equal(firstJoined.players[0]?.isHost, true);
+
+    const secondJoinedPromise = waitForMessage(second, 'joined');
+    second.send(JSON.stringify({ t: 'join', code: LOCAL_ROOM_CODE, name: 'B2' }));
+    const secondJoined = await secondJoinedPromise;
+    assert.equal(secondJoined.code, LOCAL_ROOM_CODE);
+    assert.equal(secondJoined.playerIndex, 1);
+    assert.equal(secondJoined.players.find((p) => p.playerIndex === 0)?.isHost, true);
+    assert.equal(secondJoined.players.find((p) => p.playerIndex === 1)?.isHost, false);
   });
 });

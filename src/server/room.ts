@@ -8,6 +8,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import type { WebSocket } from 'ws';
 
 import {
+  LOCAL_ROOM_CODE,
   MAX_PLAYERS,
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
@@ -53,6 +54,7 @@ export type RoomPhase = 'lobby' | 'in-game';
 
 export class Room {
   readonly code: string;
+  readonly persistent: boolean;
   phase: RoomPhase = 'lobby';
   private readonly slots = new Map<number, Slot>(); // key = playerIndex
   // 对局 playerIndex → 大厅 Slot。只在开局时建立，之后即使断线也保持稳定供重连复用。
@@ -67,8 +69,14 @@ export class Room {
   private destroyTimer: ReturnType<typeof setTimeout> | null = null;
 
   // 房间被销毁时回调（由 RoomManager 注入，用于从注册表移除）。
-  constructor(code: string, private readonly onDestroy: (code: string) => void) {
+  // persistent：局域网固定房，空房不销毁，下一批人还能直接加入。
+  constructor(
+    code: string,
+    private readonly onDestroy: (code: string) => void,
+    options: { persistent?: boolean } = {},
+  ) {
     this.code = code;
+    this.persistent = options.persistent === true;
   }
 
   // ── 查询 ──
@@ -203,7 +211,7 @@ export class Room {
       return 'invalid_resume';
     }
 
-    // 大厅：分配最低空位。
+    // 大厅：分配最低空位。空的常驻房由第一个加入者当房主。
     const idx = this.lowestFreeIndex();
     if (idx < 0) return 'room_full';
     const slot: Slot = {
@@ -211,7 +219,7 @@ export class Room {
       name,
       ready: false,
       connected: true,
-      isHost: false,
+      isHost: this.slots.size === 0,
       ws,
       resumeToken: Room.newResumeToken(),
       input: emptyInput(),
@@ -281,7 +289,7 @@ export class Room {
         if (next) next.isHost = true;
       }
       if (this.slotCount() === 0) {
-        this.destroyNow(); // 大厅空房：立即销毁
+        if (!this.persistent) this.destroyNow(); // 大厅空房：立即销毁；常驻房留着等人
       } else {
         this.broadcastLobby();
       }
@@ -398,7 +406,26 @@ export class Room {
   // ── 销毁 ──
   private scheduleDestroy(): void {
     if (this.destroyTimer) return;
-    this.destroyTimer = setTimeout(() => this.destroyNow(), EMPTY_ROOM_GRACE_MS);
+    this.destroyTimer = setTimeout(() => {
+      this.destroyTimer = null;
+      if (this.persistent) this.resetToEmptyLobby();
+      else this.destroyNow();
+    }, EMPTY_ROOM_GRACE_MS);
+  }
+
+  // 常驻房在全员离开后回到空大厅，房间码与注册表条目保持不变。
+  private resetToEmptyLobby(): void {
+    this.cancelDestroyTimer();
+    if (this.loopTimer) {
+      clearInterval(this.loopTimer);
+      this.loopTimer = null;
+    }
+    this.game = null;
+    this.gameSlots = [];
+    this.slots.clear();
+    this.eventAccumulator = [];
+    this.phase = 'lobby';
+    this.lastTickTime = 0;
   }
 
   private cancelDestroyTimer(): void {
@@ -450,6 +477,16 @@ export class RoomManager {
 
   getRoom(code: string): Room | undefined {
     return this.rooms.get(code);
+  }
+
+  // 局域网固定房：不存在则创建，空了也不从注册表拿掉。
+  getOrCreateLocalRoom(): Room {
+    let room = this.rooms.get(LOCAL_ROOM_CODE);
+    if (!room) {
+      room = new Room(LOCAL_ROOM_CODE, (c) => this.rooms.delete(c), { persistent: true });
+      this.rooms.set(LOCAL_ROOM_CODE, room);
+    }
+    return room;
   }
 
   get size(): number {
