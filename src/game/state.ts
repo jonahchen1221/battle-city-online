@@ -171,7 +171,9 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
   }
   // rng 先行创建：本关中立道具队列的洗牌即取自它（必须在 state 组装前完成）。
   const rng = createRng(seed);
-  const neutralQueue = shuffledNeutralQueue(rng);
+  // Boss 关走专属中立池（2 星 + 头盔 + 战靴 + 1 件随机武器），普通关维持原 5 种池。
+  const bossStage = !escortStage && isBossStage(stage);
+  const neutralQueue = shuffledNeutralQueue(rng, bossStage);
   // 护送关首枚中立道具固定为扳手，让玩家在 10 秒后稳定获得一次修车机会。
   if (escort) {
     const wrench = neutralQueue.indexOf('wrench');
@@ -193,7 +195,7 @@ export function createGameState(seed: number, playerCount = 1, stage = 1): GameS
     nextBulletId: 1,
     stage,
     // Boss 关：幕布结束后 Boss 即已在位（不走出生闪光）。普通关为 null。
-    boss: !escortStage && isBossStage(stage) ? createBoss(playerCount) : null,
+    boss: bossStage ? createBoss(playerCount) : null,
     phase: 'stagestart',
     phaseTicks: 0,
     eagleDestroyed: false,
@@ -297,8 +299,8 @@ export function nextStage(state: GameState): void {
   state.enemyFreezeTicks = 0;
   state.enemySlowTicks = 0;
   state.shovelTicks = 0;
-  // 新关卡重新洗一副中立道具队列，计时归位到首枚延迟。
-  state.neutralQueue = shuffledNeutralQueue(state.rng);
+  // 新关卡重新洗一副中立道具队列（Boss 关用专属池），计时归位到首枚延迟。
+  state.neutralQueue = shuffledNeutralQueue(state.rng, state.boss !== null);
   if (state.escort) {
     const wrench = state.neutralQueue.indexOf('wrench');
     if (wrench > 0) {

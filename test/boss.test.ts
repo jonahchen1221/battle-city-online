@@ -8,6 +8,7 @@ import {
   BOSS_Y,
   BOSS_OWNER_ID,
   BOSS_SPEED,
+  BOSS_SPEED_SOLO_P2,
   BOSS_BREACH_INTERVAL_TICKS,
   BOSS_LASER_WINDUP_TICKS,
   BOSS_LASER_ACTIVE_TICKS,
@@ -17,6 +18,8 @@ import {
   BOSS_MINION_MAX,
   BOSS_MINION_INTERVAL_TICKS,
   BOSS_MINION_CARRIER_EVERY,
+  BOSS_FREEZE_TICKS,
+  BOSS_SLOW_TICKS,
   BULLET_SIZE,
   FIELD_COLS,
   FIELD_ROWS,
@@ -31,6 +34,12 @@ import { createGameState, nextStage, type GameState } from '../src/game/state';
 import { update } from '../src/game/update';
 import { bossBlockerTanks, updateBoss, resolveBulletBoss } from '../src/game/boss';
 import { updateEnemies } from '../src/game/enemy';
+import {
+  BOSS_NEUTRAL_WEAPONS,
+  NEUTRAL_POWERUP_KINDS,
+  tryPickupPowerup,
+  type PowerupKind,
+} from '../src/game/powerup';
 import { isPlayerTank, type TankState } from '../src/game/tank';
 import type { BulletState } from '../src/game/bullet';
 import { Cell, createEmptyLevel, getCell, setCell } from '../src/game/level';
@@ -71,6 +80,13 @@ function playerBulletOnBoss(id: number, kind: BulletState['kind']): BulletState 
     viewportBounds: null,
     steelPiercing: false,
   };
+}
+
+// 把一枚道具直接放到 1P 脚下并触发拾取（走完整的 applyPowerupEffect 路径）。
+function pickUpAsPlayer(state: GameState, kind: PowerupKind): void {
+  const player = state.tanks.find(isPlayerTank)!;
+  state.powerups.push({ kind, x: player.x, y: player.y });
+  tryPickupPowerup(state, 'player');
 }
 
 function enemiesOnField(state: GameState): number {
@@ -176,7 +192,7 @@ test('Boss 车体为普通坦克的 2×2，并以四个实心格参与坦克碰�
   );
 });
 
-test('Boss 可在空场上向四个方向追踪玩家', () => {
+test('Boss 可在空场上向四个方向追踪玩家（多人局全速）', () => {
   const cases: Array<{ playerX: number; playerY: number; dir: Direction }> = [
     { playerX: 144, playerY: 0, dir: 'up' },
     { playerX: 144, playerY: 208, dir: 'down' },
@@ -184,14 +200,16 @@ test('Boss 可在空场上向四个方向追踪玩家', () => {
     { playerX: 288, playerY: 96, dir: 'right' },
   ];
   for (const c of cases) {
-    const state = playingAt(3, 1, 6);
+    // 单机局一阶段 Boss 定点不动（另见单机减压用例），因此追踪方向用双人局验证。
+    const state = playingAt(3, 2, 6);
     state.level = createEmptyLevel();
     const boss = state.boss!;
     boss.x = 144;
     boss.y = 96;
-    const player = state.tanks.find(isPlayerTank)!;
-    player.x = c.playerX;
-    player.y = c.playerY;
+    for (const player of state.tanks.filter(isPlayerTank)) {
+      player.x = c.playerX;
+      player.y = c.playerY;
+    }
     const before = { x: boss.x, y: boss.y };
 
     updateBoss(state);
@@ -206,32 +224,115 @@ test('Boss 可在空场上向四个方向追踪玩家', () => {
   }
 });
 
-test('Boss 遇到钢墙会停下并发射双发破障激光，清出 32px 通路后继续移动', () => {
-  const state = playingAt(4, 1, 6);
+test('Boss 遇到砖墙会停下并发射双发破障激光，清出 32px 通路后继续移动', () => {
+  const state = playingAt(4, 2, 6);
   state.level = createEmptyLevel();
   const boss = state.boss!;
   const wallRow = (boss.y + boss.size) / SUBTILE;
   const wallCol = boss.x / SUBTILE;
   for (let col = wallCol; col < wallCol + boss.size / SUBTILE; col++) {
-    setCell(state.level, col, wallRow, Cell.STEEL);
+    setCell(state.level, col, wallRow, Cell.BRICK);
   }
   const startY = boss.y;
 
-  update(state, noInputs(1));
+  update(state, noInputs(2));
 
   assert.equal(boss.y, startY, '破障开火帧应先停下，不直接穿墙');
   assert.equal(boss.moving, false);
   assert.equal(boss.breachCooldown, BOSS_BREACH_INTERVAL_TICKS);
   const breachShots = state.bullets.filter((b) => b.ownerId === BOSS_OWNER_ID && b.kind === 'laser');
   assert.equal(breachShots.length, 2);
-  assert.ok(breachShots.every((b) => b.dir === 'down' && b.steelPiercing));
+  assert.ok(
+    breachShots.every((b) => b.dir === 'down' && !b.steelPiercing),
+    '破障激光不再穿钢',
+  );
   for (let col = wallCol; col < wallCol + boss.size / SUBTILE; col++) {
-    assert.equal(getCell(state.level, col, wallRow), Cell.EMPTY, `钢墙 (${col},${wallRow}) 应被击穿`);
+    assert.equal(getCell(state.level, col, wallRow), Cell.EMPTY, `砖墙 (${col},${wallRow}) 应被击穿`);
   }
 
-  update(state, noInputs(1));
+  update(state, noInputs(2));
   assert.equal(boss.y, startY + BOSS_SPEED, '通路清开后下一帧应继续追踪移动');
   assert.equal(boss.moving, true);
+});
+
+test('破障激光打在钢块上即消亡，钢块保留；Boss 改为绕行且不会卡死', () => {
+  const state = playingAt(41, 2, 6);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  const brickRow = (boss.y + boss.size) / SUBTILE;
+  const steelRow = brickRow + 1;
+  const wallCol = boss.x / SUBTILE;
+  const cols = boss.size / SUBTILE;
+  for (let col = wallCol; col < wallCol + cols; col++) {
+    setCell(state.level, col, brickRow, Cell.BRICK);
+    setCell(state.level, col, steelRow, Cell.STEEL);
+  }
+
+  // 首帧发射破障弹（砖墙可破），随后激光穿砖继续飞、撞上钢块即消亡。
+  for (let i = 0; i < 20; i++) update(state, noInputs(2));
+
+  for (let col = wallCol; col < wallCol + cols; col++) {
+    assert.equal(getCell(state.level, col, steelRow), Cell.STEEL, `钢块 (${col},${steelRow}) 应保留`);
+  }
+  assert.equal(
+    state.bullets.filter((b) => b.alive && b.ownerId === BOSS_OWNER_ID && b.kind === 'laser').length,
+    0,
+    '破障激光撞钢后应已消亡',
+  );
+
+  // 钢墙对 Boss 是永久障碍：不再对它开火，改走别的方向（也不会原地卡死）。
+  const bossX = boss.x;
+  const bossY = boss.y;
+  boss.breachCooldown = 0;
+  state.bullets = [];
+  for (const player of state.tanks.filter(isPlayerTank)) {
+    player.x = boss.x;
+    player.y = 208; // 正下方，逼 Boss 一直想往下走
+  }
+  for (let i = 0; i < 30; i++) update(state, noInputs(2));
+  assert.equal(
+    state.bullets.filter((b) => b.ownerId === BOSS_OWNER_ID && b.kind === 'laser').length,
+    0,
+    '钢墙不可破，Boss 不应再浪费破障激光',
+  );
+  assert.ok(boss.x !== bossX || boss.y !== bossY, 'Boss 应绕行而不是卡在钢墙前');
+});
+
+test('单机减压：一阶段 Boss 定点不动（也不破障），二阶段起慢速追踪', () => {
+  const state = playingAt(42, 1, 6);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  const startX = boss.x;
+  const startY = boss.y;
+  const player = state.tanks.find(isPlayerTank)!;
+  player.x = boss.x;
+  player.y = 208; // 正下方
+
+  // 一阶段：正下方有砖墙也不动、不开破障。
+  const wallRow = (boss.y + boss.size) / SUBTILE;
+  for (let col = boss.x / SUBTILE; col < (boss.x + boss.size) / SUBTILE; col++) {
+    setCell(state.level, col, wallRow, Cell.BRICK);
+  }
+  for (let i = 0; i < 60; i++) updateBoss(state);
+  assert.equal(boss.x, startX);
+  assert.equal(boss.y, startY);
+  assert.equal(boss.moving, false);
+  assert.equal(
+    state.bullets.filter((b) => b.ownerId === BOSS_OWNER_ID && b.kind === 'laser').length,
+    0,
+    '单机一阶段不应发射破障激光',
+  );
+
+  // 二阶段：以 BOSS_SPEED_SOLO_P2 追踪（此处先把砖墙清掉，单独验证移动）。
+  for (let col = boss.x / SUBTILE; col < (boss.x + boss.size) / SUBTILE; col++) {
+    setCell(state.level, col, wallRow, Cell.EMPTY);
+  }
+  boss.phase = 2;
+  updateBoss(state);
+  assert.equal(boss.moving, true);
+  assert.equal(boss.dir, 'down');
+  assert.equal(boss.y, startY + BOSS_SPEED_SOLO_P2);
+  assert.ok(BOSS_SPEED_SOLO_P2 < BOSS_SPEED, '单机二阶段应慢于多人局');
 });
 
 // ── 伤害结算 ──
@@ -369,7 +470,7 @@ test('垂直激光：前摇期间不伤人，激活期间同一玩家只结算�
   assert.equal(boss.attack, 'none', '激光结束后应回到冷却');
 });
 
-test('phase 2 的 16 向旋转弹幕：3 波、每波 16 发、波间 30 帧', () => {
+test('phase 2 的 16 向旋转弹幕：2 波、每波 16 发、波间 30 帧', () => {
   const state = playingAt(23, 1, 6);
   const boss = state.boss!;
   boss.phase = 2;
@@ -389,14 +490,13 @@ test('phase 2 的 16 向旋转弹幕：3 波、每波 16 发、波间 30 帧', (
   updateBoss(state); // 第二波
   assert.equal(state.bullets.length, BOSS_SPIN_BULLETS * 2);
 
-  for (let i = 0; i < BOSS_SPIN_WAVE_INTERVAL_TICKS; i++) updateBoss(state); // 第三波
   assert.equal(state.bullets.length, BOSS_SPIN_BULLETS * BOSS_SPIN_WAVES);
-  assert.equal(boss.attack, 'none', '三波打完应回到冷却');
+  assert.equal(boss.attack, 'none', '两波打完应回到冷却');
 });
 
 // ── 小兵 ──
 
-test('Boss 关小兵：场上至多 2 只、按间隔补充、每第 4 只携带道具', () => {
+test('Boss 关小兵：场上至多 2 只、按间隔补充、每第 2 只携带道具', () => {
   const state = playingAt(31, 1, 6);
   const boss = state.boss!;
 
@@ -416,9 +516,11 @@ test('Boss 关小兵：场上至多 2 只、按间隔补充、每第 4 只携带
     assert.equal(boss.minionTimer, BOSS_MINION_INTERVAL_TICKS, '补充后应重置为固定间隔');
     carriers.push(spawned.tank.carriesPowerup);
   }
+  assert.equal(BOSS_MINION_CARRIER_EVERY, 2);
+  assert.equal(BOSS_MINION_INTERVAL_TICKS, 400);
   assert.deepEqual(
     carriers,
-    [false, false, false, true, false, false, false, true],
+    [false, true, false, true, false, true, false, true],
     `每第 ${BOSS_MINION_CARRIER_EVERY} 只小兵携带道具`,
   );
 
@@ -449,6 +551,99 @@ test('Boss 关 B（最终战）的小兵为 power / smart', () => {
   for (const kind of kinds) {
     assert.ok(kind === 'power' || kind === 'smart', `实得 ${kind}`);
   }
+});
+
+// ── 中立道具（Boss 关专属池 + 对 Boss 的控制效果）──
+
+test('Boss 关中立道具队列：2 星 + 头盔 + 战靴 + 1 件随机武器', () => {
+  for (const stage of BOSS_STAGES) {
+    for (const seed of [1, 7, 99, 12345]) {
+      const queue = createGameState(seed, 1, stage).neutralQueue;
+      const count = (kind: PowerupKind): number => queue.filter((k) => k === kind).length;
+      assert.equal(queue.length, 5, `第 ${stage} 关 / seed ${seed} 的中立队列长度`);
+      assert.equal(count('star'), 2, '两枚星');
+      assert.equal(count('helmet'), 1, '一枚头盔');
+      assert.equal(count('boots'), 1, '一双战靴');
+      assert.equal(
+        queue.filter((k) => BOSS_NEUTRAL_WEAPONS.includes(k)).length,
+        1,
+        '恰一件随机武器',
+      );
+    }
+  }
+
+  // 普通关维持原 5 种中立池。
+  const normal = createGameState(1, 1, 4).neutralQueue;
+  assert.deepEqual([...normal].sort(), [...NEUTRAL_POWERUP_KINDS].sort());
+
+  // 跨关进入 Boss 关时同样切换到专属池。
+  const state = createGameState(5, 1, 5);
+  nextStage(state);
+  assert.equal(state.stage, 6);
+  assert.equal(state.neutralQueue.length, 5);
+  assert.equal(state.neutralQueue.filter((k) => k === 'star').length, 2);
+});
+
+test('时钟（timer）冻结 Boss 2 秒：期间不动、攻击计时全停，仍可被打', () => {
+  const state = playingAt(51, 2, 6);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  const timerBefore = boss.attackTimer;
+  const pos = { x: boss.x, y: boss.y };
+
+  pickUpAsPlayer(state, 'timer');
+  assert.equal(BOSS_FREEZE_TICKS, 120);
+  assert.equal(boss.freezeTicks, BOSS_FREEZE_TICKS);
+
+  // 冻结期间照样吃伤害（并触发白闪）。
+  const hpBefore = boss.hp;
+  state.bullets = [playerBulletOnBoss(501, 'normal')];
+  resolveBulletBoss(state);
+  assert.equal(boss.hp, hpBefore - 1, '冻结中的 Boss 仍可被打');
+  assert.ok(boss.hitFlash > 0);
+
+  for (let i = 0; i < BOSS_FREEZE_TICKS; i++) {
+    state.tick++;
+    updateBoss(state);
+  }
+  assert.equal(boss.attackTimer, timerBefore, '冻结期间攻击计时完全不推进');
+  assert.equal(boss.x, pos.x, '冻结期间不移动');
+  assert.equal(boss.y, pos.y);
+  assert.equal(boss.moving, false);
+  assert.equal(boss.hitFlash, 0, 'hitFlash 照常递减');
+  assert.equal(boss.freezeTicks, 0, '120 帧后解冻');
+
+  state.tick++;
+  updateBoss(state);
+  assert.equal(boss.attackTimer, timerBefore - 1, '解冻后攻击计时恢复推进');
+  assert.equal(boss.moving, true, '解冻后恢复移动');
+});
+
+test('沙漏（hourglass）令 Boss 半速 12 秒：同样帧数内攻击计时只推进一半', () => {
+  const state = playingAt(52, 2, 6);
+  state.level = createEmptyLevel();
+  const boss = state.boss!;
+  const before = boss.attackTimer;
+
+  pickUpAsPlayer(state, 'hourglass');
+  assert.equal(BOSS_SLOW_TICKS, 720);
+  assert.equal(boss.slowTicks, BOSS_SLOW_TICKS);
+
+  for (let i = 0; i < 60; i++) {
+    state.tick++;
+    updateBoss(state);
+  }
+  assert.equal(boss.attackTimer, before - 30, '半速：60 帧只推进 30 帧的攻击计时');
+  assert.equal(boss.slowTicks, BOSS_SLOW_TICKS - 60, '减速时长按真实帧数递减');
+
+  // 对照组：不吃沙漏时同样 60 帧推进满 60 帧。
+  const ref = playingAt(52, 2, 6);
+  ref.level = createEmptyLevel();
+  for (let i = 0; i < 60; i++) {
+    ref.tick++;
+    updateBoss(ref);
+  }
+  assert.equal(ref.boss!.attackTimer, before - 60);
 });
 
 // ── 确定性 ──

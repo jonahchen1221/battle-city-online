@@ -397,7 +397,7 @@ export const LASER_SPRITE_OFFSET = (LASER_SPRITE_SIZE - BULLET_SIZE) / 2; // 2
 
 // ── Boss 关（第 6 / 12 关）──
 // Boss 是一台 32×32 巨型坦克（普通坦克的 2×2，即 4 格大小）：对坦克是实心障碍，
-// 对小兵子弹是吸收体，能在战场内四向移动，并以双发破障激光打通砖墙 / 钢墙。
+// 对小兵子弹是吸收体，能在战场内四向移动，并以双发破障激光打通砖墙（钢墙打不穿，只能绕行）。
 // 只有玩家子弹能对它造成伤害（受击次数制，见 BOSS_DAMAGE_*）。全部数值以 tick 计。
 
 // 车体尺寸与初始坐标（战场相对像素，32×32 盒左上角）。
@@ -405,11 +405,14 @@ export const LASER_SPRITE_OFFSET = (LASER_SPRITE_SIZE - BULLET_SIZE) / 2; // 2
 export const BOSS_SIZE = TANK_SIZE * 2;
 export const BOSS_X = (FIELD_WIDTH - BOSS_SIZE) / 2; // 144
 export const BOSS_Y = 48;
-// 移动与破障：Boss 以基础敌军速度追踪最近玩家；被砖 / 钢挡住时发射两枚破钢激光，
-// 两条 16px 破坏带并排，恰好为 32px 车体清出通路。冷却避免贴墙时逐帧刷弹。
+// 移动与破障：Boss 以基础敌军速度追踪最近玩家；被砖墙挡住时发射两枚破障激光，
+// 两条 16px 破坏带并排，恰好为 32px 车体清出通路。钢墙不可破，只能绕行。
+// 冷却拉长到 2 秒，避免掩体被连续刷弹瞬间蒸发。
 export const BOSS_SPEED = ENEMY_SPEED_BASIC;
-export const BOSS_BREACH_INTERVAL_TICKS = 30;
-export const BOSS_BREACH_BULLET_SPEED = 2.5;
+// 单机局的追踪速度：一阶段定点不动（速度 0，见 boss.ts bossMoveSpeed），二阶段起慢速追踪。
+export const BOSS_SPEED_SOLO_P2 = 0.35;
+export const BOSS_BREACH_INTERVAL_TICKS = 120;
+export const BOSS_BREACH_BULLET_SPEED = 2;
 // Boss 弹幕的射手 id：任何坦克都不会取到 0（玩家 id 从 1 起），故可安全用作哨兵值。
 export const BOSS_OWNER_ID = 0;
 
@@ -429,46 +432,54 @@ export const BOSS_PHASE2_HP_RATIO = 0.5;
 
 // 攻击循环：冷却归零即从该阶段的攻击池随机（state.rng）选一发动。
 export const BOSS_ATTACK_INTERVAL_P1 = 180;
-export const BOSS_ATTACK_INTERVAL_P2 = 135;
+export const BOSS_ATTACK_INTERVAL_P2 = 160;
 
-// ① 垂直粗激光（两阶段）：前摇 60 帧（红色瞄准线，不伤人）→ 激光 42 帧（宽 16px、整列贯穿）。
-export const BOSS_LASER_WINDUP_TICKS = 60;
-export const BOSS_LASER_ACTIVE_TICKS = 42;
+// ① 垂直粗激光（两阶段）：前摇 90 帧（红色瞄准线，不伤人）→ 激光 30 帧（宽 16px、整列贯穿）。
+// 双列激光（⑤）与它共用这组计时。
+export const BOSS_LASER_WINDUP_TICKS = 90;
+export const BOSS_LASER_ACTIVE_TICKS = 30;
 export const BOSS_LASER_WIDTH = TILE; // 16
 // 瞄准线闪烁周期（帧）：一半亮、一半灭。
 export const BOSS_AIM_BLINK_TICKS = 6;
 // ⑤ 双列激光（仅 phase2）：单人局无第二名玩家可锁，改用玩家列 ±该偏移的两列。
 export const BOSS_DUAL_LASER_SOLO_OFFSET = 32;
 
-// ② 8 向放射弹幕（两阶段）：45° 间隔 8 发，弹速 2px/tick。
+// ② 8 向放射弹幕（两阶段）：45° 间隔 8 发，弹速 1.75px/tick。
 export const BOSS_RADIAL_BULLETS = 8;
-export const BOSS_RADIAL_SPEED = 2;
+export const BOSS_RADIAL_SPEED = 1.75;
 
 // ③ 三连瞄准射（两阶段）：朝最近玩家中心连射 3 发，间隔 12 帧，弹速 2.5（发射瞬间实时瞄准）。
 export const BOSS_BURST_SHOTS = 3;
 export const BOSS_BURST_INTERVAL_TICKS = 12;
 export const BOSS_BURST_SPEED = 2.5;
 
-// ④ 16 向旋转弹幕（仅 phase2）：3 波、每波 16 发、波间 30 帧，每波起始角偏转 7.5°。
-export const BOSS_SPIN_WAVES = 3;
+// ④ 16 向旋转弹幕（仅 phase2）：2 波、每波 16 发、波间 30 帧，每波起始角偏转 7.5°。
+export const BOSS_SPIN_WAVES = 2;
 export const BOSS_SPIN_BULLETS = 16;
 export const BOSS_SPIN_WAVE_INTERVAL_TICKS = 30;
 export const BOSS_SPIN_STEP_RAD = Math.PI / 24; // 7.5°
-export const BOSS_SPIN_SPEED = 2;
+export const BOSS_SPIN_SPEED = 1.6;
 
 // Boss 死亡：错落 3–5 个大爆炸（数量取 MIN + rng.int(RANGE)）。
 export const BOSS_DEATH_EXPLOSION_MIN = 3;
 export const BOSS_DEATH_EXPLOSION_RANGE = 3; // → 3..5
 
-// 小兵（Boss 关专属无限补充）：场上至多 2 只、出生间隔 600 帧、每第 4 只携带道具。
+// 小兵（Boss 关专属无限补充）：场上至多 2 只、出生间隔 400 帧、每第 2 只携带道具
+//（Boss 关缺乏输出增益来源，靠携带者掉落给玩家补给）。
 export const BOSS_MINION_MAX = 2;
-export const BOSS_MINION_INTERVAL_TICKS = 600;
-export const BOSS_MINION_CARRIER_EVERY = 4;
+export const BOSS_MINION_INTERVAL_TICKS = 400;
+export const BOSS_MINION_CARRIER_EVERY = 2;
 // 各 Boss 关的小兵种类池（按 state.rng 等概率取）。
 export const BOSS_MINION_KINDS_A: ReadonlyArray<EnemyKind> = ['basic', 'fast'];
 export const BOSS_MINION_KINDS_B: ReadonlyArray<EnemyKind> = ['power', 'smart'];
 
-// Boss 渲染配色：血条底 / 血条前景（按剩余比例 红 → 橙 → 黄）/ 瞄准线 / 激光芯与边。
+// 中立道具对 Boss 的控制效果（玩家拾取时生效，与敌军的冻结 / 减速另行计算）：
+// timer（时钟）冻结 Boss 2 秒 —— 不动、不破障、攻击状态机整体暂停；
+// hourglass（沙漏）令 Boss 半速 12 秒 —— 仅偶数 tick 推进移动与攻击计时。
+export const BOSS_FREEZE_TICKS = 2 * TICKS_PER_SECOND; // 120 帧 = 2 秒
+export const BOSS_SLOW_TICKS = ENEMY_SLOW_TICKS; // 720 帧 = 12 秒
+
+// Boss 渲染配色：血条底 / 血条前景（按剩余比例 红 → 橙 → 黄）/ 瞄准线 / 激光芯与边 / 冻结冷蓝罩。
 export const COLOR_BOSS_HP_BACK = '#3c1414';
 export const COLOR_BOSS_HP_HIGH = '#d82800';
 export const COLOR_BOSS_HP_MID = '#f85838';
@@ -476,6 +487,7 @@ export const COLOR_BOSS_HP_LOW = '#f0c860';
 export const COLOR_BOSS_AIM = '#f85838';
 export const COLOR_BOSS_LASER_CORE = '#ffffff';
 export const COLOR_BOSS_LASER_EDGE = '#58f8f8';
+export const COLOR_BOSS_FREEZE = '#58a8f8';
 
 // 武器在 HUD 上的字母配色（与道具图标内的字母同色系；cannon 用 COLOR_HUD_ICON 黑）。
 export const COLOR_WEAPON_SPREAD = '#f0c860'; // 黄

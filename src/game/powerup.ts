@@ -24,6 +24,8 @@ import {
   SMART_MAX_LEVEL,
   SMART_MAX_HP,
   ENEMY_SLOW_TICKS,
+  BOSS_FREEZE_TICKS,
+  BOSS_SLOW_TICKS,
   NEUTRAL_POWERUP_INTERVAL_TICKS,
   NEUTRAL_POWERUP_RETRY_TICKS,
   NEUTRAL_POWERUP_MAX_TRIES,
@@ -81,6 +83,22 @@ export const NEUTRAL_POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
   'ghost',
   'hourglass',
   'wrench',
+];
+
+// Boss 关的中立道具专属池：Boss 关没有敌军携带者的常规掉落节奏，普通关那套“船 / 幽灵 / 扳手”
+// 对 Boss 毫无用处，因此改发能直接提升输出与生存的四件套 + 一件随机武器（种类见 BOSS_NEUTRAL_WEAPONS）。
+export const BOSS_NEUTRAL_POWERUP_KINDS: ReadonlyArray<PowerupKind> = [
+  'star',
+  'star',
+  'helmet',
+  'boots',
+];
+// Boss 关中立队列里那一件随机武器的候选（由 state.rng 等概率取一件）。
+export const BOSS_NEUTRAL_WEAPONS: ReadonlyArray<PowerupKind> = [
+  'wpnSpread',
+  'wpnSpiral',
+  'wpnLaser',
+  'wpnMachine',
 ];
 
 // MVP 开局奖励可选的“强力道具”池（仅多人局，见 state.ts nextStage）。
@@ -179,9 +197,16 @@ export function dropPowerup(state: GameState): void {
 }
 
 // 用 state.rng 对一组道具种类做 Fisher-Yates 洗牌，返回新数组（本关的中立道具刷新顺序）。
-// 每关调用一次（createGameState / nextStage），保证 5 种新道具每关各出现恰一次。
-export function shuffledNeutralQueue(rng: Rng): PowerupKind[] {
-  const queue = NEUTRAL_POWERUP_KINDS.slice();
+// 每关调用一次（createGameState / nextStage），保证本关的 5 枚中立道具各出现恰一次。
+// bossStage=true 时改用 Boss 专属池：2 星 + 头盔 + 战靴 + 1 件随机武器（先取武器再洗牌，
+// rng 调用顺序固定，快照可复现）。
+export function shuffledNeutralQueue(rng: Rng, bossStage = false): PowerupKind[] {
+  const queue = bossStage
+    ? [
+        ...BOSS_NEUTRAL_POWERUP_KINDS,
+        BOSS_NEUTRAL_WEAPONS[rng.int(BOSS_NEUTRAL_WEAPONS.length)],
+      ]
+    : NEUTRAL_POWERUP_KINDS.slice();
   for (let i = queue.length - 1; i > 0; i--) {
     const j = rng.int(i + 1);
     const tmp = queue[i];
@@ -328,8 +353,11 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       }
       break;
     case 'timer':
-      if (player) state.enemyFreezeTicks = ENEMY_FREEZE_TICKS;
-      else state.playerFreezeTicks = PLAYER_FREEZE_TICKS;
+      if (player) {
+        state.enemyFreezeTicks = ENEMY_FREEZE_TICKS;
+        // Boss 关：时钟同样能冻住 Boss（2 秒，短于敌军的 10 秒），是玩家难得的输出窗口。
+        if (state.boss && !state.boss.dead) state.boss.freezeTicks = BOSS_FREEZE_TICKS;
+      } else state.playerFreezeTicks = PLAYER_FREEZE_TICKS;
       break;
     case 'shovel':
       if (player) {
@@ -365,8 +393,11 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       collector.drill = true;
       break;
     case 'hourglass':
-      if (player) state.enemySlowTicks = ENEMY_SLOW_TICKS;
-      else state.playerSlowTicks = ENEMY_SLOW_TICKS;
+      if (player) {
+        state.enemySlowTicks = ENEMY_SLOW_TICKS;
+        // Boss 关：沙漏同样让 Boss 半速 12 秒（移动与攻击计时都只在偶数 tick 推进）。
+        if (state.boss && !state.boss.dead) state.boss.slowTicks = BOSS_SLOW_TICKS;
+      } else state.playerSlowTicks = ENEMY_SLOW_TICKS;
       break;
     case 'wrench':
       if (player) {

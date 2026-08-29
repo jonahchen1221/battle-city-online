@@ -52,6 +52,7 @@ import {
   COLOR_BOSS_AIM,
   COLOR_BOSS_LASER_CORE,
   COLOR_BOSS_LASER_EDGE,
+  COLOR_BOSS_FREEZE,
   ESCORT_SIZE,
 } from '../core/constants';
 import { GameState } from '../game/state';
@@ -893,12 +894,22 @@ export class Renderer {
   }
 
   // Boss 车体（32×32，即普通坦克 2×2）：按朝向取帧；阶段 2 换血红配色；受击时整体提亮。
+  // 被时钟冻住（freezeTicks>0）时在车体上蒙一层冷蓝罩，与玩家的白闪一样只是覆盖绘制。
   private drawBoss(state: GameState): void {
     const boss = state.boss;
     if (!boss || boss.dead) return;
     const { ctx, atlas } = this;
     const frames = boss.hitFlash > 0 ? atlas.bossFlash : atlas.boss[boss.phase - 1];
-    drawTile(ctx, frames[boss.dir], snapArt(FIELD_X + boss.x), snapArt(FIELD_Y + boss.y));
+    const x = snapArt(FIELD_X + boss.x);
+    const y = snapArt(FIELD_Y + boss.y);
+    drawTile(ctx, frames[boss.dir], x, y);
+    if (boss.freezeTicks > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = COLOR_BOSS_FREEZE;
+      ctx.fillRect(x * ART_SCALE, y * ART_SCALE, boss.size * ART_SCALE, boss.size * ART_SCALE);
+      ctx.restore();
+    }
   }
 
   // Boss 激光：前摇期为整列闪烁的半透明红瞄准线（不伤人），激活期为亮白芯 + 青边的粗光柱。

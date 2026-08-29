@@ -27,6 +27,7 @@ import {
   BOSS_DEATH_EXPLOSION_RANGE,
   BOSS_MINION_INTERVAL_TICKS,
   BOSS_SPEED,
+  BOSS_SPEED_SOLO_P2,
   BOSS_BREACH_INTERVAL_TICKS,
   BOSS_BREACH_BULLET_SPEED,
   bossMaxHp,
@@ -84,7 +85,9 @@ export interface BossState {
   laserHitPlayers: number[]; // 本次激光已结算过的 playerIndex（同一玩家一次激光至多一次）
   spinAngle: number; // 旋转弹幕当前相位角（弧度）
   minionTimer: number; // 小兵补充倒计时
-  minionsSpawned: number; // 已生成小兵计数（每第 4 只携带道具）
+  minionsSpawned: number; // 已生成小兵计数（每第 BOSS_MINION_CARRIER_EVERY 只携带道具）
+  freezeTicks: number; // timer（时钟）冻结剩余帧：>0 时不动、不破障、攻击状态机整体暂停
+  slowTicks: number; // hourglass（沙漏）半速剩余帧：>0 时仅偶数 tick 推进移动与攻击
   dead: boolean; // 已被击杀（弹幕已清、大爆炸已播；过关判定据此）
 }
 
@@ -113,6 +116,8 @@ export function createBoss(playerCount: number): BossState {
     spinAngle: 0,
     minionTimer: BOSS_MINION_INTERVAL_TICKS,
     minionsSpawned: 0,
+    freezeTicks: 0,
+    slowTicks: 0,
     dead: false,
   };
 }
@@ -191,22 +196,29 @@ interface BossMoveProbe {
   destructible: boolean;
 }
 
-// 探测 Boss 沿某方向走一步后的 32×32 完整车体。砖墙（含残砖）与钢墙可破坏；
-// 水、鹰巢、边界和坦克只能绕行。Boss 不碾压玩家 / 小兵，避免生成无法解开的重叠状态。
-function probeBossMove(state: GameState, boss: BossState, dir: Direction): BossMoveProbe {
+// 探测 Boss 沿某方向走一步（步长 speed）后的 32×32 完整车体。只有砖墙（含残砖）可破坏；
+// 钢墙、水、鹰巢、边界和坦克一律只能绕行 —— 破障激光已不再穿钢，钢块对 Boss 是永久障碍。
+// Boss 不碾压玩家 / 小兵，避免生成无法解开的重叠状态。
+function probeBossMove(
+  state: GameState,
+  boss: BossState,
+  dir: Direction,
+  speed: number,
+): BossMoveProbe {
   let x = boss.x;
   let y = boss.y;
-  if (dir === 'up') y -= BOSS_SPEED;
-  else if (dir === 'down') y += BOSS_SPEED;
-  else if (dir === 'left') x -= BOSS_SPEED;
-  else x += BOSS_SPEED;
+  if (dir === 'up') y -= speed;
+  else if (dir === 'down') y += speed;
+  else if (dir === 'left') x -= speed;
+  else x += speed;
 
   if (x < 0 || y < 0 || x + boss.size > FIELD_WIDTH || y + boss.size > FIELD_HEIGHT) {
     return { x, y, blocked: true, destructible: false };
   }
 
   let blocked = false;
-  let destructible = false;
+  let brickBlocked = false;
+  let hardBlocked = false; // 钢 / 水 / 鹰巢 / 坦克：破障也开不出路，只能换方向
   const c0 = Math.floor(x / SUBTILE);
   const c1 = Math.floor((x + boss.size - EPS) / SUBTILE);
   const r0 = Math.floor(y / SUBTILE);
@@ -217,22 +229,24 @@ function probeBossMove(state: GameState, boss: BossState, dir: Direction): BossM
       if (cell === Cell.BRICK) {
         if (brickMaskOverlapsRect(state.level, col, row, x, y, x + boss.size, y + boss.size)) {
           blocked = true;
-          destructible = true;
+          brickBlocked = true;
         }
-      } else if (cell === Cell.STEEL) {
+      } else if (cell === Cell.STEEL || cell === Cell.WATER || cell === Cell.EAGLE) {
         blocked = true;
-        destructible = true;
-      } else if (cell === Cell.WATER || cell === Cell.EAGLE) {
-        blocked = true;
+        hardBlocked = true;
       }
     }
   }
 
   for (const tank of state.tanks) {
     if (!tank.alive) continue;
-    if (bossOverlapsTank(x, y, boss.size, tank)) blocked = true;
+    if (bossOverlapsTank(x, y, boss.size, tank)) {
+      blocked = true;
+      hardBlocked = true;
+    }
   }
-  return { x, y, blocked, destructible };
+  // 只有“纯砖块挡路”才值得开破障 —— 混着钢块时打穿砖也过不去，直接换方向。
+  return { x, y, blocked, destructible: brickBlocked && !hardBlocked };
 }
 
 // 以追踪目标为主生成稳定的候选方向：优先走距离更长的轴，再试另一轴，最后尝试其余方向。
@@ -287,12 +301,13 @@ function makeBreachBullet(
     attacksEagle: false,
     alive: true,
     viewportBounds: null,
-    steelPiercing: true,
+    // 破障激光只穿砖不穿钢：命中钢块即消亡，钢块保留（掩体不再被 Boss 瞬间蒸发）。
+    steelPiercing: false,
   };
 }
 
 // 两枚激光分别从车体 1/4 与 3/4 线出膛。每枚激光开 16px 宽的破坏带，
-// 合起来为 32px Boss 车体清出完整通路；激光沿途可连续击穿砖和钢。
+// 合起来为 32px Boss 车体清出完整通路；激光沿途可连续击穿砖块，撞上钢块即止。
 function fireBreachVolley(state: GameState, boss: BossState, dir: Direction): void {
   state.bullets.push(
     makeBreachBullet(state, boss, dir, boss.size / 4),
@@ -301,13 +316,22 @@ function fireBreachVolley(state: GameState, boss: BossState, dir: Direction): vo
   boss.breachCooldown = BOSS_BREACH_INTERVAL_TICKS;
 }
 
+// 本帧的追踪步长。单机减压：一阶段 Boss 定点不动（速度 0 → 不追踪也不破障，攻击照常），
+// 二阶段起以 BOSS_SPEED_SOLO_P2 慢速追踪；多人局两阶段都用 BOSS_SPEED。
+function bossMoveSpeed(state: GameState, boss: BossState): number {
+  if (state.playerCount !== 1) return BOSS_SPEED;
+  return boss.phase === 2 ? BOSS_SPEED_SOLO_P2 : 0;
+}
+
 function moveBoss(state: GameState, boss: BossState, target: TankState | null): void {
   boss.moving = false;
   if (boss.breachCooldown > 0) boss.breachCooldown--;
-  if (!target) return;
+  const speed = bossMoveSpeed(state, boss);
+  if (speed <= 0 || !target) return;
 
+  // 四个候选方向全被硬障碍堵死时不做任何事（原地停留，攻击照常）—— 绝不会卡死。
   for (const dir of bossMoveCandidates(boss, target)) {
-    const probe = probeBossMove(state, boss, dir);
+    const probe = probeBossMove(state, boss, dir, speed);
     if (!probe.blocked) {
       boss.x = probe.x;
       boss.y = probe.y;
@@ -557,7 +581,23 @@ export function updateBoss(state: GameState): void {
   const boss = state.boss;
   if (!boss || boss.dead) return;
 
+  // 受击白闪不受冻结 / 减速影响：Boss 无论如何都仍可被打。
   if (boss.hitFlash > 0) boss.hitFlash--;
+
+  // timer（时钟）冻结：本帧完全不推进 —— 不移动、不破障、前摇 / 激光 / 波次计时全停。
+  if (boss.freezeTicks > 0) {
+    boss.freezeTicks--;
+    boss.moving = false;
+    return;
+  }
+  // hourglass（沙漏）半速：与小兵 enemySlowTicks 同款，仅偶数 tick 推进移动与攻击计时。
+  if (boss.slowTicks > 0) {
+    boss.slowTicks--;
+    if (state.tick % 2 !== 0) {
+      boss.moving = false;
+      return;
+    }
+  }
 
   const target = nearestPlayer(state, boss);
   moveBoss(state, boss, target);
