@@ -94,6 +94,13 @@ fly deploy
   ```
 - 验证：`ssh battle-city 'echo ok'`。
 
+0.5 **最低配（0.5GiB 内存）套餐先加 swap**（实测 2026-08：阿里云镜像 `vm.swappiness=0` 且无 swap，
+   解压 nodejs 的 deb 包会被 OOM 杀掉，`dpkg-deb: killed by signal`）。本地一条命令修好：
+   ```bash
+   ssh battle-city 'fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo "/swapfile none swap sw 0 0" >> /etc/fstab && sysctl -w vm.swappiness=60 && echo "vm.swappiness = 60" > /etc/sysctl.d/99-swappiness.conf'
+   ```
+   若已经装挂了：先 `ssh battle-city 'dpkg --configure -a'` 再重跑 setup 脚本。1GiB 及以上套餐可跳过本步。
+
 1. **初始化（本地一条命令，含上传脚本）**：
    ```bash
    scp scripts/setup-server.sh battle-city:/root/ && ssh battle-city 'bash /root/setup-server.sh'

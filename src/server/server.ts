@@ -7,6 +7,7 @@
 // 本文件与 room.ts 属服务器层，可自由使用 Node API；不修改 src/game 纯模拟层。
 
 import { createReadStream, existsSync, statSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { createServer as createHttpServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -268,6 +269,15 @@ export function createServer(port: number): { httpServer: HttpServer; wss: WebSo
       ? 'dist/ 已找到，托管静态客户端 + WS（生产模式）'
       : 'dist/ 未找到，仅提供 WS；静态客户端请用 vite dev（开发模式）';
     console.log(`[server] Battle City 服务器已启动，监听 :${port}（${distNote}）`);
+    // 局域网联机：打印本机各网卡的 IPv4 地址，同一 WiFi 的朋友用任一地址即可加入。
+    if (distExists) {
+      const lanUrls = Object.values(networkInterfaces())
+        .flatMap((addrs) => addrs ?? [])
+        .filter((a) => a.family === 'IPv4' && !a.internal)
+        .map((a) => `http://${a.address}:${port}`);
+      console.log(`[server] 本机访问：http://localhost:${port}`);
+      for (const url of lanUrls) console.log(`[server] 局域网访问：${url}`);
+    }
   });
 
   return { httpServer, wss };
