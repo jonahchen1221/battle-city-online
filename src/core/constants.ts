@@ -50,6 +50,8 @@ export const TANK_SIZE = TILE; // 16
 
 // 玩家坦克移动速度（px/tick）
 export const PLAYER_SPEED = 0.75;
+// 3 级坦克的第 3 点耐久是可被打掉并由额外 star 补回的一次性重甲护盾。
+export const PLAYER_HP_LEVEL_3 = 3;
 
 // 可支持的最大玩家数（1–4 人合作）。
 export const MAX_PLAYERS = 4;

@@ -11,6 +11,7 @@ import {
   SHOVEL_TICKS,
   HELMET_INVULN_TICKS,
   PLAYER_MAX_LEVEL,
+  PLAYER_HP_LEVEL_3,
   ENEMY_SCORE,
   EXPLOSION_BIG_TICKS,
   EXPLOSION_BIG_SIZE,
@@ -256,9 +257,9 @@ function applyPowerupEffect(state: GameState, collector: TankState, kind: Poweru
       if (collector.level < PLAYER_MAX_LEVEL) {
         // 升级：等级 +1，封顶 3。等级作用于该玩家子弹（弹速 / 双弹 / 破钢，见 bullet.ts）。
         collector.level++;
-      } else if (collector.invulnTicks <= 0) {
-        // 已无法继续升级：仅在护盾已耗尽时补充一整段护盾。
-        collector.invulnTicks = HELMET_INVULN_TICKS;
+      } else if (collector.hp < PLAYER_HP_LEVEL_3) {
+        // 已无法继续升级：若 3 级重甲护盾已损失，只补回这一层耐久。
+        collector.hp++;
       }
       break;
     case 'grenade':
